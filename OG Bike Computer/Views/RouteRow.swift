@@ -9,8 +9,10 @@ import SwiftUI
 
 struct RouteRow: View {
     let route: Route
-    let sendState: SendState
+    let isOnWatch: Bool
     let onSend: () -> Void
+
+    @State private var showOverwriteAlert = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -18,14 +20,18 @@ struct RouteRow: View {
                 .font(.headline)
             HStack(spacing: 12) {
                 Button {
-                    onSend()
+                    if isOnWatch {
+                        showOverwriteAlert = true
+                    } else {
+                        onSend()
+                    }
                 } label: {
-                    Image(systemName: sendState == .sent ? "checkmark.circle.fill" : "arrow.up.circle")
+                    Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
                         .font(.title2)
-                        .foregroundStyle(sendState == .sent ? .green : .blue)
+                        .foregroundStyle(isOnWatch ? .green : .blue)
                 }
                 .buttonStyle(.plain)
-                
+
                 Label(formatDistance(route.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 if route.elevationGain > 0 {
                     Label(formatElevation(route.elevationGain), systemImage: "arrow.up.right")
@@ -39,9 +45,13 @@ struct RouteRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+        .alert("Route Already on Watch", isPresented: $showOverwriteAlert) {
+            Button("Replace", role: .destructive) {
+                onSend()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
+        }
     }
-}
-
-#Preview {
-    ContentView()
 }

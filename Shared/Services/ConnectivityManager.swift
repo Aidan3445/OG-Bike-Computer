@@ -16,10 +16,20 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
     @Published var activationState: WCSessionActivationState = .notActivated
     @Published var isPaired: Bool = false
     @Published var isWatchAppInstalled: Bool = false
+    @Published var routeNamesOnWatch: Set<String> = []
     
     @Published var lastEvent: String = "none"
 
     var onRouteReceived: ((Route) -> Void)?
+
+    #if os(watchOS)
+    private var routeStore: RouteStore?
+
+    func attach(store: RouteStore) {
+        self.routeStore = store
+        reportRoutes(store.routes)
+    }
+    #endif
 
     private override init() {
         super.init()
@@ -102,8 +112,7 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
         }
     }
     
-    func session(_ session: WCSession,
-                 didReceive file: WCSessionFile) {
+    func session(_ session: WCSession, didReceive file: WCSessionFile) {
         print("Received file transfer")
 
         guard let data = try? Data(contentsOf: file.fileURL),
@@ -113,9 +122,18 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
         }
 
         print("Decoded route: \(route.name)")
+
+        #if os(watchOS)
         DispatchQueue.main.async {
-            self.onRouteReceived?(route)
+            if let existing = self.routeStore?.routes.first(where: { $0.name == route.name }) {
+                self.routeStore?.delete(existing)
+            }
+            self.routeStore?.save(route)
+            if let routes = self.routeStore?.routes {
+                self.reportRoutes(routes)
+            }
         }
+        #endif
     }
 
     func session(
@@ -135,6 +153,15 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
         }
     }
 
+    func session(_ session: WCSession,
+             didReceiveApplicationContext applicationContext: [String: Any]) {
+        if let names = applicationContext["watchRouteNames"] as? [String] {
+            DispatchQueue.main.async {
+                self.routeNamesOnWatch = Set(names)
+            }
+        }
+    }
+
     func sessionReachabilityDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
             self.isReachable = session.isReachable
@@ -146,6 +173,14 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
     func sessionDidDeactivate(_ session: WCSession) {
         // Re-activate after switching watches
         WCSession.default.activate()
+    }
+    #endif
+
+    #if os(watchOS)
+    func reportRoutes(_ routes: [Route]) {
+        guard WCSession.default.activationState == .activated else { return }
+        let names = routes.map { $0.name }
+        try? WCSession.default.updateApplicationContext(["watchRouteNames": names])
     }
     #endif
 }

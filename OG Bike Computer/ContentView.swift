@@ -16,7 +16,6 @@ struct ContentView: View {
     @State private var importError: String?
     
     @StateObject private var connectivity = ConnectivityManager.shared
-    @State private var sendStates: [UUID: SendState] = [:]
 
     var body: some View {
         NavigationStack {
@@ -32,7 +31,7 @@ struct ContentView: View {
                             ForEach(store.routes) { route in
                                 RouteRow(
                                     route: route,
-                                    sendState: sendStates[route.id] ?? .idle,
+                                    isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
                                     onSend: { sendToWatch(route) }
                                 )
                             }
@@ -73,16 +72,9 @@ struct ContentView: View {
     }
     
     private func sendToWatch(_ route: Route) {
-        sendStates[route.id] = .sending
-
         ConnectivityManager.shared.sendRoute(route) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    sendStates[route.id] = .sent
-                case .failure(let error):
-                    sendStates[route.id] = .failed(error.localizedDescription)
-                }
+            if case .failure(let error) = result {
+                print("Failed to send route: \(error)")
             }
         }
     }

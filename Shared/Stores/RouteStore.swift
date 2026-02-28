@@ -11,6 +11,7 @@ import Combine
 class RouteStore: ObservableObject {
     @Published var routes: [Route] = []
 
+    var onChange: (() -> Void)?
     private let directory: URL
 
     init() {
@@ -30,12 +31,14 @@ class RouteStore: ObservableObject {
         if !routes.contains(where: { $0.id == route.id }) {
             routes.append(route)
         }
+        onChange?()
     }
 
     func delete(_ route: Route) {
         let fileURL = directory.appendingPathComponent("\(route.id.uuidString).json")
         try? FileManager.default.removeItem(at: fileURL)
         routes.removeAll { $0.id == route.id }
+        onChange?()
     }
 
     func loadAll() {
