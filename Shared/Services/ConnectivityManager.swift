@@ -31,6 +31,18 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
     }
     #endif
 
+    #if os(iOS)
+    func requestWatchSync() {
+        guard WCSession.default.activationState == .activated else { return }
+        let ctx = WCSession.default.receivedApplicationContext
+        if let names = ctx["watchRouteNames"] as? [String] {
+            DispatchQueue.main.async {
+                self.routeNamesOnWatch = Set(names)
+            }
+        }
+    }
+    #endif
+
     private override init() {
         super.init()
     }
@@ -108,10 +120,11 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
             #if os(iOS)
             self.isPaired = session.isPaired
             self.isWatchAppInstalled = session.isWatchAppInstalled
+            self.requestWatchSync()
             #endif
         }
     }
-    
+
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         print("Received file transfer")
 

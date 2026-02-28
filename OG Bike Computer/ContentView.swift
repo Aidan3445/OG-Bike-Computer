@@ -12,10 +12,11 @@ import Combine
 
 struct ContentView: View {
     @StateObject private var store = RouteStore()
+    @StateObject private var connectivity = ConnectivityManager.shared
+
     @State private var showFilePicker = false
     @State private var importError: String?
-    
-    @StateObject private var connectivity = ConnectivityManager.shared
+    @State private var uploadingRouteID: UUID?
 
     var body: some View {
         NavigationStack {
@@ -32,7 +33,12 @@ struct ContentView: View {
                                 RouteRow(
                                     route: route,
                                     isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
-                                    onSend: { sendToWatch(route) }
+                                    isUploading: uploadingRouteID == route.id,
+                                    isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                                    onSend: { sendToWatch(route) },
+                                    onRename: { newName in
+                                        store.rename(route, to: newName)
+                                    }
                                 )
                             }
                             .onDelete { indices in
@@ -43,7 +49,8 @@ struct ContentView: View {
                         }
                     }
                 }
-                .navigationTitle("OG Bike Computer")
+                .navigationTitle("Computah")
+                .onReceive(connectivity.$routeNamesOnWatch) { _ in uploadingRouteID = nil }
                 .toolbar {
                     Button {
                         showFilePicker = true
@@ -66,15 +73,24 @@ struct ContentView: View {
                 } message: {
                     Text(importError ?? "")
                 }
+
+                ConnectionStatusBar(connectivity: connectivity)
             }
-            ConnectionStatusBar(connectivity: connectivity)
         }
     }
-    
+
     private func sendToWatch(_ route: Route) {
+        guard uploadingRouteID == nil else { return }
+        uploadingRouteID = route.id
+
         ConnectivityManager.shared.sendRoute(route) { result in
-            if case .failure(let error) = result {
-                print("Failed to send route: \(error)")
+            DispatchQueue.main.async {
+                if case .failure(let error) = result {
+                    print("Failed to send route: \(error)")
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+                    uploadingRouteID = nil
+                }
             }
         }
     }
