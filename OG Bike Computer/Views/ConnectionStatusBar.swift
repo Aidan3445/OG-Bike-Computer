@@ -86,7 +86,7 @@ struct ConnectionStatusBar: View {
         case .activated:
             return connectivity.isReachable
                 ? "Ready to send routes"
-                : "Waiting for watch to become reachable"
+                : "Open the app on your watch to send routes"
         @unknown default:
             return "Unknown session state"
         }

@@ -16,6 +16,8 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
     @Published var activationState: WCSessionActivationState = .notActivated
     @Published var isPaired: Bool = false
     @Published var isWatchAppInstalled: Bool = false
+    
+    @Published var lastEvent: String = "none"
 
     var onRouteReceived: ((Route) -> Void)?
 
@@ -24,6 +26,11 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     func activate() {
+        #if os(iOS)
+        print("Activating WCSession on iOS")
+        #elseif os(watchOS)
+        print("Activating WCSession on watchOS")
+        #endif
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
@@ -67,11 +74,19 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
             return
         }
 
-        WCSession.default.transferUserInfo(["route": data])
-        completion(.success(()))
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(route.id.uuidString).json")
+        do {
+            try data.write(to: tempURL)
+            WCSession.default.transferFile(tempURL, metadata: ["type": "route"])
+            print("Queued file transfer: \(route.name) (\(data.count) bytes)")
+            completion(.success(()))
+        } catch {
+            completion(.failure(error))
+        }
     }
-
-   func session(
+    
+    func session(
         _ session: WCSession,
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
@@ -84,6 +99,39 @@ class ConnectivityManager: NSObject, ObservableObject, WCSessionDelegate {
             self.isPaired = session.isPaired
             self.isWatchAppInstalled = session.isWatchAppInstalled
             #endif
+        }
+    }
+    
+    func session(_ session: WCSession,
+                 didReceive file: WCSessionFile) {
+        print("Received file transfer")
+
+        guard let data = try? Data(contentsOf: file.fileURL),
+              let route = try? JSONDecoder().decode(Route.self, from: data) else {
+            print("Failed to decode transferred file")
+            return
+        }
+
+        print("Decoded route: \(route.name)")
+        DispatchQueue.main.async {
+            self.onRouteReceived?(route)
+        }
+    }
+
+    func session(
+        _ session: WCSession,
+        didReceiveUserInfo userInfo: [String: Any] = [:]
+    ) {
+        DispatchQueue.main.async {
+            self.lastEvent = "got userInfo: \(userInfo.keys)"
+        }
+        
+        if let data = userInfo["route"] as? Data,
+           let route = try? JSONDecoder().decode(Route.self, from: data) {
+            DispatchQueue.main.async {
+                self.lastEvent = "decoded: \(route.name)"
+                self.onRouteReceived?(route)
+            }
         }
     }
 
