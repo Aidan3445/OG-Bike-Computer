@@ -8,11 +8,15 @@
 import Foundation
 import CoreLocation
 
-struct Route: Codable, Identifiable, Equatable {
+struct Route: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let name: String
     let points: [TrackPoint]
 
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+    
     var distance: Double {
         guard points.count > 1 else { return 0 }
         var total: Double = 0
