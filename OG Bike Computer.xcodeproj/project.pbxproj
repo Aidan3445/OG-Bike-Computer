@@ -50,6 +50,11 @@
 			path = "OG Bike Computer Watch App";
 			sourceTree = "<group>";
 		};
+		DD9A560A2F535D64001156B1 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,6 +78,7 @@
 		DD5D2CBA2F525E5900988CBB = {
 			isa = PBXGroup;
 			children = (
+				DD9A560A2F535D64001156B1 /* Shared */,
 				DD5D2CC52F525E5900988CBB /* OG Bike Computer */,
 				DD5D2CD42F525E5B00988CBB /* OG Bike Computer Watch App */,
 				DD5D2CC42F525E5900988CBB /* Products */,
@@ -107,6 +113,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				DD5D2CC52F525E5900988CBB /* OG Bike Computer */,
+				DD9A560A2F535D64001156B1 /* Shared */,
 			);
 			name = "OG Bike Computer";
 			packageProductDependencies = (
@@ -129,6 +136,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				DD5D2CD42F525E5B00988CBB /* OG Bike Computer Watch App */,
+				DD9A560A2F535D64001156B1 /* Shared */,
 			);
 			name = "OG Bike Computer Watch App";
 			packageProductDependencies = (
@@ -427,6 +435,9 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -462,6 +473,9 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;

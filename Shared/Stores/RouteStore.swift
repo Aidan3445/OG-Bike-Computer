@@ -17,13 +17,11 @@ class RouteStore: ObservableObject {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         directory = docs.appendingPathComponent("routes", isDirectory: true)
 
-        // Create the routes directory if it doesn't exist
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         loadAll()
     }
 
-    // Save a single route as JSON
     func save(_ route: Route) {
         let fileURL = directory.appendingPathComponent("\(route.id.uuidString).json")
         if let data = try? JSONEncoder().encode(route) {
@@ -34,14 +32,12 @@ class RouteStore: ObservableObject {
         }
     }
 
-    // Delete a route
     func delete(_ route: Route) {
         let fileURL = directory.appendingPathComponent("\(route.id.uuidString).json")
         try? FileManager.default.removeItem(at: fileURL)
         routes.removeAll { $0.id == route.id }
     }
 
-    // Load all saved routes from disk
     func loadAll() {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory,

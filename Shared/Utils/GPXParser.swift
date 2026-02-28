@@ -10,16 +10,13 @@ import Foundation
 class GPXParser: NSObject, XMLParserDelegate {
     private var routes: [Route] = []
 
-    // Current track state
     private var currentTrackName: String?
     private var currentPoints: [TrackPoint] = []
 
-    // Current point state
     private var currentLat: Double?
     private var currentLon: Double?
     private var currentElevation: Double?
 
-    // XML parse state
     private var currentElement: String = ""
     private var textBuffer: String = ""
 
@@ -60,7 +57,6 @@ class GPXParser: NSObject, XMLParserDelegate {
 
         switch element {
         case "name":
-            // Only set track name if we haven't yet (first <name> inside <trk>)
             if currentTrackName == nil {
                 currentTrackName = text
             }

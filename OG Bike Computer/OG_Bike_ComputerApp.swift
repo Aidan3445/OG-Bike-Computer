@@ -9,6 +9,10 @@ import SwiftUI
 
 @main
 struct OG_Bike_ComputerApp: App {
+    init() {
+        ConnectivityManager.shared.activate()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

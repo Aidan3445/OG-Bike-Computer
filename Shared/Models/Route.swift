@@ -8,16 +8,6 @@
 import Foundation
 import CoreLocation
 
-struct TrackPoint: Codable, Equatable {
-    let lat: Double
-    let lon: Double
-    let elevation: Double?
-
-    var coordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: lat, longitude: lon)
-    }
-}
-
 struct Route: Codable, Identifiable, Equatable {
     let id: UUID
     let name: String
