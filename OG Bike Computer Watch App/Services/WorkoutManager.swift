@@ -24,7 +24,9 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var totalDistance: Double = 0
     @Published var currentLocation: CLLocation?
     @Published var currentActivity: ActivityType = .cycling
-
+    
+    private var routeInsertionTimer: Timer?
+    private var pendingRouteLocations: [CLLocation] = []
     @Published var recordedLocations: [CLLocation] = []
 
     private let healthStore = HKHealthStore()
@@ -75,13 +77,30 @@ class WorkoutManager: NSObject, ObservableObject {
 
         locationManager.requestWhenInUseAuthorization()
     }
+    
+    private func flushRouteLocations() {
+        guard !pendingRouteLocations.isEmpty else { return }
+        let batch = pendingRouteLocations
+        pendingRouteLocations = []
+
+        routeBuilder?.insertRouteData(batch) { success, error in
+            if let error = error {
+                print("Route insert error: \(error)")
+            }
+        }
+    }
+    
+    private func startRouteInsertion() {
+        routeInsertionTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.flushRouteLocations()
+        }
+    }
 
     func start(activity: ActivityType) {
         let config = HKWorkoutConfiguration()
         config.activityType = activity.hkType
         config.locationType = .outdoor
 
-        // Store it so metrics formatting can reference it
         self.currentActivity = activity
 
         do {
@@ -100,6 +119,7 @@ class WorkoutManager: NSObject, ObservableObject {
         builder?.delegate = self
 
         routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
+        startRouteInsertion()
 
         session?.startActivity(with: Date())
         builder?.beginCollection(withStart: Date()) { success, error in
@@ -164,34 +184,58 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    
     func stop(save: Bool) {
-        // Final time accumulation
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
         }
         timerStart = nil
         stopDisplayTimer()
+        routeInsertionTimer?.invalidate()
+        routeInsertionTimer = nil
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
 
         session?.end()
 
         if save {
-            builder?.endCollection(withEnd: Date()) { [weak self] success, error in
-                guard let self = self else { return }
-                self.builder?.finishWorkout { workout, error in
-                    guard let workout = workout else {
-                        print("Failed to finish workout: \(String(describing: error))")
-                        return
+            let finalBatch = pendingRouteLocations
+            pendingRouteLocations = []
+
+            let endDate = Date()
+
+            let insertGroup = DispatchGroup()
+            if !finalBatch.isEmpty {
+                insertGroup.enter()
+                routeBuilder?.insertRouteData(finalBatch) { _, error in
+                    if let error = error {
+                        print("Final route insert error: \(error)")
                     }
-                    if !self.recordedLocations.isEmpty {
-                        self.routeBuilder?.insertRouteData(self.recordedLocations) { success, error in
-                            self.routeBuilder?.finishRoute(with: workout, metadata: nil) { _, error in
-                                if let error = error {
-                                    print("Failed to finish route: \(error)")
-                                } else {
-                                    print("Route saved to HealthKit")
-                                }
+                    insertGroup.leave()
+                }
+            }
+
+            insertGroup.notify(queue: .main) { [weak self] in
+                guard let self = self else { return }
+
+                self.builder?.endCollection(withEnd: endDate) { success, error in
+                    if let error = error {
+                        print("End collection error: \(error)")
+                    }
+
+                    self.builder?.finishWorkout { [weak self] workout, error in
+                        guard let self = self, let workout = workout else {
+                            print("Finish workout error: \(String(describing: error))")
+                            return
+                        }
+
+                        print("Workout saved: \(workout)")
+
+                        self.routeBuilder?.finishRoute(with: workout, metadata: nil) { route, error in
+                            if let error = error {
+                                print("Finish route error: \(error)")
+                            } else {
+                                print("Route attached to workout successfully")
                             }
                         }
                     }
@@ -205,6 +249,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.isActive = false
             self.isPaused = false
             self.recordedLocations = []
+            self.pendingRouteLocations = []
         }
     }
 
@@ -268,6 +313,7 @@ extension WorkoutManager: CLLocationManagerDelegate {
             self.currentLocation = location
             self.speed = max(location.speed, 0)
             self.recordedLocations.append(location)
+            self.pendingRouteLocations.append(location)
 
             // Navigation
             if let alert = self.navigation.update(location: location) {

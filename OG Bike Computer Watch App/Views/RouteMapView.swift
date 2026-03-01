@@ -8,9 +8,8 @@ struct RouteMapView: View {
     @State private var showFullRoute = false
     @State private var autoSwitchTask: Task<Void, Never>?
 
-    // Breadcrumb zoom levels (meters ahead to show)
     private let zoomLevels: [Double] = [200, 400, 800, 1600]
-    @State private var zoomIndex: Int = 1 // default ~400m = ~1/4 mile
+    @State private var zoomIndex: Int = 1
 
     var body: some View {
         ZStack {
@@ -90,8 +89,6 @@ struct RouteMapView: View {
         }
     }
 }
-
-// MARK: - Full Route View
 
 private struct FullRouteCanvas: View {
     @ObservedObject var workout: WorkoutManager
@@ -178,11 +175,12 @@ private struct FullRouteCanvas: View {
     }
 }
 
-// MARK: - Breadcrumb View
-
 private struct BreadcrumbCanvas: View {
     @ObservedObject var workout: WorkoutManager
-    let viewDistance: Double // meters ahead to show
+    let viewDistance: Double
+
+    private let routeLineWidth: CGFloat = 6
+    private let completedLineWidth: CGFloat = 6
 
     var body: some View {
         Canvas { context, size in
@@ -195,47 +193,41 @@ private struct BreadcrumbCanvas: View {
 
             let currentDist = workout.navigation.distanceAlongRoute
 
-            // Use compass heading when slow/stopped, travel bearing when moving
             let bearing: Double
-            if workout.speed < 1.0 && workout.heading > 0 {
+            if workout.speed > 1.0, location.course >= 0 {
+                bearing = location.course
+            } else if workout.heading > 0 {
                 bearing = workout.heading
             } else {
                 bearing = processed.points[segIdx].bearingToNext
             }
 
-            // Window: 1/4 of viewDistance behind, 3/4 ahead
-            let behind = viewDistance * 0.25
-            let ahead = viewDistance * 0.75
+            let behind = viewDistance * 0.5
+            let ahead = viewDistance * 1.5
             let minDist = currentDist - behind
             let maxDist = currentDist + ahead
 
-            // Filter points within our window
             var windowPoints: [(coord: CLLocationCoordinate2D, dist: Double)] = []
             for point in points {
-                if point.distanceFromStart >= minDist - 50 &&
-                   point.distanceFromStart <= maxDist + 50 {
+                if point.distanceFromStart >= minDist - 100 &&
+                   point.distanceFromStart <= maxDist + 100 {
                     windowPoints.append((point.coordinate, point.distanceFromStart))
                 }
             }
 
             guard windowPoints.count >= 2 else { return }
 
-            // Transform: rotate so bearing is "up", scale to fit
             let center = location.coordinate
             let metersPerPoint = Double(min(size.width, size.height)) / viewDistance
             let rotationRad = -bearing * .pi / 180
-
-            // Position the rider dot at 3/4 down the screen
             let riderScreenY = size.height * 0.75
             let riderScreenX = size.width / 2
 
             func projectLocal(_ coord: CLLocationCoordinate2D) -> CGPoint {
                 let cosLat = cos(center.latitude * .pi / 180)
-                // Meters offset from current position
                 let dx = (coord.longitude - center.longitude) * cosLat * 111_320
                 let dy = (coord.latitude - center.latitude) * 111_320
 
-                // Rotate by bearing so direction of travel points up
                 let rx = dx * cos(rotationRad) - dy * sin(rotationRad)
                 let ry = dx * sin(rotationRad) + dy * cos(rotationRad)
 
@@ -244,8 +236,6 @@ private struct BreadcrumbCanvas: View {
                     y: riderScreenY - ry * metersPerPoint)
             }
 
-            // Draw route segment in window
-            // Behind = completed (green), Ahead = upcoming (white)
             var behindPath = Path()
             var aheadPath = Path()
             var startedBehind = false
@@ -260,7 +250,6 @@ private struct BreadcrumbCanvas: View {
                     } else {
                         behindPath.addLine(to: pt)
                     }
-                    // Keep ahead path starting from the last behind point
                     if !startedAhead {
                         aheadPath.move(to: pt)
                     }
@@ -278,27 +267,25 @@ private struct BreadcrumbCanvas: View {
                 }
             }
 
-            context.stroke(behindPath, with: .color(.green.opacity(0.5)), lineWidth: 4)
-            context.stroke(aheadPath, with: .color(.white), lineWidth: 4)
+            context.stroke(behindPath, with: .color(.green.opacity(0.4)),
+                           style: StrokeStyle(lineWidth: completedLineWidth, lineCap: .round, lineJoin: .round))
+            context.stroke(aheadPath, with: .color(.white),
+                           style: StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round))
 
-            // Draw turn points in window
-            if let processed = workout.navigation.processedRoute {
-                for turn in processed.turnPoints {
-                    if turn.distanceFromStart > minDist && turn.distanceFromStart < maxDist {
-                        let pt = projectLocal(turn.coordinate)
-                        let rect = CGRect(x: pt.x - 4, y: pt.y - 4, width: 8, height: 8)
-                        context.fill(Path(ellipseIn: rect), with: .color(.yellow))
-                    }
+            for turn in processed.turnPoints {
+                if turn.distanceFromStart > minDist && turn.distanceFromStart < maxDist {
+                    let pt = projectLocal(turn.coordinate)
+                    let rect = CGRect(x: pt.x - 5, y: pt.y - 5, width: 10, height: 10)
+                    context.fill(Path(ellipseIn: rect), with: .color(.yellow))
                 }
             }
 
-            // Current position dot
             let riderPt = CGPoint(x: riderScreenX, y: riderScreenY)
             context.fill(
-                Path(ellipseIn: CGRect(x: riderPt.x - 7, y: riderPt.y - 7, width: 14, height: 14)),
+                Path(ellipseIn: CGRect(x: riderPt.x - 8, y: riderPt.y - 8, width: 16, height: 16)),
                 with: .color(.white))
             context.fill(
-                Path(ellipseIn: CGRect(x: riderPt.x - 5, y: riderPt.y - 5, width: 10, height: 10)),
+                Path(ellipseIn: CGRect(x: riderPt.x - 6, y: riderPt.y - 6, width: 12, height: 12)),
                 with: .color(.blue))
         }
     }
