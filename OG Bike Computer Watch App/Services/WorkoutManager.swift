@@ -10,6 +10,10 @@ import HealthKit
 import CoreLocation
 import Combine
 
+#if os(watchOS)
+import WatchKit
+#endif
+
 class WorkoutManager: NSObject, ObservableObject {
     @Published var isActive = false
     @Published var isPaused = false
@@ -33,6 +37,17 @@ class WorkoutManager: NSObject, ObservableObject {
     private var timerStart: Date?
     private var timerAccumulated: TimeInterval = 0
     private var displayTimer: Timer?
+
+    let navigation = NavigationTracker()
+
+    private let battery = BatteryManager()
+    @Published var isAutoPaused = false
+    private var autoPauseSpeedSamples: [Double] = []
+    private let autoPauseWindow = 5
+    @Published var movingTime: TimeInterval = 0
+    private var isWristDown = false
+
+    @Published var heading: Double = 0 
 
     override init() {
         super.init()
@@ -94,6 +109,7 @@ class WorkoutManager: NSObject, ObservableObject {
         }
 
         locationManager.startUpdatingLocation()
+        locationManager.startUpdatingHeading()
 
         timerStart = Date()
         timerAccumulated = 0
@@ -106,6 +122,7 @@ class WorkoutManager: NSObject, ObservableObject {
     func pause() {
         session?.pause()
         locationManager.stopUpdatingLocation()
+        locationManager.stopUpdatingHeading()
 
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
@@ -119,11 +136,32 @@ class WorkoutManager: NSObject, ObservableObject {
     func resume() {
         session?.resume()
         locationManager.startUpdatingLocation()
+        locationManager.startUpdatingHeading()
 
         timerStart = Date()
         startDisplayTimer()
 
         isPaused = false
+    }
+
+    private func updateAutoPause() {
+        let speedMPH = speed * 2.23694
+
+        autoPauseSpeedSamples.append(speedMPH)
+        if autoPauseSpeedSamples.count > autoPauseWindow {
+            autoPauseSpeedSamples.removeFirst()
+        }
+
+        let allSlow = autoPauseSpeedSamples.count >= autoPauseWindow &&
+                      autoPauseSpeedSamples.allSatisfy { $0 < 1.0 }
+        let moving = speedMPH >= 2.0
+
+        if allSlow && !isAutoPaused && !isPaused {
+            isAutoPaused = true
+        } else if moving && isAutoPaused {
+            isAutoPaused = false
+            autoPauseSpeedSamples.removeAll()
+        }
     }
 
     func stop(save: Bool) {
@@ -134,6 +172,7 @@ class WorkoutManager: NSObject, ObservableObject {
         timerStart = nil
         stopDisplayTimer()
         locationManager.stopUpdatingLocation()
+        locationManager.stopUpdatingHeading()
 
         session?.end()
 
@@ -178,6 +217,9 @@ class WorkoutManager: NSObject, ObservableObject {
             guard let self = self, let start = self.timerStart else { return }
             DispatchQueue.main.async {
                 self.elapsedTime = self.timerAccumulated + Date().timeIntervalSince(start)
+                if !self.isAutoPaused && !self.isPaused {
+                    self.movingTime += 1
+                }
             }
         }
     }
@@ -186,12 +228,36 @@ class WorkoutManager: NSObject, ObservableObject {
         displayTimer?.invalidate()
         displayTimer = nil
     }
+
+    func loadRoute(_ route: Route) {
+        let processed = RouteProcessor.process(route)
+        navigation.load(processed)
+    }
+       
+    #if os(watchOS)
+    private func handleTurnAlert(_ alert: NavigationTracker.TurnAlert) {
+        switch alert {
+        case .warning(_):
+            WKInterfaceDevice.current().play(.click)
+        case .imminent(let turn):
+            switch turn.direction {
+            case .left, .slightLeft, .sharpLeft:
+                WKInterfaceDevice.current().play(.directionDown)
+            case .right, .slightRight, .sharpRight:
+                WKInterfaceDevice.current().play(.directionUp)
+            case .uTurn:
+                WKInterfaceDevice.current().play(.failure)
+            case .straight:
+                WKInterfaceDevice.current().play(.success)
+            }
+        }
+    }
+    #endif
 }
 
 extension WorkoutManager: CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
-
         guard location.horizontalAccuracy >= 0,
               location.horizontalAccuracy < 50 else { return }
 
@@ -199,10 +265,31 @@ extension WorkoutManager: CLLocationManagerDelegate {
             if let previous = self.currentLocation {
                 self.totalDistance += location.distance(from: previous)
             }
-
             self.currentLocation = location
             self.speed = max(location.speed, 0)
             self.recordedLocations.append(location)
+
+            // Navigation
+            if let alert = self.navigation.update(location: location) {
+                self.handleTurnAlert(alert)
+            }
+
+            // Battery management — adjust GPS frequency
+            let mode = self.battery.recommendedMode(
+                distanceToNextTurn: self.navigation.distanceToNextTurn,
+                isOffRoute: self.navigation.isOffRoute,
+                speed: self.speed)
+            self.battery.apply(mode: mode, to: self.locationManager)
+
+            // Auto-pause logic
+            self.updateAutoPause()
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        guard newHeading.headingAccuracy >= 0 else { return }
+        DispatchQueue.main.async {
+            self.heading = newHeading.trueHeading
         }
     }
 

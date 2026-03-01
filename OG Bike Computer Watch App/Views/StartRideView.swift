@@ -26,6 +26,7 @@ struct StartRideView: View {
 
                 ForEach(ActivityType.allCases) { activity in
                     Button {
+                        workout.loadRoute(route)
                         workout.start(activity: activity)
                     } label: {
                         Label(activity.name, systemImage: activity.icon)

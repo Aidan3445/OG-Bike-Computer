@@ -26,10 +26,8 @@ struct ContentView: View {
         .onAppear {
             workout.requestPermissions()
 
-            // Wire up connectivity → store (once)
             ConnectivityManager.shared.attach(store: store)
 
-            // Keep phone in sync when routes change (including deletes)
             store.onChange = {
                 ConnectivityManager.shared.reportRoutes(store.routes)
             }
@@ -47,7 +45,7 @@ struct ContentView: View {
     }
 
     private func handleStop() {
-        if workout.elapsedTime < 60 {
+        if workout.movingTime < 60 {
             showDiscardAlert = true
         } else {
             workout.stop(save: true)

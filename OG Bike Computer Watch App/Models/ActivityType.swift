@@ -57,7 +57,6 @@ enum ActivityType: String, CaseIterable, Codable, Identifiable {
         }
     }
 
-    // For running/walking/hiking, pace (min/mi) is more useful than speed (mph)
     var usesPace: Bool {
         switch self {
         case .cycling: return false
