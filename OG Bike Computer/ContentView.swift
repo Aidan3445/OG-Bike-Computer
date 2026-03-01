@@ -49,7 +49,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .navigationTitle("Computah")
+                .navigationTitle("Computa")
                 .onReceive(connectivity.$routeNamesOnWatch) { _ in uploadingRouteID = nil }
                 .toolbar {
                     Button {

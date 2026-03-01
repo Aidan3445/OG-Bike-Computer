@@ -137,14 +137,12 @@ class WorkoutManager: NSObject, ObservableObject {
 
         isActive = true
         isPaused = false
+        isAutoPaused = false
     }
 
-    func pause() {
+     func pauseSession() {
         session?.pause()
-        locationManager.stopUpdatingLocation()
-        locationManager.stopUpdatingHeading()
-
-        if let start = timerStart {
+         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
         }
         timerStart = nil
@@ -153,15 +151,29 @@ class WorkoutManager: NSObject, ObservableObject {
         isPaused = true
     }
 
-    func resume() {
-        session?.resume()
-        locationManager.startUpdatingLocation()
-        locationManager.startUpdatingHeading()
+    func pause() {
+        locationManager.stopUpdatingLocation()
+        locationManager.stopUpdatingHeading() 
+        pauseSession()
+    }
 
+    func resumeSession() {
+        session?.resume()
         timerStart = Date()
         startDisplayTimer()
 
         isPaused = false
+
+        if isAutoPaused {
+            autoPauseSpeedSamples.removeAll()
+        }
+    }
+
+    func resume() {
+        locationManager.startUpdatingLocation()
+        locationManager.startUpdatingHeading()
+
+        resumeSession()
     }
 
     private func updateAutoPause() {
@@ -177,10 +189,11 @@ class WorkoutManager: NSObject, ObservableObject {
         let moving = speedMPH >= 2.0
 
         if allSlow && !isAutoPaused && !isPaused {
+            pauseSession()
             isAutoPaused = true
         } else if moving && isAutoPaused {
+            resumeSession()
             isAutoPaused = false
-            autoPauseSpeedSamples.removeAll()
         }
     }
 
@@ -258,6 +271,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func startDisplayTimer() {
+        displayTimer?.invalidate()
         displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self, let start = self.timerStart else { return }
             DispatchQueue.main.async {
