@@ -12,6 +12,15 @@ func formatDistance(_ meters: Double) -> String {
     return String(format: "%.1f mi", miles)
 }
 
+func formatTurnDistance(_ meters: Double) -> String {
+    if meters >= 1609 {
+        return String(format: "%.1f mi", meters / 1609.34)
+    } else {
+        let feet = Int(meters * 3.28084)
+        return "\((feet / 50) * 50) ft"
+    }
+}
+
 func formatElevation(_ meters: Double) -> String {
    let feet = meters * 3.28084
    return String(format: "%.0f ft", feet)

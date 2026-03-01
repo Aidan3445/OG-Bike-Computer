@@ -179,17 +179,4 @@ struct WorkoutView: View {
         if dist < 200 { return .yellow }
         return .green
     }
-
-    private func formatTurnDistance(_ meters: Double) -> String {
-        if meters >= 1609 {
-            return String(format: "%.1f mi", meters / 1609.34)
-        } else if meters >= 160 {
-            let feet = Int(meters * 3.28084)
-            let rounded = (feet / 50) * 50
-            return "\(rounded) ft"
-        } else {
-            let feet = Int(meters * 3.28084)
-            return "\(feet) ft"
-        }
-    }
 }
