@@ -20,83 +20,75 @@ struct RouteRow: View {
     @State private var editedName: String = ""
 
     var body: some View {
-        NavigationLink(destination: RouteDetailView(
-            route: route,
-            isOnWatch: isOnWatch,
-            isUploading: isUploading,
-            isUploadBlocked: isUploadBlocked,
-            onSend: onSend
-        )) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(route.name)
-                    .font(.headline)
-                HStack(spacing: 12) {
-                    Button {
-                        if isUploading || isUploadBlocked { return }
-                        if isOnWatch {
-                            showOverwriteAlert = true
-                        } else {
-                            onSend()
-                        }
-                    } label: {
-                        Group {
-                            if isUploading {
-                                ProgressView()
-                            } else {
-                                Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
-                            }
-                        }
-                        .font(.title2)
-                        .foregroundStyle(buttonColor(
-                            isUploading: isUploading,
-                            isUploadBlocked: isUploadBlocked,
-                            isOnWatch: isOnWatch
-                        ))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isUploadBlocked)
-                    
-                    Label(formatDistance(route.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                    if route.elevationGain > 0 {
-                        Label(formatElevation(route.elevationGain), systemImage: "arrow.up.right")
-                    }
-                    if route.elevationLoss > 0 {
-                        Label(formatElevation(route.elevationLoss), systemImage: "arrow.down.right")
-                    }
-                }
-                .labelStyle(StatLabelStyle())
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 2)
-            .opacity(isUploadBlocked ? 0.5 : 1.0)
-            .swipeActions(edge: .leading) {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(route.name)
+                .font(.headline)
+            HStack(spacing: 12) {
                 Button {
-                    editedName = route.name
-                    showRenameSheet = true
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                }
-                .tint(.orange)
-            }
-            .alert("Route Already on Watch", isPresented: $showOverwriteAlert) {
-                Button("Replace", role: .destructive) {
-                    onSend()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
-            }
-            .alert("Rename Route", isPresented: $showRenameSheet) {
-                TextField("Route name", text: $editedName)
-                Button("Save") {
-                    let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        onRename(trimmed)
+                    if isUploading || isUploadBlocked { return }
+                    if isOnWatch {
+                        showOverwriteAlert = true
+                    } else {
+                        onSend()
                     }
+                } label: {
+                    Group {
+                        if isUploading {
+                            ProgressView()
+                        } else {
+                            Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
+                        }
+                    }
+                    .font(.title2)
+                    .foregroundStyle(buttonColor(
+                        isUploading: isUploading,
+                        isUploadBlocked: isUploadBlocked,
+                        isOnWatch: isOnWatch
+                    ))
                 }
-                Button("Cancel", role: .cancel) {}
+                .buttonStyle(.plain)
+                .disabled(isUploadBlocked)
+                
+                Label(formatDistance(route.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                if route.elevationGain > 0 {
+                    Label(formatElevation(route.elevationGain), systemImage: "arrow.up.right")
+                }
+                if route.elevationLoss > 0 {
+                    Label(formatElevation(route.elevationLoss), systemImage: "arrow.down.right")
+                }
             }
+            .labelStyle(StatLabelStyle())
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+        .opacity(isUploadBlocked ? 0.5 : 1.0)
+        .swipeActions(edge: .leading) {
+            Button {
+                editedName = route.name
+                showRenameSheet = true
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            .tint(.orange)
+        }
+        .alert("Route Already on Watch", isPresented: $showOverwriteAlert) {
+            Button("Replace", role: .destructive) {
+                onSend()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
+        }
+        .alert("Rename Route", isPresented: $showRenameSheet) {
+            TextField("Route name", text: $editedName)
+            Button("Save") {
+                let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    onRename(trimmed)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         }
     }
 }

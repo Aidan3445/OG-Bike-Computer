@@ -11,6 +11,7 @@ import Combine
 class RouteStore: ObservableObject {
     @Published var routes: [Route] = []
 
+    var onImport: ((Route) -> Void)?
     var onChange: (() -> Void)?
     private let directory: URL
 
@@ -32,6 +33,7 @@ class RouteStore: ObservableObject {
             routes.append(route)
         }
         onChange?()
+        onImport?(route)
     }
 
     func delete(_ route: Route) {

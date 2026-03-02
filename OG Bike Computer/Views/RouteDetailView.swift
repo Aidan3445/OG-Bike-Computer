@@ -140,7 +140,7 @@ struct RouteDetailView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
-            .tint(.black.opacity(0.45))
+            .tint(.black.opacity(0.65))
             .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
         }
         .navigationTitle(route.name)

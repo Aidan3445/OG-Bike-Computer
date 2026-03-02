@@ -18,9 +18,11 @@ struct ContentView: View {
     @State private var showFilePicker = false
     @State private var importError: String?
     @State private var uploadingRouteID: UUID?
+    @State private var selectedRoute: Route?
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             VStack(spacing: 0) {
                 Group {
                     if routeStore.routes.isEmpty {
@@ -31,16 +33,18 @@ struct ContentView: View {
                     } else {
                         List {
                             ForEach(routeStore.routes) { route in
-                                RouteRow(
-                                    route: route,
-                                    isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
-                                    isUploading: uploadingRouteID == route.id,
-                                    isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
-                                    onSend: { sendToWatch(route) },
-                                    onRename: { newName in
-                                        routeStore.rename(route, to: newName)
-                                    }
-                                )
+                                NavigationLink(value: route) {
+                                    RouteRow(
+                                        route: route,
+                                        isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                                        isUploading: uploadingRouteID == route.id,
+                                        isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                                        onSend: { sendToWatch(route) },
+                                        onRename: { newName in
+                                            routeStore.rename(route, to: newName)
+                                        }
+                                    )
+                                }
                             }
                             .onDelete { indices in
                                 for i in indices {
@@ -51,8 +55,22 @@ struct ContentView: View {
                     }
                 }
                 .navigationTitle("Computa")
-                .onAppear { ConnectivityManager.shared.attachStores(rideStore: rideStore) }
+                .onAppear { 
+                    ConnectivityManager.shared.attachStores(rideStore: rideStore)
+                    routeStore.onImport = { route in
+                        navigationPath.append(route)
+                    }
+                }
                 .onReceive(connectivity.$routeNamesOnWatch) { _ in uploadingRouteID = nil }
+                .navigationDestination(for: Route.self) { route in
+                    RouteDetailView(
+                        route: route,
+                        isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                        isUploading: uploadingRouteID == route.id,
+                        isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                        onSend: { sendToWatch(route) }
+                    )
+                }
                 .toolbar {
                     Button {
                         showFilePicker = true
@@ -82,20 +100,16 @@ struct ContentView: View {
     }
 
     private func sendToWatch(_ route: Route) {
-        print(String(format: "85 sendToWatch() %@", uploadingRouteID?.uuidString ?? "nil"))
         guard uploadingRouteID == nil else { return }
         uploadingRouteID = route.id
-        print(String(format: "88 sendToWatch() %@", uploadingRouteID?.uuidString ?? "nil"))
 
         ConnectivityManager.shared.sendRoute(route) { result in
             DispatchQueue.main.async {
-                print(String(format: "92 sendToWatch()"))
                 if case .failure(let error) = result {
                     print("Failed to send route: \(error)")
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
                     uploadingRouteID = nil
-                    print(String(format: "98 sendToWatch() %@", uploadingRouteID?.uuidString ?? "nil"))
                 }
             }
         }
@@ -103,29 +117,30 @@ struct ContentView: View {
 
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {
-        case .success(let urls):
-            for url in urls {
-                guard url.startAccessingSecurityScopedResource() else { continue }
-                defer { url.stopAccessingSecurityScopedResource() }
+            case .success(let urls):
+                print(String(format: "Importing %d files", urls.count))
+                for url in urls {
+                    guard url.startAccessingSecurityScopedResource() else { continue }
+                    defer { url.stopAccessingSecurityScopedResource() }
 
-                guard let data = try? Data(contentsOf: url) else {
-                    importError = "Could not read file: \(url.lastPathComponent)"
-                    continue
-                }
+                    guard let data = try? Data(contentsOf: url) else {
+                        importError = "Could not read file: \(url.lastPathComponent)"
+                        continue
+                    }
 
-                let parser = GPXParser()
-                let parsed = parser.parse(data: data)
+                    let parser = GPXParser()
+                    let parsed = parser.parse(data: data)
 
-                if parsed.isEmpty {
-                    importError = "No routes found in \(url.lastPathComponent)"
-                } else {
-                    for route in parsed {
-                        routeStore.save(route)
+                    if parsed.isEmpty {
+                        importError = "No routes found in \(url.lastPathComponent)"
+                    } else {
+                        for route in parsed {
+                            routeStore.save(route)
+                        }
                     }
                 }
-            }
-        case .failure(let error):
-            importError = error.localizedDescription
+            case .failure(let error):
+                importError = error.localizedDescription
         }
     }
 }
