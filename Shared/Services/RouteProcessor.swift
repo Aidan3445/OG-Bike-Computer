@@ -9,7 +9,6 @@ import Foundation
 import CoreLocation
 
 struct RouteProcessor {
-
     static let turnAngleThreshold: Double = 30
 
     static let minTurnSpacing: Double = 50
@@ -90,7 +89,7 @@ struct RouteProcessor {
             minLon: lons.min()!, maxLon: lons.max()!)
     }
 
-    static func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
+    nonisolated static func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
         let dLon = radians(b.longitude - a.longitude)
         let aLat = radians(a.latitude)
         let bLat = radians(b.latitude)
@@ -102,14 +101,14 @@ struct RouteProcessor {
         return (degrees(bearing) + 360).truncatingRemainder(dividingBy: 360)
     }
 
-    static func angleDelta(from a: Double, to b: Double) -> Double {
+    nonisolated static func angleDelta(from a: Double, to b: Double) -> Double {
         var delta = b - a
         if delta > 180 { delta -= 360 }
         if delta < -180 { delta += 360 }
         return delta
     }
 
-    static func classifyTurn(_ angle: Double) -> TurnDirection {
+    nonisolated static func classifyTurn(_ angle: Double) -> TurnDirection {
         let a = angle
         if a < -150 || a > 150 { return .uTurn }
         if a < -100 { return .sharpLeft }
@@ -121,6 +120,6 @@ struct RouteProcessor {
         return .straight
     }
 
-    private static func radians(_ degrees: Double) -> Double { degrees * .pi / 180 }
-    private static func degrees(_ radians: Double) -> Double { radians * 180 / .pi }
+    nonisolated private static func radians(_ degrees: Double) -> Double { degrees * .pi / 180 }
+    nonisolated private static func degrees(_ radians: Double) -> Double { radians * 180 / .pi }
 }

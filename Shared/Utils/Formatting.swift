@@ -51,12 +51,6 @@ func formatTime(_ interval: TimeInterval) -> String {
     return String(format: "%d:%02d", minutes, seconds)
 }
 
-func turnColor(_ dist: Double) -> Color {
-   if dist < 50 { return .red }
-   if dist < 200 { return .yellow }
-   return .green
-}
-
 func formattedStorageSize(_ bytes: Int64) -> String {
     if bytes < 1024 {
         return "\(bytes) B"
@@ -65,4 +59,17 @@ func formattedStorageSize(_ bytes: Int64) -> String {
     } else {
         return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
     }
+}
+
+func turnColor(_ dist: Double) -> Color {
+   if dist < 50 { return .red }
+   if dist < 200 { return .yellow }
+   return .green
+}
+
+func buttonColor(isUploading: Bool = false, isUploadBlocked: Bool = false, isOnWatch: Bool = false) -> Color {
+    if isUploading { return .orange }
+    if isUploadBlocked { return .secondary }
+    if isOnWatch { return .green }
+    return .blue
 }

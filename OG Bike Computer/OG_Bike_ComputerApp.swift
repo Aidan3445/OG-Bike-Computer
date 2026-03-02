@@ -6,13 +6,20 @@
 //
 
 import SwiftUI
+import CoreLocation
+import MapKit
 
 class AppDelegate: NSObject, UIApplicationDelegate {
+    private let locationManager = CLLocationManager()
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         ConnectivityManager.shared.activate()
+        locationManager.requestWhenInUseAuthorization()
+        let warmup = MKMapView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        _ = warmup.region
         return true
     }
 }
