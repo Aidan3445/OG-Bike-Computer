@@ -353,9 +353,8 @@ class WorkoutManager: NSObject, ObservableObject {
 
         DispatchQueue.main.async {
             self.onRideCompleted?(summary)
+            ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
         }
-
-        ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
     }
     #endif
 }
