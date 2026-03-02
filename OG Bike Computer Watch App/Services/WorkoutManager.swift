@@ -22,8 +22,11 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var speed: Double = 0 
     @Published var elapsedTime: TimeInterval = 0
     @Published var totalDistance: Double = 0
+    @Published var heading: Double = 0 
     @Published var currentLocation: CLLocation?
     @Published var currentActivity: ActivityType = .cycling
+
+    var onRideCompleted: ((RideSummary) -> Void)?
     
     private var routeInsertionTimer: Timer?
     private var pendingRouteLocations: [CLLocation] = []
@@ -48,8 +51,6 @@ class WorkoutManager: NSObject, ObservableObject {
     private let autoPauseWindow = 5
     @Published var movingTime: TimeInterval = 0
     private var isWristDown = false
-
-    @Published var heading: Double = 0 
 
     override init() {
         super.init()
@@ -249,6 +250,7 @@ class WorkoutManager: NSObject, ObservableObject {
                                 print("Finish route error: \(error)")
                             } else {
                                 print("Route attached to workout successfully")
+                                self.exportAndTransferRide()
                             }
                         }
                     }
@@ -310,6 +312,50 @@ class WorkoutManager: NSObject, ObservableObject {
                 WKInterfaceDevice.current().play(.success)
             }
         }
+    }
+        
+    private func exportAndTransferRide() {
+        let rideName = navigation.processedRoute?.name ?? "Ride"
+        let activity = currentActivity
+
+        let avgSpeed = elapsedTime > 0 ? totalDistance / elapsedTime : 0
+        var elevGain: Double = 0
+        for i in 1..<recordedLocations.count {
+            let delta = recordedLocations[i].altitude - recordedLocations[i - 1].altitude
+            if delta > 0 { elevGain += delta }
+        }
+
+        let trackData = TrackEncoder.encode(recordedLocations)
+        let trackFilename = "\(UUID().uuidString).track"
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(trackFilename)
+
+        do {
+            try trackData.write(to: tempURL)
+        } catch {
+            print("Failed to write track data: \(error)")
+            return
+        }
+
+        let summary = RideSummary(
+            id: UUID(),
+            name: rideName,
+            activityType: activity,
+            date: Date(),
+            elapsedTime: elapsedTime,
+            movingTime: movingTime,
+            distance: totalDistance,
+            calories: activeCalories,
+            elevationGain: elevGain,
+            avgSpeed: avgSpeed,
+            pointCount: recordedLocations.count,
+            trackFilename: trackFilename)
+
+        DispatchQueue.main.async {
+            self.onRideCompleted?(summary)
+        }
+
+        ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
     }
     #endif
 }

@@ -10,7 +10,7 @@ import SwiftUI
 struct RouteList: View {
     @ObservedObject var store: RouteStore
     let workout: WorkoutManager
-
+    
     var body: some View {
         NavigationStack {
             Group {
@@ -45,12 +45,20 @@ struct RouteList: View {
                                 store.delete(store.routes[i])
                             }
                         }
+
+                        Text(formattedStorageSize(store.storageSize))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
+                            .padding(.all, 0)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    .navigationTitle("Routes")
+                    .navigationDestination(for: Route.self) { route in
+                        StartRideView(route: route, workout: workout)
                     }
                 }
-            }
-            .navigationTitle("Routes")
-            .navigationDestination(for: Route.self) { route in
-                StartRideView(route: route, workout: workout)
             }
         }
     }

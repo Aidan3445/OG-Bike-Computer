@@ -51,8 +51,11 @@ class GPXParser: NSObject, XMLParserDelegate {
         textBuffer += string
     }
 
-    func parser(_ parser: XMLParser, didEndElement element: String,
-                namespaceURI: String?, qualifiedName: String?) {
+    func parser(
+        _ parser: XMLParser,
+        didEndElement element: String,
+        namespaceURI: String?, qualifiedName: String?
+    ) {
         let text = textBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
 
         switch element {

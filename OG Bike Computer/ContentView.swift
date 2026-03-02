@@ -11,7 +11,8 @@ import WatchConnectivity
 import Combine
 
 struct ContentView: View {
-    @StateObject private var store = RouteStore()
+    @ObservedObject var routeStore: RouteStore
+    @ObservedObject var rideStore: RideStore
     @StateObject private var connectivity = ConnectivityManager.shared
 
     @State private var showFilePicker = false
@@ -22,14 +23,14 @@ struct ContentView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Group {
-                    if store.routes.isEmpty {
+                    if routeStore.routes.isEmpty {
                         ContentUnavailableView(
                             "No Routes",
                             systemImage: "map",
                             description: Text("Import a GPX file to get started."))
                     } else {
                         List {
-                            ForEach(store.routes) { route in
+                            ForEach(routeStore.routes) { route in
                                 RouteRow(
                                     route: route,
                                     isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
@@ -37,19 +38,20 @@ struct ContentView: View {
                                     isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
                                     onSend: { sendToWatch(route) },
                                     onRename: { newName in
-                                        store.rename(route, to: newName)
+                                        routeStore.rename(route, to: newName)
                                     }
                                 )
                             }
                             .onDelete { indices in
                                 for i in indices {
-                                    store.delete(store.routes[i])
+                                    routeStore.delete(routeStore.routes[i])
                                 }
                             }
                         }
                     }
                 }
                 .navigationTitle("Computa")
+                .onAppear { ConnectivityManager.shared.attachStores(rideStore: rideStore) }
                 .onReceive(connectivity.$routeNamesOnWatch) { _ in uploadingRouteID = nil }
                 .toolbar {
                     Button {
@@ -60,7 +62,7 @@ struct ContentView: View {
                 }
                 .fileImporter(
                     isPresented: $showFilePicker,
-                    allowedContentTypes: [.xml, .data],
+                    allowedContentTypes: [.gpx, .xml, .data],
                     allowsMultipleSelection: true
                 ) { result in
                     handleImport(result)
@@ -74,22 +76,26 @@ struct ContentView: View {
                     Text(importError ?? "")
                 }
 
-                ConnectionStatusBar(connectivity: connectivity)
+                ConnectionStatusBar(connectivity: connectivity, routeStore: routeStore)
             }
         }
     }
 
     private func sendToWatch(_ route: Route) {
+        print(String(format: "85 sendToWatch() %@", uploadingRouteID?.uuidString ?? "nil"))
         guard uploadingRouteID == nil else { return }
         uploadingRouteID = route.id
+        print(String(format: "88 sendToWatch() %@", uploadingRouteID?.uuidString ?? "nil"))
 
         ConnectivityManager.shared.sendRoute(route) { result in
             DispatchQueue.main.async {
+                print(String(format: "92 sendToWatch()"))
                 if case .failure(let error) = result {
                     print("Failed to send route: \(error)")
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
                     uploadingRouteID = nil
+                    print(String(format: "98 sendToWatch() %@", uploadingRouteID?.uuidString ?? "nil"))
                 }
             }
         }
@@ -114,7 +120,7 @@ struct ContentView: View {
                     importError = "No routes found in \(url.lastPathComponent)"
                 } else {
                     for route in parsed {
-                        store.save(route)
+                        routeStore.save(route)
                     }
                 }
             }

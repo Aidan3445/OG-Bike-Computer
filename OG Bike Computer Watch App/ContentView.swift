@@ -9,7 +9,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var store = RouteStore()
+    @ObservedObject var store = RouteStore()
     @StateObject private var connectivity = ConnectivityManager.shared
     @StateObject private var workout = WorkoutManager()
 
@@ -25,8 +25,7 @@ struct ContentView: View {
         }
         .onAppear {
             workout.requestPermissions()
-
-            ConnectivityManager.shared.attach(store: store)
+            ConnectivityManager.shared.attachStores(routeStore: store)
 
             store.onChange = {
                 ConnectivityManager.shared.reportRoutes(store.routes)

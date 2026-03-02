@@ -10,6 +10,7 @@ import WatchConnectivity
 
 struct ConnectionStatusBar: View {
     @ObservedObject var connectivity: ConnectivityManager
+    @ObservedObject var routeStore: RouteStore
 
     var body: some View {
         HStack(spacing: 12) {
@@ -25,6 +26,12 @@ struct ConnectionStatusBar: View {
             }
 
             Spacer()
+
+            if routeStore.storageSize > 0 {
+                Text(formattedStorageSize(routeStore.storageSize))
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+            }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -41,9 +48,6 @@ struct ConnectionStatusBar: View {
         if connectivity.activationState != .activated {
             return "bolt.slash"
         }
-        if !connectivity.isReachable {
-            return "wifi.slash"
-        }
         #if os(iOS)
         if !connectivity.isPaired {
             return "applewatch.slash"
@@ -52,19 +56,24 @@ struct ConnectionStatusBar: View {
             return "applewatch"
         }
         #endif
-        return "checkmark.circle.fill"
+        if connectivity.isReachable {
+            return "checkmark.circle.fill"
+        }
+        return "applewatch.radiowaves.left.and.right"
     }
 
     private var iconColor: Color {
-        iconName == "checkmark.circle.fill" ? .green : .orange
+        if connectivity.activationState != .activated { return .red }
+        #if os(iOS)
+        if !connectivity.isPaired || !connectivity.isWatchAppInstalled { return .red }
+        #endif
+        if connectivity.isReachable { return .green }
+        return .orange
     }
 
     private var statusTitle: String {
         if connectivity.activationState != .activated {
             return "WatchConnectivity Inactive"
-        }
-        if !connectivity.isReachable {
-            return "Watch Not Reachable"
         }
         #if os(iOS)
         if !connectivity.isPaired {
@@ -74,7 +83,10 @@ struct ConnectionStatusBar: View {
             return "Watch App Not Installed"
         }
         #endif
-        return "Connected to Apple Watch"
+        if connectivity.isReachable {
+            return "Watch Connected"
+        }
+        return "Watch Paired"
     }
 
     private var statusDetail: String {
@@ -84,9 +96,14 @@ struct ConnectionStatusBar: View {
         case .inactive:
             return "Session inactive"
         case .activated:
-            return connectivity.isReachable
-                ? "Ready to send routes"
-                : "Open the app on your watch to send routes"
+            #if os(iOS)
+            if !connectivity.isPaired { return "Pair a watch in the Watch app" }
+            if !connectivity.isWatchAppInstalled { return "Install the watch app" }
+            #endif
+            if connectivity.isReachable {
+                return "Ready to send routes"
+            }
+            return "Routes will transfer in the background"
         @unknown default:
             return "Unknown session state"
         }

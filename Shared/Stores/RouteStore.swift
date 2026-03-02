@@ -54,8 +54,17 @@ class RouteStore: ObservableObject {
             }
             .sorted { $0.name < $1.name }
     }
+    
+    var storageSize: Int64 {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
 
-        
+        return files.reduce(0) { total, url in
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            return total + Int64(size)
+        }
+    }
+
     func rename(_ route: Route, to newName: String) {
         guard let index = routes.firstIndex(where: { $0.id == route.id }) else { return }
 
