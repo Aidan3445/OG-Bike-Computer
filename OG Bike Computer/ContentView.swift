@@ -19,93 +19,97 @@ struct ContentView: View {
     @State private var importError: String?
     @State private var uploadingRouteID: UUID?
     @State private var selectedRoute: Route?
-    
+
     @State private var selectedTab = 0
     @State private var navigationPath = NavigationPath()
 
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack(path: $navigationPath) {
-                VStack(spacing: 0) {
-                    Group {
-                        if routeStore.routes.isEmpty {
-                            ContentUnavailableView(
-                                "No Routes",
-                                systemImage: "map",
-                                description: Text("Import a GPX file to get started."))
-                        } else {
-                            List {
-                                ForEach(routeStore.routes) { route in
-                                    NavigationLink(value: route) {
-                                        RouteRow(
-                                            route: route,
-                                            isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
-                                            isUploading: uploadingRouteID == route.id,
-                                            isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
-                                            onSend: { sendToWatch(route) },
-                                            onRename: { newName in
-                                                routeStore.rename(route, to: newName)
-                                            }
-                                        )
-                                    }
+                Group {
+                    if routeStore.routes.isEmpty {
+                        ContentUnavailableView(
+                            "No Routes",
+                            systemImage: "map",
+                            description: Text("Import a GPX file to get started."))
+                    } else {
+                        List {
+                            ForEach(routeStore.routes) { route in
+                                NavigationLink(value: route) {
+                                    RouteRow(
+                                        route: route,
+                                        isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                                        isUploading: uploadingRouteID == route.id,
+                                        isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                                        onSend: { sendToWatch(route) },
+                                        onRename: { newName in
+                                            routeStore.rename(route, to: newName)
+                                        }
+                                    )
                                 }
-                                .onDelete { indices in
-                                    for i in indices {
-                                        routeStore.delete(routeStore.routes[i])
-                                    }
+                            }
+                            .onDelete { indices in
+                                for i in indices {
+                                    routeStore.delete(routeStore.routes[i])
                                 }
                             }
                         }
                     }
-                    .navigationTitle("Computa")
-                    .onAppear {
-                        ConnectivityManager.shared.attachStores(rideStore: rideStore)
-                        routeStore.onImport = { route in
-                            selectedTab = 0
-                            navigationPath.append(route)
-                        }
+                }
+                .navigationTitle("Computa")
+                .onAppear {
+                    ConnectivityManager.shared.attachStores(rideStore: rideStore)
+                    routeStore.onImport = { route in
+                        selectedTab = 0
+                        navigationPath.append(route)
                     }
-                    .onReceive(connectivity.$routeNamesOnWatch) { _ in uploadingRouteID = nil }
-                    .navigationDestination(for: Route.self) { route in
-                        RouteDetailView(
-                            route: route,
-                            isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
-                            isUploading: uploadingRouteID == route.id,
-                            isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
-                            onSend: { sendToWatch(route) }
+                }
+                .onReceive(connectivity.$routeNamesOnWatch) { _ in uploadingRouteID = nil }
+                .navigationDestination(for: Route.self) { route in
+                    RouteDetailView(
+                        route: route,
+                        isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                        isUploading: uploadingRouteID == route.id,
+                        isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                        onSend: { sendToWatch(route) }
+                    )
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        ConnectionStatusButton(
+                            connectivity: connectivity,
+                            routeStore: routeStore
                         )
                     }
-                    .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             showFilePicker = true
                         } label: {
                             Label("Import GPX", systemImage: "plus")
                         }
                     }
-                    .fileImporter(
-                        isPresented: $showFilePicker,
-                        allowedContentTypes: [.gpx, .xml, .data],
-                        allowsMultipleSelection: true
-                    ) { result in
-                        handleImport(result)
-                    }
-                    .alert("Import Error", isPresented: .init(
-                        get: { importError != nil },
-                        set: { if !$0 { importError = nil } }
-                    )) {
-                        Button("OK") { importError = nil }
-                    } message: {
-                        Text(importError ?? "")
-                    }
-                    
-                    ConnectionStatusBar(connectivity: connectivity, routeStore: routeStore)
+                }
+                .fileImporter(
+                    isPresented: $showFilePicker,
+                    allowedContentTypes: [.gpx, .xml, .data],
+                    allowsMultipleSelection: true
+                ) { result in
+                    handleImport(result)
+                }
+                .alert("Import Error", isPresented: .init(
+                    get: { importError != nil },
+                    set: { if !$0 { importError = nil } }
+                )) {
+                    Button("OK") { importError = nil }
+                } message: {
+                    Text(importError ?? "")
                 }
             }
             .tabItem {
                 Label("Routes", systemImage: "map")
             }
             .tag(0)
-            
+
             NavigationStack {
                 RideHistoryView(rideStore: rideStore)
             }
@@ -134,30 +138,30 @@ struct ContentView: View {
 
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {
-            case .success(let urls):
-                print(String(format: "Importing %d files", urls.count))
-                for url in urls {
-                    guard url.startAccessingSecurityScopedResource() else { continue }
-                    defer { url.stopAccessingSecurityScopedResource() }
+        case .success(let urls):
+            print(String(format: "Importing %d files", urls.count))
+            for url in urls {
+                guard url.startAccessingSecurityScopedResource() else { continue }
+                defer { url.stopAccessingSecurityScopedResource() }
 
-                    guard let data = try? Data(contentsOf: url) else {
-                        importError = "Could not read file: \(url.lastPathComponent)"
-                        continue
-                    }
+                guard let data = try? Data(contentsOf: url) else {
+                    importError = "Could not read file: \(url.lastPathComponent)"
+                    continue
+                }
 
-                    let parser = GPXParser()
-                    let parsed = parser.parse(data: data)
+                let parser = GPXParser()
+                let parsed = parser.parse(data: data)
 
-                    if parsed.isEmpty {
-                        importError = "No routes found in \(url.lastPathComponent)"
-                    } else {
-                        for route in parsed {
-                            routeStore.save(route)
-                        }
+                if parsed.isEmpty {
+                    importError = "No routes found in \(url.lastPathComponent)"
+                } else {
+                    for route in parsed {
+                        routeStore.save(route)
                     }
                 }
-            case .failure(let error):
-                importError = error.localizedDescription
+            }
+        case .failure(let error):
+            importError = error.localizedDescription
         }
     }
 }
