@@ -61,8 +61,6 @@ struct ConnectionStatusButton: View {
     }
 }
 
-// MARK: - Detail Sheet
-
 private struct ConnectionDetailSheet: View {
     @ObservedObject var connectivity: ConnectivityManager
     @ObservedObject var routeStore: RouteStore

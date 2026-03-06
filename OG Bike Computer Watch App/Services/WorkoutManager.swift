@@ -122,6 +122,9 @@ class WorkoutManager: NSObject, ObservableObject {
         routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
         startRouteInsertion()
 
+        VoiceNavigator.shared.configureAudioSession()
+        VoiceNavigator.shared.reset()
+
         session?.startActivity(with: Date())
         builder?.beginCollection(withStart: Date()) { success, error in
             if let error = error {
@@ -207,6 +210,9 @@ class WorkoutManager: NSObject, ObservableObject {
         stopDisplayTimer()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
+
+        VoiceNavigator.shared.reset()
+
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
 
@@ -378,6 +384,9 @@ extension WorkoutManager: CLLocationManagerDelegate {
             if let alert = self.navigation.update(location: location) {
                 self.handleTurnAlert(alert)
             }
+
+            VoiceNavigator.shared.update(nav: self.navigation, speed: self.speed)
+
 
             // Battery management — adjust GPS frequency
             let mode = self.battery.recommendedMode(

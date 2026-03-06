@@ -240,7 +240,7 @@ struct WorkoutView: View {
                         .font(.caption)
                 }
                 .onChange(of: voiceEnabled) { _, newValue in
-                    //VoiceNavigator.shared.isEnabled = newValue
+                    VoiceNavigator.shared.isEnabled = newValue
                 }
             }
             .padding()
