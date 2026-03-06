@@ -5,11 +5,11 @@
 //  Created by Aidan Weinberg on 2/27/26.
 //
 
-
 import SwiftUI
 
 struct ContentView: View {
-    @ObservedObject var store = RouteStore()
+    @ObservedObject var store: RouteStore
+    @ObservedObject var rideStore: RideStore
     @StateObject private var connectivity = ConnectivityManager.shared
     @StateObject private var workout = WorkoutManager()
 
@@ -25,10 +25,14 @@ struct ContentView: View {
         }
         .onAppear {
             workout.requestPermissions()
-            ConnectivityManager.shared.attachStores(routeStore: store)
+            ConnectivityManager.shared.attachStores(routeStore: store, rideStore: rideStore)
 
             store.onChange = {
                 ConnectivityManager.shared.reportRoutes(store.routes)
+            }
+
+            workout.onRideCompleted = { summary in
+                rideStore.save(summary)
             }
         }
         .alert("Discard Ride?", isPresented: $showDiscardAlert) {
@@ -52,6 +56,3 @@ struct ContentView: View {
     }
 }
 
-#Preview {
-    ContentView()
-}

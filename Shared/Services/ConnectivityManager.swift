@@ -23,6 +23,7 @@ final class ConnectivityManager: NSObject, ObservableObject {
 
     #if os(watchOS)
     @Published var routeStore: RouteStore?
+    @Published var rideStore: RideStore?
     #endif
 
     #if os(iOS)
@@ -50,6 +51,9 @@ final class ConnectivityManager: NSObject, ObservableObject {
         if let rs = routeStore {
             self.routeStore = rs
             reportRoutes(rs.routes)
+        }
+        if let rs = rideStore {
+            self.rideStore = rs
         }
         #endif
 
@@ -81,7 +85,17 @@ final class ConnectivityManager: NSObject, ObservableObject {
 
         return .success(())
     }
+
+    // Shared rides directory — usable even without RideStore attached
+    static var ridesDirectory: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let dir = docs.appendingPathComponent("rides", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
 }
+
+// --- iOS ---
 
 #if os(iOS)
 extension ConnectivityManager {
@@ -134,12 +148,17 @@ extension ConnectivityManager {
 }
 #endif
 
+// --- watchOS ---
+
 #if os(watchOS)
 extension ConnectivityManager {
 
     func sendRide(summary: RideSummary, trackURL: URL) {
+        // Save locally on watch first
+        saveRideLocally(summary: summary, trackURL: trackURL)
+
         guard WCSession.default.activationState == .activated else {
-            print("Cannot send ride: WCSession not activated")
+            print("Cannot send ride: WCSession not activated (saved locally)")
             return
         }
 
@@ -155,6 +174,32 @@ extension ConnectivityManager {
         print("Queued ride transfer: \(summary.name)")
     }
 
+    private func saveRideLocally(summary: RideSummary, trackURL: URL) {
+        let dir = Self.ridesDirectory
+
+        // Copy track file
+        let destTrack = dir.appendingPathComponent(summary.trackFilename)
+        if !FileManager.default.fileExists(atPath: destTrack.path) {
+            try? FileManager.default.copyItem(at: trackURL, to: destTrack)
+        }
+
+        // Save summary JSON
+        let summaryURL = dir.appendingPathComponent("\(summary.id.uuidString).json")
+        if let data = try? JSONEncoder().encode(summary) {
+            try? data.write(to: summaryURL)
+        }
+
+        // Update in-memory store if attached
+        DispatchQueue.main.async {
+            if let store = self.rideStore,
+               !store.rides.contains(where: { $0.id == summary.id }) {
+                store.rides.insert(summary, at: 0)
+            }
+        }
+
+        print("Ride saved locally on watch: \(summary.name)")
+    }
+
     func reportRoutes(_ routes: [Route]) {
         guard WCSession.default.activationState == .activated else { return }
         let names = routes.map { $0.name }
@@ -162,6 +207,8 @@ extension ConnectivityManager {
     }
 }
 #endif
+
+// --- WCSessionDelegate ---
 
 extension ConnectivityManager: WCSessionDelegate {
 
@@ -280,14 +327,15 @@ private extension ConnectivityManager {
     func handleRideTransfer(_ file: WCSessionFile) {
         guard let summaryString = file.metadata?["summaryJSON"] as? String,
               let summaryData = summaryString.data(using: .utf8),
-              let summary = try? JSONDecoder().decode(RideSummary.self, from: summaryData),
-              let rideStore = rideStore else {
+              let summary = try? JSONDecoder().decode(RideSummary.self, from: summaryData) else {
             print("Failed to decode ride summary")
             return
         }
 
-        let destURL = rideStore.directory.appendingPathComponent(summary.trackFilename)
+        // Save directly to the rides directory — works whether rideStore is attached or not
+        let dir = Self.ridesDirectory
 
+        let destURL = dir.appendingPathComponent(summary.trackFilename)
         do {
             if FileManager.default.fileExists(atPath: destURL.path) {
                 try FileManager.default.removeItem(at: destURL)
@@ -298,9 +346,18 @@ private extension ConnectivityManager {
             return
         }
 
+        let summaryURL = dir.appendingPathComponent("\(summary.id.uuidString).json")
+        if let data = try? JSONEncoder().encode(summary) {
+            try? data.write(to: summaryURL)
+        }
+
+        // If rideStore is attached, update in-memory immediately
         DispatchQueue.main.async {
-            rideStore.save(summary)
-            print("Ride saved: \(summary.name)")
+            if let store = self.rideStore,
+               !store.rides.contains(where: { $0.id == summary.id }) {
+                store.rides.insert(summary, at: 0)
+            }
+            print("Ride received: \(summary.name)")
         }
     }
     #endif

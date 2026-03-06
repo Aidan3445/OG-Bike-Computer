@@ -10,10 +10,11 @@ import WatchKit
 
 class ExtensionDelegate: NSObject, WKApplicationDelegate {
     let store = RouteStore()
+    let rideStore = RideStore()
 
     func applicationDidFinishLaunching() {
         ConnectivityManager.shared.activate()
-        ConnectivityManager.shared.attachStores(routeStore: store)
+        ConnectivityManager.shared.attachStores(routeStore: store, rideStore: rideStore)
     }
 
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
@@ -34,7 +35,7 @@ struct OG_Bike_ComputerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(store: delegate.store)
+            ContentView(store: delegate.store, rideStore: delegate.rideStore)
         }
     }
 }

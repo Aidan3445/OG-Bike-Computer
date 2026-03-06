@@ -56,7 +56,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .navigationTitle("Computa")
+                .navigationTitle("Routes")
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                     routeStore.onImport = { route in

@@ -210,26 +210,27 @@ class WorkoutManager: NSObject, ObservableObject {
         stopDisplayTimer()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
-
         VoiceNavigator.shared.reset()
 
-        locationManager.stopUpdatingLocation()
-        locationManager.stopUpdatingHeading()
+        if !isSimulating {
+            locationManager.stopUpdatingLocation()
+            locationManager.stopUpdatingHeading()
+            session?.end()
+        }
 
-        session?.end()
-
-        if save {
+        if save && !isSimulating {
             let finalBatch = pendingRouteLocations
             pendingRouteLocations = []
-
             let endDate = Date()
+
+            print("[stop] saving ride, \(recordedLocations.count) recorded locations")
 
             let insertGroup = DispatchGroup()
             if !finalBatch.isEmpty {
                 insertGroup.enter()
                 routeBuilder?.insertRouteData(finalBatch) { _, error in
                     if let error = error {
-                        print("Final route insert error: \(error)")
+                        print("[stop] final route insert error: \(error)")
                     }
                     insertGroup.leave()
                 }
@@ -237,38 +238,50 @@ class WorkoutManager: NSObject, ObservableObject {
 
             insertGroup.notify(queue: .main) { [weak self] in
                 guard let self = self else { return }
+                print("[stop] endCollection")
 
                 self.builder?.endCollection(withEnd: endDate) { success, error in
                     if let error = error {
-                        print("End collection error: \(error)")
+                        print("[stop] end collection error: \(error)")
                     }
 
                     self.builder?.finishWorkout { [weak self] workout, error in
                         guard let self = self, let workout = workout else {
-                            print("Finish workout error: \(String(describing: error))")
+                            print("[stop] finish workout error: \(String(describing: error))")
+                            // Still export even if workout object is nil — we have the data
+                            self?.exportAndTransferRide()
+                            self?.cleanup()
                             return
                         }
 
-                        print("Workout saved: \(workout)")
+                        print("[stop] workout saved, attaching route...")
 
                         self.routeBuilder?.finishRoute(with: workout, metadata: nil) { route, error in
                             if let error = error {
-                                print("Finish route error: \(error)")
+                                print("[stop] finish route error: \(error)")
                             } else {
-                                print("Route attached to workout successfully")
-                                self.exportAndTransferRide()
+                                print("[stop] route attached successfully")
                             }
+                            // Export regardless of route attachment success
+                            self.exportAndTransferRide()
+                            self.cleanup()
                         }
                     }
                 }
             }
         } else {
-            builder?.discardWorkout()
+            if !isSimulating {
+                builder?.discardWorkout()
+            }
+            cleanup()
         }
+    }
 
+    private func cleanup() {
         DispatchQueue.main.async {
             self.isActive = false
             self.isPaused = false
+            self.isSimulating = false
             self.recordedLocations = []
             self.pendingRouteLocations = []
         }
