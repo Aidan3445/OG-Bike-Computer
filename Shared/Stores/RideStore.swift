@@ -7,6 +7,9 @@
 
 import Foundation
 import Combine
+import os
+
+private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "RideStore")
 
 class RideStore: ObservableObject {
     @Published var rides: [RideSummary] = []
@@ -17,7 +20,7 @@ class RideStore: ObservableObject {
         directory = docs.appendingPathComponent("rides", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        print("[RideStore] directory: \(directory.path)")
+        logger.log("[RideStore] directory: \(self.directory.path)")
         loadAll()
         printDiskContents()
     }
@@ -26,13 +29,13 @@ class RideStore: ObservableObject {
         let fileURL = directory.appendingPathComponent("\(ride.id.uuidString).json")
         if let data = try? JSONEncoder().encode(ride) {
             try? data.write(to: fileURL)
-            print("[RideStore] saved summary: \(ride.name) → \(fileURL.lastPathComponent)")
+            logger.log("[RideStore] saved summary: \(ride.name) → \(fileURL.lastPathComponent)")
         } else {
-            print("[RideStore] ERROR: failed to encode ride: \(ride.name)")
+            logger.log("[RideStore] ERROR: failed to encode ride: \(ride.name)")
         }
         if !rides.contains(where: { $0.id == ride.id }) {
             rides.insert(ride, at: 0)
-            print("[RideStore] added to in-memory list (now \(rides.count) rides)")
+            logger.log("[RideStore] added to in-memory list (nself.ow \(self.rides.count) rides)")
         }
     }
 
@@ -42,7 +45,7 @@ class RideStore: ObservableObject {
         let trackURL = directory.appendingPathComponent(ride.trackFilename)
         try? FileManager.default.removeItem(at: trackURL)
         rides.removeAll { $0.id == ride.id }
-        print("[RideStore] deleted: \(ride.name)")
+        logger.log("[RideStore] deleted: \(ride.name)")
     }
 
     var storageSize: Int64 {
@@ -78,7 +81,7 @@ class RideStore: ObservableObject {
             try gpxData.write(to: tempURL)
             return tempURL
         } catch {
-            print("[RideStore] GPX export error: \(error)")
+            logger.log("[RideStore] GPX export error: \(error)")
             return nil
         }
     }
@@ -86,45 +89,45 @@ class RideStore: ObservableObject {
     func loadAll() {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil) else {
-            print("[RideStore] loadAll: could not list directory")
+            logger.log("[RideStore] loadAll: could not list directory")
             return
         }
 
         let jsonFiles = files.filter { $0.pathExtension == "json" }
-        print("[RideStore] loadAll: found \(jsonFiles.count) JSON files, \(files.count) total files")
+        logger.log("[RideStore] loadAll: found \(jsonFiles.count) JSON files, \(files.count) total files")
 
         rides = jsonFiles
             .compactMap { url in
                 guard let data = try? Data(contentsOf: url) else {
-                    print("[RideStore] loadAll: could not read \(url.lastPathComponent)")
+                    logger.log("[RideStore] loadAll: could not read \(url.lastPathComponent)")
                     return nil
                 }
                 guard let ride = try? JSONDecoder().decode(RideSummary.self, from: data) else {
-                    print("[RideStore] loadAll: could not decode \(url.lastPathComponent)")
+                    logger.log("[RideStore] loadAll: could not decode \(url.lastPathComponent)")
                     return nil
                 }
                 return ride
             }
             .sorted { $0.date > $1.date }
 
-        print("[RideStore] loadAll: loaded \(rides.count) rides")
+        logger.log("[RideStore] loadAll:self. loaded \(self.rides.count) rides")
         for ride in rides {
             let trackExists = FileManager.default.fileExists(
                 atPath: directory.appendingPathComponent(ride.trackFilename).path)
-            print("[RideStore]   • \(ride.name) | \(ride.date) | track: \(trackExists ? "✓" : "✗ MISSING")")
+            logger.log("[RideStore]   • \(ride.name) | \(ride.date) | track: \(trackExists ? "✓" : "✗ MISSING")")
         }
     }
 
     func printDiskContents() {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.fileSizeKey]) else {
-            print("[RideStore] printDiskContents: directory empty or unreadable")
+            logger.log("[RideStore] printDiskContents: directory empty or unreadable")
             return
         }
-        print("[RideStore] disk contents (\(files.count) files):")
+        logger.log("[RideStore] disk contents (\(files.count) files):")
         for file in files {
             let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-            print("[RideStore]   \(file.lastPathComponent) (\(size) bytes)")
+            logger.log("[RideStore]   \(file.lastPathComponent) (\(size) bytes)")
         }
     }
 }
