@@ -18,16 +18,24 @@ class NavigationTracker: ObservableObject {
     @Published var isRouteComplete: Bool = false
     @Published var distanceRemaining: Double = 0
     @Published var currentBearing: Double = 0
+    @Published var distanceToEndpoint: Double = 0
 
     let offRouteThreshold: Double = 100
-    let completionThreshold: Double = 50
 
     let turnWarningDistance: Double = 200
     let turnAlertDistance: Double = 50
 
+    // Two-zone completion: must enter outer zone, leave inner zone, then re-enter inner zone
+    let endZoneOuter: Double = 75   // ~250ft — arms completion
+    let endZoneInner: Double = 30   // ~100ft — triggers completion
+    var canCompleteRoute: Bool = false
+    var hasJoinedRoute: Bool = false
+    let minDistanceForCompletion = 402.0
+
     private(set) var route: ProcessedRoute?
     var processedRoute: ProcessedRoute? { route }
     private var lastSearchIndex: Int = 0
+    private var endpointLocation: CLLocation?
 
     func load(_ processedRoute: ProcessedRoute) {
         route = processedRoute
@@ -40,6 +48,15 @@ class NavigationTracker: ObservableObject {
         isRouteComplete = false
         distanceRemaining = processedRoute.totalDistance
         currentBearing = processedRoute.points.first?.bearingToNext ?? 0
+        distanceToEndpoint = 0
+        canCompleteRoute = false
+        hasJoinedRoute = false
+
+        if let last = processedRoute.points.last {
+            endpointLocation = CLLocation(
+                latitude: last.coordinate.latitude,
+                longitude: last.coordinate.longitude)
+        }
     }
 
     func update(location: CLLocation) -> TurnAlert? {
@@ -66,7 +83,19 @@ class NavigationTracker: ObservableObject {
         distanceRemaining = route.totalDistance - distanceAlongRoute
         currentBearing = route.points[nearestIndex].bearingToNext
 
-        if distanceRemaining < completionThreshold {
+        // Endpoint proximity (GPS distance, not route distance)
+        if let endpoint = endpointLocation {
+            distanceToEndpoint = location.distance(from: endpoint)
+        }
+
+        // Zone logic: arm completion when inside outer zone but outside inner zone
+        // This means you've been "near" the end but not "at" it yet
+        if distanceToEndpoint <= endZoneOuter && distanceToEndpoint > endZoneInner {
+            canCompleteRoute = true
+        }
+
+        // Complete when armed, inside inner zone, AND traveled minimum distance along route
+        if canCompleteRoute && distanceToEndpoint <= endZoneInner && distanceAlongRoute >= minDistanceForCompletion {
             isRouteComplete = true
             nextTurn = nil
             distanceToNextTurn = 0
@@ -85,19 +114,41 @@ class NavigationTracker: ObservableObject {
         )
     }
 
+    // Called by VoiceNavigator after announcing arrival — disarms so it won't re-trigger
+    func resetCompletion() {
+        canCompleteRoute = false
+        isRouteComplete = false
+    }
+
+    // Distance-based search window: only consider points within this route-distance
+    // of the current position. Prevents snapping to geographically close but
+    // route-distant points (e.g. end of a loop).
+    private let searchWindowMeters: Double = 500
+
     private func findNearest(
         location: CLLocation,
         in route: ProcessedRoute,
         searchCenter: Int
     ) -> (index: Int, distance: Double) {
-        let searchRadius = 50
-        let start = max(0, searchCenter - searchRadius)
-        let end = min(route.points.count - 1, searchCenter + searchRadius)
+        let currentRouteDist = route.points[max(0, min(searchCenter, route.points.count - 1))].distanceFromStart
 
-        var bestIndex = searchCenter
+        // Define the route-distance window to search
+        let minRouteDist = max(0, currentRouteDist - searchWindowMeters)
+        let maxRouteDist: Double
+        if hasJoinedRoute {
+            maxRouteDist = min(route.totalDistance, currentRouteDist + searchWindowMeters)
+        } else {
+            // Before joining, only look at the first portion of the route
+            maxRouteDist = min(route.totalDistance, searchWindowMeters)
+        }
+
+        var bestIndex = max(0, min(searchCenter, route.points.count - 1))
         var bestDistance = Double.greatestFiniteMagnitude
 
-        for i in start...end {
+        for i in 0..<route.points.count {
+            let pointDist = route.points[i].distanceFromStart
+            guard pointDist >= minRouteDist && pointDist <= maxRouteDist else { continue }
+
             let point = route.points[i]
             let pointLoc = CLLocation(
                 latitude: point.coordinate.latitude,
@@ -109,21 +160,55 @@ class NavigationTracker: ObservableObject {
             }
         }
 
-        if bestIndex == start || bestIndex == end {
-            for i in 0..<route.points.count {
-                let point = route.points[i]
-                let pointLoc = CLLocation(
-                    latitude: point.coordinate.latitude,
-                    longitude: point.coordinate.longitude)
-                let dist = location.distance(from: pointLoc)
-                if dist < bestDistance {
-                    bestDistance = dist
-                    bestIndex = i
-                }
+        if bestDistance <= offRouteThreshold {
+            if !hasJoinedRoute { hasJoinedRoute = true }
+            return (bestIndex, bestDistance)
+        }
+
+        // Off-route before joining: stay anchored
+        if !hasJoinedRoute {
+            return (bestIndex, bestDistance)
+        }
+
+        // Off-route after joining: full scan with heading + forward bias
+        let riderCourse = location.course
+        var fullBestIndex = bestIndex
+        var fullBestScore = Double.greatestFiniteMagnitude
+        var fullBestDistance = bestDistance
+
+        for i in 0..<route.points.count {
+            let point = route.points[i]
+            let pointLoc = CLLocation(
+                latitude: point.coordinate.latitude,
+                longitude: point.coordinate.longitude)
+            let dist = location.distance(from: pointLoc)
+
+            var score = dist
+
+            if riderCourse >= 0 {
+                let bearingDiff = abs(headingDelta(riderCourse, point.bearingToNext))
+                score += (bearingDiff / 180.0) * 50
+            }
+
+            // Prefer points near current route distance over distant jumps
+            let routeDistDelta = abs(point.distanceFromStart - currentRouteDist)
+            score += min(routeDistDelta * 0.05, 50)
+
+            if score < fullBestScore {
+                fullBestScore = score
+                fullBestIndex = i
+                fullBestDistance = dist
             }
         }
 
-        return (bestIndex, bestDistance)
+        return (fullBestIndex, fullBestDistance)
+    }
+
+    private func headingDelta(_ a: Double, _ b: Double) -> Double {
+        var delta = b - a
+        if delta > 180 { delta -= 360 }
+        if delta < -180 { delta += 360 }
+        return delta
     }
 
     private func interpolateDistance(

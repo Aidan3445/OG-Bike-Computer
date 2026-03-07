@@ -7,7 +7,6 @@
 
 import AVFoundation
 import CoreLocation
-import os
 import Combine
 
 class VoiceNavigator: NSObject, ObservableObject {
@@ -15,27 +14,27 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     @Published var isEnabled = true
 
+    // MARK: - Configurable alert distances (meters, descending)
     // 0 is always appended as the "at turn" trigger
     private let alertDistances: [Double] = [
-        402.336, // ¼ mile
-        30.48, // 100 feet
-        0 // at the turn
+        402.336,  // ¼ mile
+        30.48,    // 100 feet
+        0         // at the turn
     ]
-    
-    private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "VoiceNavigator")
 
-    private let atTurnThreshold: Double = 20 // meters — "close enough" to 0
-    private let cooldown: TimeInterval = 6 // min gap between announcements
+    private let atTurnThreshold: Double = 20       // meters — "close enough" to 0
+    private let cooldown: TimeInterval = 6          // min gap between announcements
     private let minTimeBeforeTurn: TimeInterval = 8 // suppress if turn is this close in seconds
 
     // MARK: - State
     private var currentTurnIndex: Int?
-    private var firedTurnAlerts: Set<Int> = [] // indices into alertDistances
+    private var firedTurnAlerts: Set<Int> = []      // indices into alertDistances
 
     private var trackingFinish = false
     private var firedFinishAlerts: Set<Int> = []
 
     private var announcedHalfway = false
+    private var announcedArrival = false
     private var lastAnnouncementTime: Date = .distantPast
 
     private let synthesizer = AVSpeechSynthesizer()
@@ -51,6 +50,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
+        announcedArrival = false
         lastAnnouncementTime = .distantPast
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -61,7 +61,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         do {
             try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
         } catch {
-            logger.log("VoiceNavigator audio session config error: \(error)")
+            print("VoiceNavigator audio session config error: \(error)")
         }
     }
 
@@ -71,7 +71,10 @@ class VoiceNavigator: NSObject, ObservableObject {
 
         // --- Route complete (arrival) ---
         if nav.isRouteComplete {
-            announceOnce("You have arrived. Route complete.")
+            if !announcedArrival {
+                announcedArrival = true
+                speak("You have arrived. Route complete.")
+            }
             return
         }
 
@@ -151,8 +154,8 @@ class VoiceNavigator: NSObject, ObservableObject {
             }
         }
     }
-
-    // Checks each alert threshold for the given distance. Returns true if an alert fired.
+    
+    /// Checks each alert threshold for the given distance. Returns true if an alert fired.
     private func fireDistanceAlert(
         distance: Double,
         speed: Double,
@@ -187,6 +190,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         return false
     }
 
+
     private var canSpeak: Bool {
         Date().timeIntervalSince(lastAnnouncementTime) >= cooldown
     }
@@ -211,7 +215,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            logger.log("VoiceNavigator activate error: \(error)")
+            print("VoiceNavigator activate error: \(error)")
         }
 
         let utterance = AVSpeechUtterance(string: text)
@@ -302,7 +306,7 @@ extension VoiceNavigator: AVSpeechSynthesizerDelegate {
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
-            logger.log("VoiceNavigator deactivate error: \(error)")
+            print("VoiceNavigator deactivate error: \(error)")
         }
     }
 }
