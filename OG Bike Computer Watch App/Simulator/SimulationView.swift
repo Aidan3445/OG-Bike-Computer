@@ -15,69 +15,80 @@ struct SimulationView: View {
     @State private var selectedRoute: Route?
     @State private var simTracks: [SimGPXLoader.SimTrack] = []
     @State private var selectedTrack: SimGPXLoader.SimTrack?
+    @State private var isLoading = false
 
     var body: some View {
         List {
-            Section("Nav Route") {
-                if let route = selectedRoute {
-                    HStack {
-                        Text(route.name).font(.caption)
-                        Spacer()
-                        Button("Clear") { selectedRoute = nil }
-                            .font(.caption2)
-                    }
-                } else {
-                    ForEach(store.routes) { route in
-                        Button(route.name) { selectedRoute = route }
+            if isLoading {
+                Section {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("Processing route…")
                             .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+            } else {
+                Section("Nav Route") {
+                    if let route = selectedRoute {
+                        HStack {
+                            Text(route.name).font(.caption)
+                            Spacer()
+                            Button("Clear") { selectedRoute = nil }
+                                .font(.caption2)
+                        }
+                    } else {
+                        ForEach(store.routes) { route in
+                            Button(route.name) { selectedRoute = route }
+                                .font(.caption)
+                        }
                     }
                 }
-            }
 
-            Section("Replay Track") {
-                if let track = selectedTrack {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(track.name).font(.caption)
-                            Text("\(track.locations.count) pts")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Clear") { selectedTrack = nil }
-                            .font(.caption2)
-                    }
-                } else if simTracks.isEmpty {
-                    Text("No GPX files found in bundle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(simTracks.indices, id: \.self) { i in
-                        Button {
-                            selectedTrack = simTracks[i]
-                            simulator.load(simTracks[i])
-                        } label: {
+                Section("Replay Track") {
+                    if let track = selectedTrack {
+                        HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(simTracks[i].name).font(.caption)
-                                Text("\(simTracks[i].locations.count) pts")
+                                Text(track.name).font(.caption)
+                                Text("\(track.locations.count) pts")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Clear") { selectedTrack = nil }
+                                .font(.caption2)
+                        }
+                    } else if simTracks.isEmpty {
+                        Text("No GPX files found in bundle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(simTracks.indices, id: \.self) { i in
+                            Button {
+                                selectedTrack = simTracks[i]
+                                simulator.load(simTracks[i])
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(simTracks[i].name).font(.caption)
+                                    Text("\(simTracks[i].locations.count) pts")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if selectedRoute != nil && simulator.isLoaded {
-                Section {
-                    Button("Start Simulation") {
-                        guard let route = selectedRoute else { return }
-                        workout.loadRoute(route)
-                        workout.startSimulation(activity: .cycling)
-                        simulator.attach(to: workout)
-                        simulator.play()
+                if selectedRoute != nil && simulator.isLoaded {
+                    Section {
+                        Button("Start Simulation") {
+                            startSimulation()
+                        }
+                        .tint(.green)
                     }
-                    .tint(.green)
                 }
             }
         }
@@ -85,6 +96,19 @@ struct SimulationView: View {
         .onAppear {
             if simTracks.isEmpty {
                 simTracks = SimGPXLoader.loadAll()
+            }
+        }
+    }
+
+    private func startSimulation() {
+        guard let route = selectedRoute else { return }
+        isLoading = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            workout.loadRoute(route)
+            DispatchQueue.main.async {
+                workout.startSimulation(activity: .cycling)
+                simulator.attach(to: workout)
+                simulator.play()
             }
         }
     }

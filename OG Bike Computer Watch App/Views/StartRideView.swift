@@ -11,33 +11,52 @@ struct StartRideView: View {
     let route: Route
     @ObservedObject var workout: WorkoutManager
 
+    @State private var isLoading = false
+
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                Text(route.name)
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-
-                Text(formatDistance(route.distance))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Divider()
-
-                ForEach(ActivityType.allCases) { activity in
-                    Button {
-                        workout.loadRoute(route)
-                        workout.start(activity: activity)
-                    } label: {
-                        Label(activity.name, systemImage: activity.icon)
-                            .frame(maxWidth: .infinity)
+                if isLoading {
+                    Spacer()
+                    ProgressView()
+                        .scaleEffect(1.5)
+                    Text("Processing route…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 8)
+                    Spacer()
+                } else {
+                    Text(route.name)
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                    Text(formatDistance(route.distance))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Divider()
+                    ForEach(ActivityType.allCases) { activity in
+                        Button {
+                            startRide(activity: activity)
+                        } label: {
+                            Label(activity.name, systemImage: activity.icon)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .tint(activity == .cycling ? .green : .blue)
                     }
-                    .tint(activity == .cycling ? .green : .blue)
                 }
             }
             .padding()
         }
         .navigationTitle("Start")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func startRide(activity: ActivityType) {
+        isLoading = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            workout.loadRoute(route)
+            DispatchQueue.main.async {
+                workout.start(activity: activity)
+            }
+        }
     }
 }
