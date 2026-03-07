@@ -24,13 +24,14 @@ class NavigationTracker: ObservableObject {
 
     let turnWarningDistance: Double = 200
     let turnAlertDistance: Double = 50
+    let turnConfirmationBuffer: Double = 40 // must pass turn by this much before advancing to next
 
     // Two-zone completion: must enter outer zone, leave inner zone, then re-enter inner zone
     let endZoneOuter: Double = 75   // ~250ft — arms completion
     let endZoneInner: Double = 30   // ~100ft — triggers completion
     var canCompleteRoute: Bool = false
     var hasJoinedRoute: Bool = false
-    let minDistanceForCompletion = 402.0
+    let minDistanceForCompletion: Double = 402
 
     private(set) var route: ProcessedRoute?
     var processedRoute: ProcessedRoute? { route }
@@ -105,8 +106,8 @@ class NavigationTracker: ObservableObject {
         let previousTurn = nextTurn
         let previousDistance = distanceToNextTurn
 
-        nextTurn = route.turnPoints.first { $0.distanceFromStart > distanceAlongRoute }
-        distanceToNextTurn = nextTurn.map { $0.distanceFromStart - distanceAlongRoute } ?? 0
+        nextTurn = route.turnPoints.first { $0.distanceFromStart > distanceAlongRoute - turnConfirmationBuffer }
+        distanceToNextTurn = nextTurn.map { max(0, $0.distanceFromStart - distanceAlongRoute) } ?? 0
 
         return checkTurnAlert(
             previousTurn: previousTurn,

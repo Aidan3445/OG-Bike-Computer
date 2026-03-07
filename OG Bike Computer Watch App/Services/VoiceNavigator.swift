@@ -14,7 +14,6 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     @Published var isEnabled = true
 
-    // MARK: - Configurable alert distances (meters, descending)
     // 0 is always appended as the "at turn" trigger
     private let alertDistances: [Double] = [
         402.336,  // ¼ mile
@@ -24,9 +23,8 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     private let atTurnThreshold: Double = 20       // meters — "close enough" to 0
     private let cooldown: TimeInterval = 6          // min gap between announcements
-    private let minTimeBeforeTurn: TimeInterval = 8 // suppress if turn is this close in seconds
+    private let minTimeBeforeTurn: TimeInterval = 4 // suppress if turn is this close in seconds
 
-    // MARK: - State
     private var currentTurnIndex: Int?
     private var firedTurnAlerts: Set<Int> = []      // indices into alertDistances
 
@@ -154,7 +152,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             }
         }
     }
-    
+
     /// Checks each alert threshold for the given distance. Returns true if an alert fired.
     private func fireDistanceAlert(
         distance: Double,
@@ -189,7 +187,6 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
         return false
     }
-
 
     private var canSpeak: Bool {
         Date().timeIntervalSince(lastAnnouncementTime) >= cooldown
