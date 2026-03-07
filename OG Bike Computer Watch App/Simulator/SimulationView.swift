@@ -96,37 +96,42 @@ struct SimPlaybackOverlay: View {
     @ObservedObject var workout: WorkoutManager
 
     var body: some View {
-        ZStack(alignment: .top) {
-            HStack(spacing: 8) {
-                Button(simulator.isPlaying ? "⏸" : "▶") {
-                    if simulator.isPlaying {
-                        simulator.pause()
-                    } else {
-                        simulator.play()
-                    }
-                }
-                .font(.caption)
-
-                Button("\(Int(simulator.playbackSpeed))×") {
-                    simulator.cycleSpeed()
-                }
-                .font(.caption.monospaced())
-
-                ProgressView(value: simulator.progress)
-                    .frame(maxWidth: .infinity)
-
-                Text("\(simulator.currentPointIndex)/\(simulator.pointCount)")
-                    .font(.system(size: 9).monospaced())
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.black.opacity(0.7))
-
-            WorkoutView(workout: workout, onStop: {
+        WorkoutView(
+            workout: workout,
+            onStop: {
                 simulator.stop()
                 workout.stop(save: false)
-            })
+            }
+        ) {
+            VStack(spacing: 12) {
+                Text("SIMULATION")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.yellow)
+
+                ProgressView(value: simulator.progress)
+
+                HStack(spacing: 12) {
+                    Button(simulator.isPlaying ? "⏸" : "▶") {
+                        if simulator.isPlaying {
+                            simulator.pause()
+                        } else {
+                            simulator.play()
+                        }
+                    }
+
+                    Button("\(Int(simulator.playbackSpeed))×") {
+                        simulator.cycleSpeed()
+                    }
+                    .font(.caption.monospaced())
+
+                    Spacer()
+
+                    Text("\(simulator.currentPointIndex)/\(simulator.pointCount)")
+                        .font(.system(size: 10).monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding()
         }
     }
 }

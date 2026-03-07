@@ -7,13 +7,26 @@
 
 import SwiftUI
 
-struct WorkoutView: View {
+struct WorkoutView<ExtraTab: View>: View {
     @ObservedObject var workout: WorkoutManager
     var onStop: () -> Void
+    var extraTab: ExtraTab?
 
     @State private var voiceEnabled = true
     @State private var page = 2
     @State private var tab = 2
+
+    init(workout: WorkoutManager, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
+        self.workout = workout
+        self.onStop = onStop
+        self.extraTab = nil
+    }
+
+    init(workout: WorkoutManager, onStop: @escaping () -> Void, @ViewBuilder extraTab: () -> ExtraTab) {
+        self.workout = workout
+        self.onStop = onStop
+        self.extraTab = extraTab()
+    }
 
     var body: some View {
         TabView(selection: $page) {
@@ -48,6 +61,11 @@ struct WorkoutView: View {
                 }
             }
             .tag(2)
+
+            if let extraTab {
+                extraTab
+                    .tag(3)
+            }
         }
         .tabViewStyle(.page)
     }
@@ -135,7 +153,7 @@ struct WorkoutView: View {
             if workout.navigation.isOffRoute {
                 //OffRouteBanner(workout: workout)
             }
-            
+
             if isLuminanceReduced {
                 MetricRow(
                     label: workout.currentActivity.speedLabel,
@@ -155,22 +173,22 @@ struct WorkoutView: View {
                         ? formatPace(workout.speed)
                         : formatSpeed(workout.speed),
                         unit: workout.currentActivity.usesPace ? "min/mi" : "mph")
-                    
+
                     Spacer()
-                    
+
                     MetricRow(label: "DISTANCE", value: formatDistance(workout.totalDistance, false), unit: "mi")
                 }
-                
+
                 Divider()
-                
+
                 HStack {
                     MetricRow(label: "ELAPSED", value: formatTime(workout.elapsedTime), unit: "")
                     Spacer()
                     MetricRow(label: "MOVING", value: formatTime(workout.movingTime), unit: "")
                 }
-                
+
                 Divider()
-                
+
                 HStack {
                     MetricRow(label: "HR", value: String(format: "%.0f", workout.heartRate), unit: "bpm")
                     Spacer()
@@ -206,7 +224,7 @@ struct WorkoutView: View {
                 .padding(.top, 20)
                 .padding(.leading, 12)
                 .ignoresSafeArea(edges: .top)
-            
+
             VStack(spacing: 6) {
                 if workout.isPaused || workout.isAutoPaused {
                     Button {
@@ -232,9 +250,9 @@ struct WorkoutView: View {
                     Label("End Ride", systemImage: "stop.fill")
                         .frame(maxWidth: .infinity)
                 }
-                
+
                 Divider()
-                
+
                 Toggle(isOn: $voiceEnabled) {
                     Label("Voice", systemImage: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash")
                         .font(.caption)
