@@ -9,7 +9,8 @@ import SwiftUI
 
 struct RouteList: View {
     @ObservedObject var store: RouteStore
-    let workout: WorkoutManager
+    @ObservedObject var workout: WorkoutManager
+    @ObservedObject var simulator: RideSimulator
     
     var body: some View {
         NavigationStack {
@@ -44,6 +45,12 @@ struct RouteList: View {
                             for i in indices {
                                 store.delete(store.routes[i])
                             }
+                        }
+                        
+                        NavigationLink {
+                            SimulationView(store: store, workout: workout, simulator: simulator)
+                        } label: {
+                            Label("Simulate", systemImage: "play.circle")
                         }
 
                         Text(formattedStorageSize(store.storageSize))

@@ -12,15 +12,20 @@ struct ContentView: View {
     @ObservedObject var rideStore: RideStore
     @StateObject private var connectivity = ConnectivityManager.shared
     @StateObject private var workout = WorkoutManager()
+    @StateObject private var simulator = RideSimulator()
 
     @State private var showDiscardAlert = false
 
     var body: some View {
         Group {
             if workout.isActive {
-                WorkoutView(workout: workout, onStop: handleStop)
+                if workout.isSimulating {
+                    SimPlaybackOverlay(simulator: simulator, workout: workout)
+                } else {
+                    WorkoutView(workout: workout, onStop: handleStop)
+                }
             } else {
-                RouteList(store: store, workout: workout)
+                RouteList(store: store, workout: workout, simulator: simulator)
             }
         }
         .onAppear {
@@ -55,4 +60,3 @@ struct ContentView: View {
         }
     }
 }
-

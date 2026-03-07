@@ -18,6 +18,7 @@ struct RideSummary: Codable, Identifiable {
     let distance: Double
     let calories: Double
     let elevationGain: Double
+    let elevationLoss: Double
     let avgSpeed: Double
     let pointCount: Int
 

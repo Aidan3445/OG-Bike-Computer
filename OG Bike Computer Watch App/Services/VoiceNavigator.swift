@@ -7,22 +7,28 @@
 
 import AVFoundation
 import CoreLocation
+import os
 import Combine
 
-class VoiceNavigator: ObservableObject {
+class VoiceNavigator: NSObject, ObservableObject {
     static let shared = VoiceNavigator()
 
     @Published var isEnabled = true
+
+    // 0 is always appended as the "at turn" trigger
     private let alertDistances: [Double] = [
-        402.336,
-        30.48,
-        0
+        402.336, // ¼ mile
+        30.48, // 100 feet
+        0 // at the turn
     ]
+    
+    private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "VoiceNavigator")
 
     private let atTurnThreshold: Double = 20 // meters — "close enough" to 0
     private let cooldown: TimeInterval = 6 // min gap between announcements
     private let minTimeBeforeTurn: TimeInterval = 8 // suppress if turn is this close in seconds
 
+    // MARK: - State
     private var currentTurnIndex: Int?
     private var firedTurnAlerts: Set<Int> = [] // indices into alertDistances
 
@@ -34,7 +40,10 @@ class VoiceNavigator: ObservableObject {
 
     private let synthesizer = AVSpeechSynthesizer()
 
-    private init() {}
+    private override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
 
     func reset() {
         currentTurnIndex = nil
@@ -44,15 +53,15 @@ class VoiceNavigator: ObservableObject {
         announcedHalfway = false
         lastAnnouncementTime = .distantPast
         synthesizer.stopSpeaking(at: .immediate)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
-            try session.setActive(true)
         } catch {
-            print("VoiceNavigator audio session error: \(error)")
+            logger.log("VoiceNavigator audio session config error: \(error)")
         }
     }
 
@@ -60,6 +69,7 @@ class VoiceNavigator: ObservableObject {
         guard isEnabled else { return }
         guard let route = nav.processedRoute else { return }
 
+        // --- Route complete (arrival) ---
         if nav.isRouteComplete {
             announceOnce("You have arrived. Route complete.")
             return
@@ -142,7 +152,7 @@ class VoiceNavigator: ObservableObject {
         }
     }
 
-    /// Checks each alert threshold for the given distance. Returns true if an alert fired.
+    // Checks each alert threshold for the given distance. Returns true if an alert fired.
     private func fireDistanceAlert(
         distance: Double,
         speed: Double,
@@ -197,6 +207,13 @@ class VoiceNavigator: ObservableObject {
 
     private func speak(_ text: String) {
         lastAnnouncementTime = Date()
+
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            logger.log("VoiceNavigator activate error: \(error)")
+        }
+
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
@@ -268,14 +285,24 @@ class VoiceNavigator: ObservableObject {
 extension TurnDirection {
     var voiceLabel: String {
         switch self {
-        case .left:       return "turn left"
-        case .slightLeft: return "bear left"
-        case .sharpLeft:  return "sharp left"
-        case .right:      return "turn right"
+        case .left:        return "turn left"
+        case .slightLeft:  return "bear left"
+        case .sharpLeft:   return "sharp left"
+        case .right:       return "turn right"
         case .slightRight: return "bear right"
-        case .sharpRight: return "sharp right"
-        case .uTurn:      return "make a U-turn"
-        case .straight:   return "continue straight"
+        case .sharpRight:  return "sharp right"
+        case .uTurn:       return "make a U-turn"
+        case .straight:    return "continue straight"
+        }
+    }
+}
+
+extension VoiceNavigator: AVSpeechSynthesizerDelegate {
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            logger.log("VoiceNavigator deactivate error: \(error)")
         }
     }
 }

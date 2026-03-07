@@ -19,46 +19,104 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var isPaused = false
     @Published var heartRate: Double = 0
     @Published var activeCalories: Double = 0
-    @Published var speed: Double = 0 
+    @Published var speed: Double = 0
     @Published var elapsedTime: TimeInterval = 0
     @Published var totalDistance: Double = 0
-    @Published var heading: Double = 0 
+    @Published var heading: Double = 0
     @Published var currentLocation: CLLocation?
     @Published var currentActivity: ActivityType = .cycling
-
+    
     var onRideCompleted: ((RideSummary) -> Void)?
     
     private var routeInsertionTimer: Timer?
     private var pendingRouteLocations: [CLLocation] = []
     @Published var recordedLocations: [CLLocation] = []
-
+    
     private let healthStore = HKHealthStore()
     private var session: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
     private var routeBuilder: HKWorkoutRouteBuilder?
-
+    
     private let locationManager = CLLocationManager()
-
+    
     private var timerStart: Date?
     private var timerAccumulated: TimeInterval = 0
     private var displayTimer: Timer?
-
+    
     let navigation = NavigationTracker()
-
+    
     private let battery = BatteryManager()
     @Published var isAutoPaused = false
     private var autoPauseSpeedSamples: [Double] = []
     private let autoPauseWindow = 5
     @Published var movingTime: TimeInterval = 0
     private var isWristDown = false
-
+    
+    
+    // SIM
+    @Published var isSimulating = false
+    
+    
+    func startSimulation(activity: ActivityType) {
+        self.currentActivity = activity
+        isSimulating = true
+        
+        VoiceNavigator.shared.configureAudioSession()
+        VoiceNavigator.shared.reset()
+        
+        timerStart = Date()
+        timerAccumulated = 0
+        startDisplayTimer()
+        
+        isActive = true
+        isPaused = false
+        isAutoPaused = false
+    }
+    
+    func processLocation(_ location: CLLocation) {
+        DispatchQueue.main.async {
+            if let previous = self.currentLocation {
+                self.totalDistance += location.distance(from: previous)
+            }
+            self.currentLocation = location
+            self.speed = max(location.speed, 0)
+            
+            if !self.isSimulating {
+                self.recordedLocations.append(location)
+                self.pendingRouteLocations.append(location)
+            }
+            
+            // Navigation
+            if let alert = self.navigation.update(location: location) {
+                self.handleTurnAlert(alert)
+            }
+            
+            VoiceNavigator.shared.update(nav: self.navigation, speed: self.speed)
+            
+            if !self.isSimulating {
+                // Battery management
+                let mode = self.battery.recommendedMode(
+                    distanceToNextTurn: self.navigation.distanceToNextTurn,
+                    isOffRoute: self.navigation.isOffRoute,
+                    speed: self.speed)
+                self.battery.apply(mode: mode, to: self.locationManager)
+                
+                // Auto-pause
+                self.updateAutoPause()
+            }
+        }
+    }
+    // END SIM
+    
+    
+    
     override init() {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.activityType = .fitness
     }
-
+    
     func requestPermissions() {
         let typesToShare: Set<HKSampleType> = [
             HKQuantityType.workoutType(),
@@ -69,13 +127,13 @@ class WorkoutManager: NSObject, ObservableObject {
             HKQuantityType(.activeEnergyBurned),
             HKQuantityType(.distanceCycling)
         ]
-
+        
         healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) { success, error in
             if let error = error {
                 print("HealthKit auth error: \(error)")
             }
         }
-
+        
         locationManager.requestWhenInUseAuthorization()
     }
     
@@ -83,7 +141,7 @@ class WorkoutManager: NSObject, ObservableObject {
         guard !pendingRouteLocations.isEmpty else { return }
         let batch = pendingRouteLocations
         pendingRouteLocations = []
-
+        
         routeBuilder?.insertRouteData(batch) { success, error in
             if let error = error {
                 print("Route insert error: \(error)")
@@ -96,14 +154,14 @@ class WorkoutManager: NSObject, ObservableObject {
             self?.flushRouteLocations()
         }
     }
-
+    
     func start(activity: ActivityType) {
         let config = HKWorkoutConfiguration()
         config.activityType = activity.hkType
         config.locationType = .outdoor
-
+        
         self.currentActivity = activity
-
+        
         do {
             session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
             builder = session?.associatedWorkoutBuilder()
@@ -111,87 +169,87 @@ class WorkoutManager: NSObject, ObservableObject {
             print("Failed to create workout session: \(error)")
             return
         }
-
+        
         builder?.dataSource = HKLiveWorkoutDataSource(
             healthStore: healthStore,
             workoutConfiguration: config)
-
+        
         session?.delegate = self
         builder?.delegate = self
-
+        
         routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
         startRouteInsertion()
-
+        
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.reset()
-
+        
         session?.startActivity(with: Date())
         builder?.beginCollection(withStart: Date()) { success, error in
             if let error = error {
                 print("Failed to begin collection: \(error)")
             }
         }
-
+        
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
-
+        
         timerStart = Date()
         timerAccumulated = 0
         startDisplayTimer()
-
+        
         isActive = true
         isPaused = false
         isAutoPaused = false
     }
-
-     func pauseSession() {
+    
+    func pauseSession() {
         session?.pause()
-         if let start = timerStart {
+        if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
         }
         timerStart = nil
         stopDisplayTimer()
-
+        
         isPaused = true
     }
-
+    
     func pause() {
         locationManager.stopUpdatingLocation()
-        locationManager.stopUpdatingHeading() 
+        locationManager.stopUpdatingHeading()
         pauseSession()
     }
-
+    
     func resumeSession() {
         session?.resume()
         timerStart = Date()
         startDisplayTimer()
-
+        
         isPaused = false
-
+        
         if isAutoPaused {
             autoPauseSpeedSamples.removeAll()
         }
     }
-
+    
     func resume() {
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
-
+        
         resumeSession()
     }
-
+    
     private func updateAutoPause() {
         let speedMPH = speed * 2.23694
-
+        
         autoPauseSpeedSamples.append(speedMPH)
         if autoPauseSpeedSamples.count > autoPauseWindow {
             autoPauseSpeedSamples.removeFirst()
         }
-
+        
         let allSlow = autoPauseSpeedSamples.count >= autoPauseWindow &&
-                      autoPauseSpeedSamples.allSatisfy { $0 < 1.0 }
+        autoPauseSpeedSamples.allSatisfy { $0 < 1.0 }
         let moving = speedMPH >= 2.0
-
+        
         if allSlow && !isAutoPaused && !isPaused {
             pauseSession()
             isAutoPaused = true
@@ -200,7 +258,7 @@ class WorkoutManager: NSObject, ObservableObject {
             isAutoPaused = false
         }
     }
-
+    
     
     func stop(save: Bool) {
         if let start = timerStart {
@@ -211,20 +269,20 @@ class WorkoutManager: NSObject, ObservableObject {
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
         VoiceNavigator.shared.reset()
-
+        
         if !isSimulating {
             locationManager.stopUpdatingLocation()
             locationManager.stopUpdatingHeading()
             session?.end()
         }
-
+        
         if save && !isSimulating {
             let finalBatch = pendingRouteLocations
             pendingRouteLocations = []
             let endDate = Date()
-
+            
             print("[stop] saving ride, \(recordedLocations.count) recorded locations")
-
+            
             let insertGroup = DispatchGroup()
             if !finalBatch.isEmpty {
                 insertGroup.enter()
@@ -235,34 +293,32 @@ class WorkoutManager: NSObject, ObservableObject {
                     insertGroup.leave()
                 }
             }
-
+            
             insertGroup.notify(queue: .main) { [weak self] in
                 guard let self = self else { return }
                 print("[stop] endCollection")
-
+                
                 self.builder?.endCollection(withEnd: endDate) { success, error in
                     if let error = error {
                         print("[stop] end collection error: \(error)")
                     }
-
+                    
                     self.builder?.finishWorkout { [weak self] workout, error in
                         guard let self = self, let workout = workout else {
                             print("[stop] finish workout error: \(String(describing: error))")
-                            // Still export even if workout object is nil — we have the data
                             self?.exportAndTransferRide()
                             self?.cleanup()
                             return
                         }
-
+                        
                         print("[stop] workout saved, attaching route...")
-
+                        
                         self.routeBuilder?.finishRoute(with: workout, metadata: nil) { route, error in
                             if let error = error {
                                 print("[stop] finish route error: \(error)")
                             } else {
                                 print("[stop] route attached successfully")
                             }
-                            // Export regardless of route attachment success
                             self.exportAndTransferRide()
                             self.cleanup()
                         }
@@ -281,7 +337,6 @@ class WorkoutManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.isActive = false
             self.isPaused = false
-            self.isSimulating = false
             self.recordedLocations = []
             self.pendingRouteLocations = []
         }
@@ -339,9 +394,11 @@ class WorkoutManager: NSObject, ObservableObject {
 
         let avgSpeed = elapsedTime > 0 ? totalDistance / elapsedTime : 0
         var elevGain: Double = 0
+        var elevLoss: Double = 0
         for i in 1..<recordedLocations.count {
             let delta = recordedLocations[i].altitude - recordedLocations[i - 1].altitude
             if delta > 0 { elevGain += delta }
+            else { elevLoss -= delta }
         }
 
         let trackData = TrackEncoder.encode(recordedLocations)
@@ -366,6 +423,7 @@ class WorkoutManager: NSObject, ObservableObject {
             distance: totalDistance,
             calories: activeCalories,
             elevationGain: elevGain,
+            elevationLoss: elevLoss,
             avgSpeed: avgSpeed,
             pointCount: recordedLocations.count,
             trackFilename: trackFilename)
@@ -384,33 +442,7 @@ extension WorkoutManager: CLLocationManagerDelegate {
         guard location.horizontalAccuracy >= 0,
               location.horizontalAccuracy < 50 else { return }
 
-        DispatchQueue.main.async {
-            if let previous = self.currentLocation {
-                self.totalDistance += location.distance(from: previous)
-            }
-            self.currentLocation = location
-            self.speed = max(location.speed, 0)
-            self.recordedLocations.append(location)
-            self.pendingRouteLocations.append(location)
-
-            // Navigation
-            if let alert = self.navigation.update(location: location) {
-                self.handleTurnAlert(alert)
-            }
-
-            VoiceNavigator.shared.update(nav: self.navigation, speed: self.speed)
-
-
-            // Battery management — adjust GPS frequency
-            let mode = self.battery.recommendedMode(
-                distanceToNextTurn: self.navigation.distanceToNextTurn,
-                isOffRoute: self.navigation.isOffRoute,
-                speed: self.speed)
-            self.battery.apply(mode: mode, to: self.locationManager)
-
-            // Auto-pause logic
-            self.updateAutoPause()
-        }
+        processLocation(location)
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {

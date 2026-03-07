@@ -120,8 +120,6 @@ struct RouteDetailView: View {
                             if route.elevationLoss > 0 {
                                 StatItem(label: "Loss", value: formatElevation(route.elevationLoss))
                             }
-
-                            StatItem(label: "Points", value: "\(route.points.count)")
                         }
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
                     }

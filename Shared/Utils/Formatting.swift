@@ -27,9 +27,9 @@ func formatElevation(_ meters: Double) -> String {
    return String(format: "%.0f ft", feet)
 }
 
-func formatSpeed(_ metersPerSecond: Double) -> String {
+func formatSpeed(_ metersPerSecond: Double, _ units: Bool = true) -> String {
     let mph = metersPerSecond * 2.23694
-    return String(format: "%.1f", mph)
+    return String(format: "%.1f%@", mph, units ? " mph" : "")
 }
 
 func formatPace(_ mps: Double) -> String {
