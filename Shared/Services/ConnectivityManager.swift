@@ -301,7 +301,21 @@ extension ConnectivityManager: WCSessionDelegate {
         if message["wake"] != nil {
             print("Woken by phone")
             replyHandler(["awake": true])
+            return
         }
+
+        #if os(iOS)
+        print("Received message: \(message.keys), \(message["type"] as? String ?? "no type")")
+        if let type = message["type"] as? String,
+           type == "speech",
+           let text = message["text"] as? String {
+            PhoneSpeechPlayer.shared.speak(text)
+            replyHandler(["spoken": true])
+            return
+        }
+        #endif
+
+        replyHandler([:])
     }
 
     #if os(iOS)

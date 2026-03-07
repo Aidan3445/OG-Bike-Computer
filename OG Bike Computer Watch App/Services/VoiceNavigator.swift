@@ -8,6 +8,9 @@
 import AVFoundation
 import CoreLocation
 import Combine
+import os
+
+private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "VoiceNavigator")
 
 class VoiceNavigator: NSObject, ObservableObject {
     static let shared = VoiceNavigator()
@@ -25,6 +28,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private let cooldown: TimeInterval = 6          // min gap between announcements
     private let minTimeBeforeTurn: TimeInterval = 4 // suppress if turn is this close in seconds
 
+    // State
     private var currentTurnIndex: Int?
     private var firedTurnAlerts: Set<Int> = []      // indices into alertDistances
 
@@ -36,6 +40,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var lastAnnouncementTime: Date = .distantPast
 
     private let synthesizer = AVSpeechSynthesizer()
+    weak var workoutManager: WorkoutManager?
 
     private override init() {
         super.init()
@@ -62,6 +67,8 @@ class VoiceNavigator: NSObject, ObservableObject {
             print("VoiceNavigator audio session config error: \(error)")
         }
     }
+
+    // MARK: - Main update — call every location update
 
     func update(nav: NavigationTracker, speed: Double) {
         guard isEnabled else { return }
@@ -208,11 +215,27 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     private func speak(_ text: String) {
         lastAnnouncementTime = Date()
+        logger.info("[Voice] speak called: \(text)")
+        logger.info("[Voice] workoutManager is \(self.workoutManager == nil ? "nil" : "set")")
 
+        if let wm = workoutManager {
+            wm.sendSpeechToPhone(text) { [weak self] spoken in
+                logger.info("[Voice] phone result: \(spoken)")
+                if !spoken {
+                    self?.speakLocally(text)
+                }
+            }
+        } else {
+            logger.info("[Voice] no workoutManager, speaking locally")
+            speakLocally(text)
+        }
+    }
+
+    private func speakLocally(_ text: String) {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            print("VoiceNavigator activate error: \(error)")
+            logger.log("VoiceNavigator activate error: \(error)")
         }
 
         let utterance = AVSpeechUtterance(string: text)

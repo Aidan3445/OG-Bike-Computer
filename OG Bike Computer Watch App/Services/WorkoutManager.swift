@@ -33,7 +33,7 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var recordedLocations: [CLLocation] = []
     
     private let healthStore = HKHealthStore()
-    private var session: HKWorkoutSession?
+    private(set) var session: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
     private var routeBuilder: HKWorkoutRouteBuilder?
     
@@ -60,14 +60,36 @@ class WorkoutManager: NSObject, ObservableObject {
     func startSimulation(activity: ActivityType) {
         self.currentActivity = activity
         isSimulating = true
-        
+
+        let config = HKWorkoutConfiguration()
+        config.activityType = activity.hkType
+        config.locationType = .outdoor
+
+        do {
+            session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
+            session?.delegate = self
+        } catch {
+            print("[Sim] Failed to create workout session: \(error)")
+        }
+
+        session?.startMirroringToCompanionDevice { success, error in
+            if let error = error {
+                print("[Sim] Mirroring failed: \(error)")
+            } else {
+                print("[Sim] Mirroring started: \(success)")
+            }
+        }
+
+        session?.startActivity(with: Date())
+
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.reset()
-        
+        VoiceNavigator.shared.workoutManager = self
+
         timerStart = Date()
         timerAccumulated = 0
         startDisplayTimer()
-        
+
         isActive = true
         isPaused = false
         isAutoPaused = false
@@ -182,7 +204,17 @@ class WorkoutManager: NSObject, ObservableObject {
         
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.reset()
+
+        VoiceNavigator.shared.workoutManager = self
         
+        session?.startMirroringToCompanionDevice { success, error in
+            print("[Mirroring] Start mirroring result: success=\(success), error=\(String(describing: error))")
+            if let error = error {
+                print("[Mirroring] Failed to start: \(error)")
+            } else {
+                print("[Mirroring] Started: \(success)")
+            }
+        }
         session?.startActivity(with: Date())
         builder?.beginCollection(withStart: Date()) { success, error in
             if let error = error {
@@ -326,7 +358,9 @@ class WorkoutManager: NSObject, ObservableObject {
                 }
             }
         } else {
-            if !isSimulating {
+            if isSimulating {
+                session?.end()
+            } else {
                 builder?.discardWorkout()
             }
             cleanup()
@@ -339,6 +373,8 @@ class WorkoutManager: NSObject, ObservableObject {
             self.isPaused = false
             self.recordedLocations = []
             self.pendingRouteLocations = []
+
+            VoiceNavigator.shared.workoutManager = nil
         }
     }
 
@@ -431,6 +467,32 @@ class WorkoutManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.onRideCompleted?(summary)
             ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
+        }
+    }
+
+    func sendSpeechToPhone(_ text: String, completion: @escaping (Bool) -> Void) {
+        let workoutSession = self.session
+        print("[Speech] sendToPhone called, session: \(workoutSession == nil ? "nil" : "set")")
+        guard let workoutSession else {
+            print("[Speech] no session, falling back")
+            completion(false)
+            return
+        }
+
+        let payload: [String: String] = ["type": "speech", "text": text]
+        guard let data = try? JSONEncoder().encode(payload) else {
+            completion(false)
+            return
+        }
+
+        workoutSession.sendToRemoteWorkoutSession(data: data) { success, error in
+            if let error = error {
+                print("[Speech] send error: \(error)")
+                completion(false)
+            } else {
+                print("[Speech] sent successfully")
+                completion(success)
+            }
         }
     }
     #endif
