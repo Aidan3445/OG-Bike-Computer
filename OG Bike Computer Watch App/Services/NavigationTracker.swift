@@ -19,8 +19,17 @@ class NavigationTracker: ObservableObject {
     @Published var distanceRemaining: Double = 0
     @Published var currentBearing: Double = 0
     @Published var distanceToEndpoint: Double = 0
+    @Published var missedTurn: TurnPoint?
+    @Published var nearestRouteDistance: Double = 0 // GPS distance to nearest route point
+    @Published var bearingToRoute: Double = 0       // bearing from rider back to nearest route point
+
+    private var wasOffRoute = false
+    private var lastPassedTurn: TurnPoint?
+    private var offRouteLocation: CLLocation?
+    let missedTurnProximity: Double = 150 // if off-route within this distance of a turn, it's a missed turn
 
     let offRouteThreshold: Double = 100
+    let rejoinThreshold: Double = 30 // must be this close to rejoin after going off-route
 
     let turnWarningDistance: Double = 200
     let turnAlertDistance: Double = 50
@@ -52,6 +61,12 @@ class NavigationTracker: ObservableObject {
         distanceToEndpoint = 0
         canCompleteRoute = false
         hasJoinedRoute = false
+        wasOffRoute = false
+        lastPassedTurn = nil
+        missedTurn = nil
+        offRouteLocation = nil
+        nearestRouteDistance = 0
+        bearingToRoute = 0
 
         if let last = processedRoute.points.last {
             endpointLocation = CLLocation(
@@ -70,11 +85,35 @@ class NavigationTracker: ObservableObject {
         )
 
         isOffRoute = nearestDistance > offRouteThreshold
+        nearestRouteDistance = nearestDistance
 
-        guard !isOffRoute else { return nil }
+        // Hysteresis: once off-route, must come much closer to rejoin
+        if wasOffRoute && nearestDistance > rejoinThreshold {
+            isOffRoute = true
+        }
 
+        // Always update tracking so the nearest point stays fresh
         lastSearchIndex = nearestIndex
         currentSegmentIndex = nearestIndex
+
+        // Off-route transition detection
+        if isOffRoute && !wasOffRoute {
+            offRouteLocation = location
+            missedTurn = findMissedTurn(at: location, in: route)
+        } else if !isOffRoute && wasOffRoute {
+            missedTurn = nil
+            offRouteLocation = nil
+        }
+        wasOffRoute = isOffRoute
+
+        // When off-route, compute bearing back to nearest route point
+        if isOffRoute {
+            let nearestPoint = route.points[nearestIndex]
+            bearingToRoute = RouteProcessor.bearing(
+                from: location.coordinate,
+                to: nearestPoint.coordinate)
+            return nil
+        }
 
         distanceAlongRoute = interpolateDistance(
             location: location,
@@ -106,7 +145,11 @@ class NavigationTracker: ObservableObject {
         let previousTurn = nextTurn
         let previousDistance = distanceToNextTurn
 
-        nextTurn = route.turnPoints.first { $0.distanceFromStart > distanceAlongRoute - turnConfirmationBuffer }
+        let newNextTurn = route.turnPoints.first { $0.distanceFromStart > distanceAlongRoute - turnConfirmationBuffer }
+        if let prev = nextTurn, newNextTurn?.index != prev.index {
+            lastPassedTurn = prev
+        }
+        nextTurn = newNextTurn
         distanceToNextTurn = nextTurn.map { max(0, $0.distanceFromStart - distanceAlongRoute) } ?? 0
 
         return checkTurnAlert(
@@ -212,6 +255,27 @@ class NavigationTracker: ObservableObject {
         return delta
     }
 
+    // Check if the rider went off-route near a turn they should have taken
+    private func findMissedTurn(at location: CLLocation, in route: ProcessedRoute) -> TurnPoint? {
+        // Check the most recently passed turn
+        if let turn = lastPassedTurn {
+            let turnLoc = CLLocation(latitude: turn.coordinate.latitude, longitude: turn.coordinate.longitude)
+            if location.distance(from: turnLoc) < missedTurnProximity {
+                return turn
+            }
+        }
+
+        // Check the upcoming turn (rider might have gone straight instead of turning)
+        if let turn = nextTurn {
+            let turnLoc = CLLocation(latitude: turn.coordinate.latitude, longitude: turn.coordinate.longitude)
+            if location.distance(from: turnLoc) < missedTurnProximity {
+                return turn
+            }
+        }
+
+        return nil
+    }
+
     private func interpolateDistance(
         location: CLLocation,
         nearestIndex: Int,
@@ -268,7 +332,7 @@ class NavigationTracker: ObservableObject {
         }
 
         if distanceToNextTurn <= turnAlertDistance {
-            if lastAlertedTurnIndex != turn.index || !(lastAlertLevel.isImminent) {
+            if lastAlertedTurnIndex != turn.index || !isImminentAlert(lastAlertLevel) {
                 lastAlertedTurnIndex = turn.index
                 lastAlertLevel = .imminent(turn)
                 return .imminent(turn)
@@ -284,11 +348,8 @@ class NavigationTracker: ObservableObject {
 
         return nil
     }
-}
-
-extension Optional where Wrapped == NavigationTracker.TurnAlert {
-    var isImminent: Bool {
-        if case .imminent = self { return true }
+    private func isImminentAlert(_ alert: TurnAlert?) -> Bool {
+        if case .imminent = alert { return true }
         return false
     }
 }

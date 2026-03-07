@@ -8,9 +8,6 @@
 import AVFoundation
 import CoreLocation
 import Combine
-import os
-
-private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "VoiceNavigator")
 
 class VoiceNavigator: NSObject, ObservableObject {
     static let shared = VoiceNavigator()
@@ -37,6 +34,8 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     private var announcedHalfway = false
     private var announcedArrival = false
+    private var announcedOffRoute = false
+    private var wasOffRoute = false
     private var lastAnnouncementTime: Date = .distantPast
 
     private let synthesizer = AVSpeechSynthesizer()
@@ -54,6 +53,8 @@ class VoiceNavigator: NSObject, ObservableObject {
         firedFinishAlerts.removeAll()
         announcedHalfway = false
         announcedArrival = false
+        announcedOffRoute = false
+        wasOffRoute = false
         lastAnnouncementTime = .distantPast
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -68,7 +69,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Main update — call every location update
+    // Main update — call every location update
 
     func update(nav: NavigationTracker, speed: Double) {
         guard isEnabled else { return }
@@ -79,6 +80,32 @@ class VoiceNavigator: NSObject, ObservableObject {
             if !announcedArrival {
                 announcedArrival = true
                 speak("You have arrived. Route complete.")
+            }
+            return
+        }
+
+        // --- Off-route / back on route ---
+        if nav.isOffRoute {
+            if !announcedOffRoute {
+                announcedOffRoute = true
+                if let missed = nav.missedTurn {
+                    speak("Off route. Missed \(missed.direction.voiceLabel2).")
+                } else {
+                    speak("Off route.")
+                }
+            }
+            wasOffRoute = true
+            return
+        } else if wasOffRoute {
+            wasOffRoute = false
+            announcedOffRoute = false
+            speak("Back on route.")
+            // Re-announce upcoming turn after returning
+            if let turn = nav.nextTurn {
+                let dist = nav.distanceToNextTurn
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    self?.speak("\(self?.formatVoiceDistance(dist) ?? ""), \(turn.direction.voiceLabel).")
+                }
             }
             return
         }
@@ -215,27 +242,11 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     private func speak(_ text: String) {
         lastAnnouncementTime = Date()
-        logger.info("[Voice] speak called: \(text)")
-        logger.info("[Voice] workoutManager is \(self.workoutManager == nil ? "nil" : "set")")
 
-        if let wm = workoutManager {
-            wm.sendSpeechToPhone(text) { [weak self] spoken in
-                logger.info("[Voice] phone result: \(spoken)")
-                if !spoken {
-                    self?.speakLocally(text)
-                }
-            }
-        } else {
-            logger.info("[Voice] no workoutManager, speaking locally")
-            speakLocally(text)
-        }
-    }
-
-    private func speakLocally(_ text: String) {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            logger.log("VoiceNavigator activate error: \(error)")
+            print("VoiceNavigator activate error: \(error)")
         }
 
         let utterance = AVSpeechUtterance(string: text)
@@ -319,7 +330,25 @@ extension TurnDirection {
         case .straight:    return "continue straight"
         }
     }
+
+    var voiceLabel2: String {
+        switch self {
+        case .left:        return "left turn"
+        case .slightLeft:  return "slight left"
+        case .sharpLeft:   return "sharp left turn"
+        case .right:       return "right turn"
+        case .slightRight: return "slight right"
+        case .sharpRight:  return "sharp right turn"
+        case .uTurn:       return "U-turn"
+        case .straight:    return "straight"
+        }
+    }
 }
+
+// NOTE: In WorkoutView, uncomment the voice toggle onChange:
+//   .onChange(of: voiceEnabled) { _, newValue in
+//       VoiceNavigator.shared.isEnabled = newValue
+//   }
 
 extension VoiceNavigator: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {

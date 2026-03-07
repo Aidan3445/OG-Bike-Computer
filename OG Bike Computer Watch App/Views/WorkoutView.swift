@@ -73,7 +73,7 @@ struct WorkoutView<ExtraTab: View>: View {
     private var navigationPage: some View {
         Group {
             if workout.navigation.isOffRoute {
-                //OffRouteView(workout: workout)
+                OffRouteView(workout: workout)
             } else if workout.navigation.isRouteComplete {
                 VStack(spacing: 8) {
                     Image(systemName: "flag.checkered")
@@ -151,7 +151,7 @@ struct WorkoutView<ExtraTab: View>: View {
     private var metricsPage: some View {
         VStack(spacing: 4) {
             if workout.navigation.isOffRoute {
-                //OffRouteBanner(workout: workout)
+                OffRouteBanner(workout: workout)
             }
 
             if isLuminanceReduced {

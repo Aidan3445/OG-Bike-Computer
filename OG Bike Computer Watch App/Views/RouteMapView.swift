@@ -32,27 +32,42 @@ struct RouteMapView: View {
 
             VStack(spacing: 0) {
                 HStack(alignment: .top, spacing: 4) {
-                    if !showFullRoute, let turn = workout.navigation.nextTurn,
-                       !workout.navigation.isOffRoute {
-                        VStack(spacing: 1) {
-                            HStack(spacing: 4) {
-                                Image(systemName: turn.direction.icon)
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(.yellow)
-                                Text(formatTurnDistance(workout.navigation.distanceToNextTurn))
+                    if !showFullRoute {
+                        if workout.navigation.isOffRoute {
+                            VStack(spacing: 1) {
+                                Text("OFF ROUTE")
+                                    .font(.system(size: 11, weight: .heavy))
+                                    .foregroundStyle(.red)
+                                Text(formatTurnDistance(workout.navigation.nearestRouteDistance))
                                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                                     .monospacedDigit()
+                                    .foregroundStyle(.red.opacity(0.8))
                             }
-                            Text(formatDistance(workout.totalDistance))
-                                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            Text(formatTime(workout.movingTime))
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.red.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else if let turn = workout.navigation.nextTurn {
+                            VStack(spacing: 1) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: turn.direction.icon)
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(.yellow)
+                                    Text(formatTurnDistance(workout.navigation.distanceToNextTurn))
+                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                        .monospacedDigit()
+                                }
+                                Text(formatDistance(workout.totalDistance))
+                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                Text(formatTime(workout.movingTime))
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.black.opacity(0.6))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(.black.opacity(0.6))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
 
                     Spacer()
@@ -181,8 +196,24 @@ private struct FullRouteCanvas: View {
 
             if let loc = workout.currentLocation {
                 let pos = project(loc.coordinate, transform: transform)
-                context.fill(Path(ellipseIn: CGRect(x: pos.x - 5, y: pos.y - 5, width: 10, height: 10)), with: .color(.white))
-                context.fill(Path(ellipseIn: CGRect(x: pos.x - 3.5, y: pos.y - 3.5, width: 7, height: 7)), with: .color(.blue))
+
+                // Off-route: draw dashed red line from rider to nearest route point
+                if workout.navigation.isOffRoute {
+                    let nearIdx = workout.navigation.currentSegmentIndex
+                    let nearPt = project(points[min(nearIdx, points.count - 1)].coordinate, transform: transform)
+                    var returnLine = Path()
+                    returnLine.move(to: pos)
+                    returnLine.addLine(to: nearPt)
+                    context.stroke(returnLine, with: .color(.red),
+                                   style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 4]))
+
+                    // Red dot for rider when off-route
+                    context.fill(Path(ellipseIn: CGRect(x: pos.x - 5, y: pos.y - 5, width: 10, height: 10)), with: .color(.red.opacity(0.3)))
+                    context.fill(Path(ellipseIn: CGRect(x: pos.x - 3.5, y: pos.y - 3.5, width: 7, height: 7)), with: .color(.red))
+                } else {
+                    context.fill(Path(ellipseIn: CGRect(x: pos.x - 5, y: pos.y - 5, width: 10, height: 10)), with: .color(.white))
+                    context.fill(Path(ellipseIn: CGRect(x: pos.x - 3.5, y: pos.y - 3.5, width: 7, height: 7)), with: .color(.blue))
+                }
             }
         }
     }
@@ -254,6 +285,17 @@ private struct BreadcrumbCanvas: View {
                 let cosLat = cos(center.latitude * .pi / 180)
                 let rotRad = bearing * .pi / 180
 
+                // Helper to project a coordinate to screen space
+                func toScreen(_ coord: CLLocationCoordinate2D) -> CGPoint {
+                    let dx = (coord.longitude - center.longitude) * cosLat * 111_320
+                    let dy = (coord.latitude - center.latitude) * 111_320
+                    let rx = dx * cos(rotRad) - dy * sin(rotRad)
+                    let ry = dx * sin(rotRad) + dy * cos(rotRad)
+                    return CGPoint(
+                        x: riderScreenX + rx * metersPerPx,
+                        y: riderScreenY - ry * metersPerPx)
+                }
+
                 var behindPath = Path()
                 var aheadPath = Path()
                 var startedBehind = false
@@ -267,18 +309,11 @@ private struct BreadcrumbCanvas: View {
                     guard point.distanceFromStart >= minDist - 100,
                           point.distanceFromStart <= maxDist + 100 else { continue }
 
-                    let dx = (point.coordinate.longitude - center.longitude) * cosLat * 111_320
-                    let dy = (point.coordinate.latitude - center.latitude) * 111_320
-                    let rx = dx * cos(rotRad) - dy * sin(rotRad)
-                    let ry = dx * sin(rotRad) + dy * cos(rotRad)
-                    let sx = riderScreenX + rx * metersPerPx
-                    let sy = riderScreenY - ry * metersPerPx
+                    let pt = toScreen(point.coordinate)
 
-                    if abs(sx - lastSX) + abs(sy - lastSY) < 2 { continue }
-                    lastSX = sx
-                    lastSY = sy
-
-                    let pt = CGPoint(x: sx, y: sy)
+                    if abs(pt.x - lastSX) + abs(pt.y - lastSY) < 2 { continue }
+                    lastSX = pt.x
+                    lastSY = pt.y
 
                     if point.distanceFromStart <= currentDist {
                         if !startedBehind {
@@ -307,12 +342,37 @@ private struct BreadcrumbCanvas: View {
                 context.stroke(behindPath, with: .color(.green.opacity(0.4)), style: style)
                 context.stroke(aheadPath, with: .color(.white), style: style)
 
-                context.fill(
-                    Path(ellipseIn: CGRect(x: riderScreenX - 8, y: riderScreenY - 8, width: 16, height: 16)),
-                    with: .color(.white))
-                context.fill(
-                    Path(ellipseIn: CGRect(x: riderScreenX - 6, y: riderScreenY - 6, width: 12, height: 12)),
-                    with: .color(.blue))
+                // Off-route: dashed red line from rider to nearest route point
+                if workout.navigation.isOffRoute {
+                    let nearestCoord = points[min(segIdx, points.count - 1)].coordinate
+                    let nearestScreen = toScreen(nearestCoord)
+
+                    var returnLine = Path()
+                    returnLine.move(to: CGPoint(x: riderScreenX, y: riderScreenY))
+                    returnLine.addLine(to: nearestScreen)
+                    context.stroke(returnLine, with: .color(.red),
+                                   style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [8, 5]))
+
+                    // Small red circle at the route reconnect point
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: nearestScreen.x - 4, y: nearestScreen.y - 4, width: 8, height: 8)),
+                        with: .color(.red.opacity(0.5)))
+
+                    // Rider dot — red when off-route
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: riderScreenX - 8, y: riderScreenY - 8, width: 16, height: 16)),
+                        with: .color(.red.opacity(0.3)))
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: riderScreenX - 6, y: riderScreenY - 6, width: 12, height: 12)),
+                        with: .color(.red))
+                } else {
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: riderScreenX - 8, y: riderScreenY - 8, width: 16, height: 16)),
+                        with: .color(.white))
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: riderScreenX - 6, y: riderScreenY - 6, width: 12, height: 12)),
+                        with: .color(.blue))
+                }
             }
         }
     }
