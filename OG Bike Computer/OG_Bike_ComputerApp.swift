@@ -9,6 +9,10 @@ import SwiftUI
 import CoreLocation
 import MapKit
 import HealthKit
+import os
+import AVFAudio
+
+private let mirrorLogger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "Mirroring")
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     private let locationManager = CLLocationManager()
@@ -22,11 +26,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         ConnectivityManager.shared.activate()
         locationManager.requestWhenInUseAuthorization()
 
-        // Warm up MapKit
         let warmup = MKMapView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
         _ = warmup.region
 
-        // Request HealthKit auth — required for mirroring to work
+        // Configure audio session category ONCE at launch.
+        // This registers us as a ducking session before any workout starts.
+        // If we wait until the first speech arrives, the category change itself
+        // causes a full interruption to the music app instead of a duck.
+        let audioSession = AVAudioSession.sharedInstance()
+        do {
+            try audioSession.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
+        } catch {
+            print("[Audio] session config error: \(error)")
+        }
+
         let typesToShare: Set<HKSampleType> = [HKQuantityType.workoutType()]
         let typesToRead: Set<HKObjectType> = [
             HKQuantityType(.heartRate),
@@ -40,12 +53,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             }
         }
 
-        // Set up workout mirroring handler — keeps the app alive in background
-        // when the watch starts a workout, so speech data can be received
+        // Called on initial mirroring AND on every reconnection (e.g. after
+        // this app was killed and HealthKit relaunched it). Each call delivers
+        // a NEW valid HKWorkoutSession — the old one is dead.
+        // Runs on an anonymous background queue.
         healthStore.workoutSessionMirroringStartHandler = { [weak self] mirroredSession in
-            print("[Mirroring] Received mirrored workout session")
+            mirrorLogger.notice("[Mirroring] Received mirrored session, state: \(mirroredSession.state.rawValue)")
+            // Set new session FIRST — makes the === check in delegates work
             self?.mirroredSession = mirroredSession
             mirroredSession.delegate = self
+            // AVSpeechSynthesizer is not thread-safe — reset on main
+            DispatchQueue.main.async {
+                PhoneSpeechPlayer.shared.resetSession()
+            }
         }
 
         return true
@@ -57,22 +77,68 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                         didChangeTo toState: HKWorkoutSessionState,
                         from fromState: HKWorkoutSessionState,
                         date: Date) {
-        print("[Mirroring] Session state: \(fromState.rawValue) → \(toState.rawValue)")
+        mirrorLogger.info("[Mirroring] Session state: \(fromState.rawValue) → \(toState.rawValue)")
+
+        // THE KEY FIX: Only clean up for the CURRENT session.
+        // When ride 1 ends and ride 2 starts quickly:
+        //   1. workoutSessionMirroringStartHandler sets mirroredSession = session B
+        //   2. Session A's .ended callback arrives late
+        //   3. Without this guard, it would call stopImmediately() and kill
+        //      session B's fresh synthesizer
+        guard workoutSession === mirroredSession else {
+            mirrorLogger.info("[Mirroring] Ignoring state change from old session")
+            return
+        }
+
+        if toState == .ended || toState == .stopped {
+            DispatchQueue.main.async {
+                PhoneSpeechPlayer.shared.stopImmediately()
+            }
+            mirroredSession = nil
+        }
     }
 
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didFailWithError error: Error) {
-        print("[Mirroring] Session error: \(error)")
+        mirrorLogger.error("[Mirroring] Session error: \(error)")
+    }
+
+    func workoutSession(_ workoutSession: HKWorkoutSession,
+                        didDisconnectFromRemoteDeviceWithError error: Error?) {
+        mirrorLogger.notice("[Mirroring] Disconnected: \(error?.localizedDescription ?? "clean")")
+        // Don't let old session's disconnect kill new session
+        guard workoutSession === mirroredSession else {
+            mirrorLogger.info("[Mirroring] Ignoring disconnect from old session")
+            return
+        }
+        DispatchQueue.main.async {
+            PhoneSpeechPlayer.shared.stopImmediately()
+        }
+        mirroredSession = nil
     }
 
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didReceiveDataFromRemoteWorkoutSession data: [Data]) {
+        let now = Date().timeIntervalSince1970
+
         for item in data {
             guard let payload = try? JSONDecoder().decode([String: String].self, from: item),
                   payload["type"] == "speech",
-                  let text = payload["text"] else { continue }
+                  let text = payload["text"] else {
+                continue
+            }
 
-            print("[Mirroring] Speaking: \(text)")
+            // Discard stale messages — when this app is killed and relaunched,
+            // HealthKit delivers all queued data at once
+            if let tsString = payload["ts"], let ts = Double(tsString) {
+                let age = now - ts
+                if age > 10 {
+                    mirrorLogger.info("[Mirroring] Discarding stale speech (\(Int(age))s old): \(text)")
+                    continue
+                }
+            }
+
+            mirrorLogger.info("[Mirroring] Speaking: \(text)")
             DispatchQueue.main.async {
                 PhoneSpeechPlayer.shared.speak(text)
             }

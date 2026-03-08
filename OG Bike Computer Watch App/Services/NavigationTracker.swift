@@ -75,6 +75,31 @@ class NavigationTracker: ObservableObject {
         }
     }
 
+     func reset() {
+        route = nil
+        lastSearchIndex = 0
+        endpointLocation = nil
+        distanceAlongRoute = 0
+        distanceToNextTurn = 0
+        nextTurn = nil
+        currentSegmentIndex = 0
+        isOffRoute = false
+        isRouteComplete = false
+        distanceRemaining = 0
+        currentBearing = 0
+        distanceToEndpoint = 0
+        canCompleteRoute = false
+        hasJoinedRoute = false
+        wasOffRoute = false
+        lastPassedTurn = nil
+        missedTurn = nil
+        offRouteLocation = nil
+        nearestRouteDistance = 0
+        bearingToRoute = 0
+        lastAlertedTurnIndex = nil
+        lastAlertLevel = nil
+    }
+
     func update(location: CLLocation) -> TurnAlert? {
         guard let route = route, route.points.count >= 2 else { return nil }
 

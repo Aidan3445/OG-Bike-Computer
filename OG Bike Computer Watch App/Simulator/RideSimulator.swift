@@ -13,7 +13,7 @@ class RideSimulator: ObservableObject {
     @Published var isPlaying = false
     @Published var progress: Double = 0
     @Published var currentPointIndex: Int = 0
-    @Published var playbackSpeed: Double = 8
+    @Published var playbackSpeed: Double = 2
 
     private(set) var track: SimGPXLoader.SimTrack?
     private weak var workout: WorkoutManager?
