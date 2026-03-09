@@ -322,6 +322,14 @@ class WorkoutManager: NSObject, ObservableObject {
             }
         }
     }
+    
+    func setHeadingUpdates(enabled: Bool) {
+        if enabled {
+            locationManager.startUpdatingHeading()
+        } else {
+            locationManager.stopUpdatingHeading()
+        }
+    }
 
     func stop(save: Bool) {
         if let start = timerStart {

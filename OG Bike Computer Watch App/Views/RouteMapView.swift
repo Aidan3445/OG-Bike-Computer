@@ -10,6 +10,7 @@ import CoreLocation
 
 struct RouteMapView: View {
     @ObservedObject var workout: WorkoutManager
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
     @State private var showFullRoute = false
     @State private var autoSwitchTask: Task<Void, Never>?
@@ -25,7 +26,8 @@ struct RouteMapView: View {
                 } else {
                     BreadcrumbCanvas(
                         workout: workout,
-                        viewDistance: zoomLevels[zoomIndex])
+                        viewDistance: zoomLevels[zoomIndex],
+                        useCompassHeading: !isLuminanceReduced)
                 }
             }
             .ignoresSafeArea()
@@ -136,15 +138,14 @@ struct RouteMapView: View {
                 }
             }
         }
+        .onChange(of: isLuminanceReduced) { _, reduced in
+            workout.setHeadingUpdates(enabled: !reduced)
+         }
     }
 
     private var cardinalDirection: String {
-        let heading: Double
-        if workout.speed > 1.0, let course = workout.currentLocation?.course, course >= 0 {
-            heading = course
-        } else {
-            heading = workout.heading
-        }
+        let heading = workout.heading > 0 ? workout.heading
+            : (workout.currentLocation?.course ?? 0)
         let dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
         let index = Int(((heading + 22.5).truncatingRemainder(dividingBy: 360)) / 45)
         return dirs[max(0, min(index, dirs.count - 1))]
@@ -248,6 +249,7 @@ private struct FullRouteCanvas: View {
 private struct BreadcrumbCanvas: View {
     @ObservedObject var workout: WorkoutManager
     let viewDistance: Double
+    var useCompassHeading: Bool = true
 
     private let routeLineWidth: CGFloat = 6
 
@@ -264,10 +266,12 @@ private struct BreadcrumbCanvas: View {
                 let currentDist = workout.navigation.distanceAlongRoute
 
                 let bearing: Double
-                if workout.speed > 1.0, location.course >= 0 {
-                    bearing = location.course
-                } else if workout.heading > 0 {
+                if useCompassHeading, workout.heading > 0 {
+                    // Compass heading — map aligns with physical watch orientation
                     bearing = workout.heading
+                } else if workout.speed > 1.0, location.course >= 0 {
+                    // GPS course fallback (used when luminance reduced / no compass)
+                    bearing = location.course
                 } else {
                     bearing = processed.points[segIdx].bearingToNext
                 }
