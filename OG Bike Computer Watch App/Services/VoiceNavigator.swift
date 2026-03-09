@@ -149,7 +149,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                 speed: speed,
                 fired: &firedTurnAlerts,
                 atZeroText: "\(turn.direction.voiceLabel.localizedCapitalized).",
-                approachText: { d in "\(self.formatVoiceDistance(d)), \(turn.direction.voiceLabel)." }
+                approachText: { d in "in \(self.formatVoiceDistance(d)), \(turn.direction.voiceLabel)." }
             ) { return }
 
             let isLastTurn = route.turnPoints.last?.index == turn.index
@@ -191,8 +191,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             if nav.distanceAlongRoute >= half {
                 announcedHalfway = true
                 if canSpeak {
-                    let halfNoIn = formatVoiceDistance(nav.distanceRemaining).replacingOccurrences(of: "in ", with: "")
-                    speak("Halfway point. \(halfNoIn) remaining.")
+                    speak("Halfway point. \(formatVoiceDistance(route.distanceRemaining)) to go.")
                 }
                 return
             }
@@ -284,25 +283,25 @@ class VoiceNavigator: NSObject, ObservableObject {
 
         if feet < 150 {
             let rounded = max(50, Int((feet / 50).rounded()) * 50)
-            return "in \(rounded) feet"
+            return "\(rounded) feet"
         }
         if feet < 300 {
             let hundreds = Int((feet / 100).rounded())
-            return "in \(hundreds) hundred feet"
+            return "\(hundreds) hundred feet"
         }
         if miles < 0.2 {
             let rounded = Int((feet / 100).rounded()) * 100
-            return "in \(rounded) feet"
+            return "\(rounded) feet"
         }
-        if miles < 0.3 { return "in a quarter mile" }
-        if miles < 0.6 { return "in half a mile" }
-        if miles < 0.85 { return "in three quarters of a mile" }
-        if miles < 1.1 { return "in 1 mile" }
-        if miles < 1.3 { return "in about a mile" }
-        if miles < 1.7 { return "in a mile and a half" }
-        if miles < 2.2 { return "in 2 miles" }
+        if miles < 0.3 { return "a quarter mile" }
+        if miles < 0.6 { return "half a mile" }
+        if miles < 0.85 { return "three quarters of a mile" }
+        if miles < 1.1 { return "1 mile" }
+        if miles < 1.3 { return "about a mile" }
+        if miles < 1.7 { return "a mile and a half" }
+        if miles < 2.2 { return "2 miles" }
         let rounded = Int(miles.rounded())
-        return "in \(rounded) miles"
+        return "\(rounded) miles"
     }
 }
 
