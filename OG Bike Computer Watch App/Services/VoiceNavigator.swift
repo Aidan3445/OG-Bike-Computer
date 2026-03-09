@@ -191,7 +191,8 @@ class VoiceNavigator: NSObject, ObservableObject {
             if nav.distanceAlongRoute >= half {
                 announcedHalfway = true
                 if canSpeak {
-                    speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) remaining.")
+                    let halfNoIn = formatVoiceDistance(nav.distanceRemaining).replacingOccurrences(of: "in ", with: "")
+                    speak("Halfway point. \(halfNoIn) remaining.")
                 }
                 return
             }
@@ -309,10 +310,10 @@ extension TurnDirection {
     var voiceLabel: String {
         switch self {
         case .left:        return "turn left"
-        case .slightLeft:  return "bear left"
+        case .slightLeft:  return "slight left"
         case .sharpLeft:   return "sharp left"
         case .right:       return "turn right"
-        case .slightRight: return "bear right"
+        case .slightRight: return "slight right"
         case .sharpRight:  return "sharp right"
         case .uTurn:       return "make a U-turn"
         case .straight:    return "continue straight"
