@@ -10,7 +10,7 @@ import CoreLocation
 
 struct RouteProcessor {
     static let turnAngleThreshold: Double = 30
-
+    static let minBearingDistance: Double = 5
     static let minTurnSpacing: Double = 50
 
     static func process(_ route: Route) -> ProcessedRoute {
@@ -40,7 +40,18 @@ struct RouteProcessor {
 
             let bearing: Double
             if i < coords.count - 1 {
-                bearing = self.bearing(from: coords[i], to: coords[i+1])
+                // Look ahead past nearby points to get a stable bearing.
+                // GPS noise between close points causes wild bearing swings.
+                var target = i + 1
+                let origin = CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
+                while target < coords.count - 1 {
+                    let candidate = CLLocation(latitude: coords[target].latitude, longitude: coords[target].longitude)
+                    if origin.distance(from: candidate) >= minBearingDistance {
+                        break
+                    }
+                    target += 1
+                }
+                bearing = self.bearing(from: coords[i], to: coords[target])
             } else {
                 bearing = processedPoints.last?.bearingToNext ?? 0
             }
@@ -75,6 +86,34 @@ struct RouteProcessor {
                 }
             }
         }
+        
+        // Step 2b: Remove canceling turn pairs
+        // Two turns within cancelPairDistance whose angles roughly
+        // cancel out (sum near zero) are noise, not real turns.
+        let cancelPairDistance: Double = 100 // meters apart
+        let cancelAngleThreshold: Double = 40 // net angle must be below this
+
+        var filtered: [TurnPoint] = []
+        var skip = false
+        for j in 0..<turnPoints.count {
+            if skip {
+                skip = false
+                continue
+            }
+            if j + 1 < turnPoints.count {
+                let a = turnPoints[j]
+                let b = turnPoints[j + 1]
+                let gap = b.distanceFromStart - a.distanceFromStart
+                let netAngle = abs(a.angle + b.angle)
+                if gap <= cancelPairDistance && netAngle < cancelAngleThreshold {
+                    // Pair cancels out — skip both
+                    skip = true
+                    continue
+                }
+            }
+            filtered.append(turnPoints[j])
+        }
+        turnPoints = filtered
 
         // Step 3: Bounding box
         let lats = coords.map { $0.latitude }

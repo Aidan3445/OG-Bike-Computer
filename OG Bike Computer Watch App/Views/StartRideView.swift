@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct StartRideView: View {
-    let route: Route
+    let route: Route?
     @ObservedObject var workout: WorkoutManager
 
     @State private var isLoading = false
@@ -26,13 +26,26 @@ struct StartRideView: View {
                         .padding(.top, 8)
                     Spacer()
                 } else {
-                    Text(route.name)
-                        .font(.headline)
-                        .multilineTextAlignment(.center)
-                    Text(formatDistance(route.distance))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let route {
+                        Text(route.name)
+                            .font(.headline)
+                            .multilineTextAlignment(.center)
+                        Text(formatDistance(route.distance))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "record.circle")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.orange)
+                        Text("Free Ride")
+                            .font(.headline)
+                        Text("Record without navigation")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Divider()
+
                     ForEach(ActivityType.allCases) { activity in
                         Button {
                             startRide(activity: activity)
@@ -53,7 +66,9 @@ struct StartRideView: View {
     private func startRide(activity: ActivityType) {
         isLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
-            workout.loadRoute(route)
+            if let route {
+                workout.loadRoute(route)
+            }
             DispatchQueue.main.async {
                 workout.start(activity: activity)
             }

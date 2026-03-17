@@ -31,7 +31,7 @@ class NavigationTracker: ObservableObject {
     let offRouteThreshold: Double = 100
     let rejoinThreshold: Double = 30 // must be this close to rejoin after going off-route
 
-    let turnWarningDistance: Double = 200
+    let turnWarningDistance: Double = 500
     let turnAlertDistance: Double = 50
     let turnConfirmationBuffer: Double = 40 // must pass turn by this much before advancing to next
 
@@ -74,8 +74,43 @@ class NavigationTracker: ObservableObject {
                 longitude: last.coordinate.longitude)
         }
     }
+    
+    func anchorToLocation(_ location: CLLocation) {
+        guard let route = route, route.points.count >= 2 else { return }
 
-     func reset() {
+        // Full-route scan — no search window restriction
+        var bestIndex = 0
+        var bestDistance = Double.greatestFiniteMagnitude
+
+        for i in 0..<route.points.count {
+            let point = route.points[i]
+            let pointLoc = CLLocation(
+                latitude: point.coordinate.latitude,
+                longitude: point.coordinate.longitude)
+            let dist = location.distance(from: pointLoc)
+            if dist < bestDistance {
+                bestDistance = dist
+                bestIndex = i
+            }
+        }
+
+        lastSearchIndex = bestIndex
+        currentSegmentIndex = bestIndex
+        distanceAlongRoute = route.points[bestIndex].distanceFromStart
+        distanceRemaining = route.totalDistance - distanceAlongRoute
+
+        // If we're reasonably close, consider the route joined
+        // so the search window works normally from here
+        if bestDistance <= offRouteThreshold {
+            hasJoinedRoute = true
+        }
+
+        print("[Nav] Anchored to segment \(bestIndex) "
+            + "(\(Int(distanceAlongRoute))m along, "
+            + "\(Int(bestDistance))m away)")
+    }
+
+    func reset() {
         route = nil
         lastSearchIndex = 0
         endpointLocation = nil

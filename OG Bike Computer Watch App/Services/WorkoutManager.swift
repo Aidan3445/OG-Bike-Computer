@@ -12,6 +12,12 @@ import Combine
 
 import WatchKit
 
+enum AutoPauseState {
+    case moving
+    case paused
+    case tentativeResume
+}
+
 class WorkoutManager: NSObject, ObservableObject {
     @Published var isActive = false
     @Published var isPaused = false
@@ -23,6 +29,7 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var heading: Double = 0
     @Published var currentLocation: CLLocation?
     @Published var currentActivity: ActivityType = .cycling
+    var hasRoute: Bool { navigation.processedRoute != nil }
 
     var onRideCompleted: ((RideSummary) -> Void)?
 
@@ -44,12 +51,25 @@ class WorkoutManager: NSObject, ObservableObject {
     let navigation = NavigationTracker()
 
     private let battery = BatteryManager()
-    @Published var isAutoPaused = false
-    private var autoPauseSpeedSamples: [Double] = []
-    private let pauseWindow = 5
-    private let resumeWindow = 3
-    private var resumeCandidateCount = 0
+    @Published var autoPauseState: AutoPauseState = .moving
+    var isAutoPaused: Bool { autoPauseState != .moving }
+
+    // Speed sampling
+    private var slowSampleCount = 0
+    private let slowSamplesForPause = 5
+
+    // Tentative resume buffer
     private var tentativeLocations: [CLLocation] = []
+    private var tentativeDistance: Double = 0
+    private var tentativeStartTime: Date?
+    private var fastSampleCount = 0
+    private let fastSamplesForResume = 5
+    private let minTentativeDuration: TimeInterval = 3.0
+
+    // Gap-safe distance tracking
+    private var lastCommittedLocation: CLLocation?
+    private var skipNextDistanceGap = false
+    
     @Published var movingTime: TimeInterval = 0
 
     // Mirroring: set true after delay post-mirroring, false on error/disconnect.
@@ -104,37 +124,68 @@ class WorkoutManager: NSObject, ObservableObject {
 
         isActive = true
         isPaused = false
-        isAutoPaused = false
+        autoPauseState = .moving
+        slowSampleCount = 0
+        lastCommittedLocation = nil
+        skipNextDistanceGap = false
     }
 
     func processLocation(_ location: CLLocation) {
         DispatchQueue.main.async {
-            if let previous = self.currentLocation {
-                self.totalDistance += location.distance(from: previous)
-            }
             self.currentLocation = location
             self.speed = max(location.speed, 0)
 
-            if !self.isSimulating {
-                self.recordedLocations.append(location)
-                self.pendingRouteLocations.append(location)
+            // Navigation + voice only when a route is loaded
+            if self.hasRoute {
+                if let alert = self.navigation.update(location: location) {
+                    self.handleTurnAlert(alert)
+                }
+                VoiceNavigator.shared.update(
+                    nav: self.navigation,
+                    speed: self.speed,
+                    isActivelyMoving: self.autoPauseState == .moving)
             }
 
-            if let alert = self.navigation.update(location: location) {
-                self.handleTurnAlert(alert)
-            }
+            guard !self.isSimulating else { return }
 
-            VoiceNavigator.shared.update(nav: self.navigation, speed: self.speed)
-
-            if !self.isSimulating {
+            // Battery optimization only with a route (needs turn distances)
+            if self.hasRoute {
                 let mode = self.battery.recommendedMode(
                     distanceToNextTurn: self.navigation.distanceToNextTurn,
                     isOffRoute: self.navigation.isOffRoute,
                     speed: self.speed)
                 self.battery.apply(mode: mode, to: self.locationManager)
-
-                self.updateAutoPause()
             }
+
+            self.updateAutoPause()
+
+            // Recording + distance based on auto-pause state
+            switch self.autoPauseState {
+            case .moving:
+                self.accumulateDistance(location)
+                self.recordedLocations.append(location)
+                self.pendingRouteLocations.append(location)
+
+            case .paused:
+                // No recording, no distance
+                break
+
+            case .tentativeResume:
+                // Stage in buffer — distance tracked internally
+                if let prev = self.tentativeLocations.last {
+                    self.tentativeDistance += location.distance(from: prev)
+                }
+                self.tentativeLocations.append(location)
+            }
+
+            // Battery management
+            let mode = self.battery.recommendedMode(
+                distanceToNextTurn: self.navigation.distanceToNextTurn,
+                isOffRoute: self.navigation.isOffRoute,
+                speed: self.speed)
+            self.battery.apply(mode: mode, to: self.locationManager)
+
+            self.updateAutoPause()
         }
     }
     // END SIM
@@ -176,6 +227,50 @@ class WorkoutManager: NSObject, ObservableObject {
                 print("Route insert error: \(error)")
             }
         }
+    }
+    
+    
+    private func accumulateDistance(_ location: CLLocation) {
+        if skipNextDistanceGap {
+            skipNextDistanceGap = false
+            lastCommittedLocation = location
+            return
+        }
+        if let prev = lastCommittedLocation {
+            totalDistance += location.distance(from: prev)
+        }
+        lastCommittedLocation = location
+    }
+
+    private func commitTentativeBuffer() {
+        // Add only the internal distance of the buffer (no gap bridging)
+        totalDistance += tentativeDistance
+
+        // Move staged locations into the real recording
+        recordedLocations.append(contentsOf: tentativeLocations)
+        pendingRouteLocations.append(contentsOf: tentativeLocations)
+
+        // Retroactively credit the tentative period as moving time
+        if let start = tentativeStartTime {
+            movingTime += Date().timeIntervalSince(start)
+        }
+
+        if let last = tentativeLocations.last {
+            lastCommittedLocation = last
+        }
+
+        clearTentativeBuffer()
+    }
+
+    private func discardTentativeBuffer() {
+        clearTentativeBuffer()
+    }
+
+    private func clearTentativeBuffer() {
+        tentativeLocations = []
+        tentativeDistance = 0
+        tentativeStartTime = nil
+        fastSampleCount = 0
     }
 
     private func startRouteInsertion() {
@@ -241,7 +336,10 @@ class WorkoutManager: NSObject, ObservableObject {
 
         isActive = true
         isPaused = false
-        isAutoPaused = false
+        autoPauseState = .moving
+        slowSampleCount = 0
+        lastCommittedLocation = nil
+        skipNextDistanceGap = false
     }
 
     func pauseSession() {
@@ -257,22 +355,34 @@ class WorkoutManager: NSObject, ObservableObject {
     func pause() {
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
+
+        // If tentative resume was in progress, discard it
+        if autoPauseState == .tentativeResume {
+            discardTentativeBuffer()
+        }
+        autoPauseState = .moving // manual pause resets auto-pause state
         pauseSession()
     }
-
+    
     func resumeSession() {
         session?.resume()
         timerStart = Date()
         startDisplayTimer()
         isPaused = false
         if isAutoPaused {
-            autoPauseSpeedSamples.removeAll()
+            autoPauseState = .moving
+            clearTentativeBuffer()
         }
     }
 
     func resume() {
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
+
+        // Skip the distance gap from pause period
+        skipNextDistanceGap = true
+        slowSampleCount = 0
+        autoPauseState = .moving
         resumeSession()
     }
 
@@ -281,44 +391,54 @@ class WorkoutManager: NSObject, ObservableObject {
         let pauseThreshold = 1.0
         let resumeThreshold = 2.0
 
-        if !isAutoPaused {
-            autoPauseSpeedSamples.append(speedMPH)
-            if autoPauseSpeedSamples.count > pauseWindow {
-                autoPauseSpeedSamples.removeFirst()
+        switch autoPauseState {
+        case .moving:
+            if speedMPH < pauseThreshold {
+                slowSampleCount += 1
+            } else {
+                slowSampleCount = 0
             }
 
-            let allSlow = autoPauseSpeedSamples.count >= pauseWindow &&
-                autoPauseSpeedSamples.allSatisfy { $0 < pauseThreshold }
-
-            if allSlow && !isPaused {
+            if slowSampleCount >= slowSamplesForPause && !isPaused {
+                autoPauseState = .paused
                 pauseSession()
-                isAutoPaused = true
-                resumeCandidateCount = 0
-                tentativeLocations.removeAll()
+                slowSampleCount = 0
             }
-        } else {
+
+        case .paused:
             if speedMPH >= resumeThreshold {
-                resumeCandidateCount += 1
+                // Don't resume HK session yet — just start staging
+                autoPauseState = .tentativeResume
+                tentativeStartTime = Date()
+                tentativeLocations = []
+                tentativeDistance = 0
+                fastSampleCount = 1
+
+                // Seed buffer with current location
                 if let loc = currentLocation {
                     tentativeLocations.append(loc)
-                    pendingRouteLocations.append(loc)
                 }
-                if resumeCandidateCount >= resumeWindow {
-                    recordedLocations.append(contentsOf: tentativeLocations)
-                    tentativeLocations.removeAll()
-                    autoPauseSpeedSamples.removeAll()
+            }
+
+        case .tentativeResume:
+            if speedMPH >= resumeThreshold {
+                fastSampleCount += 1
+
+                let elapsed = tentativeStartTime
+                    .map { Date().timeIntervalSince($0) } ?? 0
+
+                if fastSampleCount >= fastSamplesForResume,
+                   elapsed >= minTentativeDuration {
+                    // Confirmed real movement — commit and go live
+                    commitTentativeBuffer()
                     resumeSession()
-                    isAutoPaused = false
+                    autoPauseState = .moving
                 }
             } else {
-                if !tentativeLocations.isEmpty {
-                    let discardCount = tentativeLocations.count
-                    if pendingRouteLocations.count >= discardCount {
-                        pendingRouteLocations.removeLast(discardCount)
-                    }
-                    tentativeLocations.removeAll()
-                }
-                resumeCandidateCount = 0
+                // False alarm — discard buffer, stay paused
+                discardTentativeBuffer()
+                autoPauseState = .paused
+                // HK session was never resumed, so no need to re-pause it
             }
         }
     }
@@ -339,6 +459,10 @@ class WorkoutManager: NSObject, ObservableObject {
         stopDisplayTimer()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
+        
+        if autoPauseState == .tentativeResume {
+            commitTentativeBuffer()
+        }
 
         // Kill voice and navigation IMMEDIATELY
         VoiceNavigator.shared.reset()
@@ -419,13 +543,14 @@ class WorkoutManager: NSObject, ObservableObject {
             self.isActive = false
             self.isPaused = false
             self.isSimulating = false
-            self.isAutoPaused = false
             self.isMirroringReady = false
             self.recordedLocations = []
             self.pendingRouteLocations = []
-            self.tentativeLocations = []
-            self.resumeCandidateCount = 0
-            self.autoPauseSpeedSamples = []
+            self.autoPauseState = .moving
+            self.slowSampleCount = 0
+            self.lastCommittedLocation = nil
+            self.skipNextDistanceGap = false
+            self.clearTentativeBuffer()
             self.speed = 0
             self.totalDistance = 0
             self.elapsedTime = 0
@@ -461,6 +586,11 @@ class WorkoutManager: NSObject, ObservableObject {
     func loadRoute(_ route: Route) {
         let processed = RouteProcessor.process(route)
         navigation.load(processed)
+
+        // Anchor to current position so we don't start at segment 0
+        if let loc = currentLocation {
+            navigation.anchorToLocation(loc)
+        }
     }
 
     private func handleTurnAlert(_ alert: NavigationTracker.TurnAlert) {
@@ -488,11 +618,34 @@ class WorkoutManager: NSObject, ObservableObject {
         let avgSpeed = elapsedTime > 0 ? totalDistance / elapsedTime : 0
         var elevGain: Double = 0
         var elevLoss: Double = 0
-        if recordedLocations.count > 0 {
+        if recordedLocations.count > 1 {
+            // Minimum altitude change (meters) to count — filters GPS noise.
+            // CLLocation vertical accuracy is typically ±5-10m.
+            let minDelta: Double = 4.0
+
+            // Use a rolling reference altitude that only advances when
+            // the cumulative change exceeds the threshold. This avoids
+            // both spike noise and the problem of many small real changes
+            // getting individually filtered out.
+            var refAltitude = recordedLocations[0].altitude
+
             for i in 1..<recordedLocations.count {
-                let delta = recordedLocations[i].altitude - recordedLocations[i - 1].altitude
-                if delta > 0 { elevGain += delta }
-                else { elevLoss -= delta }
+                let alt = recordedLocations[i].altitude
+
+                // Skip points with invalid/unknown altitude
+                guard recordedLocations[i].verticalAccuracy >= 0 else { continue }
+
+                let delta = alt - refAltitude
+                if delta > minDelta {
+                    elevGain += delta
+                    refAltitude = alt
+                } else if delta < -minDelta {
+                    elevLoss -= delta
+                    refAltitude = alt
+                }
+                // If within ±minDelta, don't move the reference —
+                // lets real gradual climbs accumulate until they
+                // cross the threshold.
             }
         }
 

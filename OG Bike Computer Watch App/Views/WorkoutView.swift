@@ -60,6 +60,15 @@ struct WorkoutView<ExtraTab: View>: View {
                         .allowsHitTesting(false)
                 }
             }
+            .onChange(of: workout.hasRoute) { _, hasRoute in
+                    if hasRoute && tab == 3 {
+                        // Loaded a route mid-ride — switch to map
+                        withAnimation { tab = 2 }
+                    } else if !hasRoute {
+                        // Cleared route — go to metrics
+                        withAnimation { tab = 3 }
+                    }
+                }
             .tag(2)
 
             if let extraTab {

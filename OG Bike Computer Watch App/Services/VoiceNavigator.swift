@@ -16,17 +16,20 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     private let alertDistances: [Double] = [
         402.336,  // ¼ mile
-        30.48,    // 100 feet
+        60.96,    // 200 feet
         0         // at the turn
     ]
+    private let groupTurnThreshold: Double = 150 // meters between turns to group them
 
     private let atTurnThreshold: Double = 20
     private let cooldown: TimeInterval = 6
     private let minTimeBeforeTurn: TimeInterval = 4
 
     // State
+    private var isActivelyMoving = true
     private var currentTurnIndex: Int?
     private var firedTurnAlerts: Set<Int> = []
+    private var groupedApproachTurnIndices: Set<Int> = []
 
     private var trackingFinish = false
     private var firedFinishAlerts: Set<Int> = []
@@ -59,6 +62,7 @@ class VoiceNavigator: NSObject, ObservableObject {
 
         currentTurnIndex = nil
         firedTurnAlerts.removeAll()
+        groupedApproachTurnIndices.removeAll()
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
@@ -72,6 +76,19 @@ class VoiceNavigator: NSObject, ObservableObject {
         // Fresh synthesizer for next ride
         synthesizer = AVSpeechSynthesizer()
         synthesizer.delegate = self
+    }
+    
+    func resetForRouteSwap() {
+        currentTurnIndex = nil
+        firedTurnAlerts.removeAll()
+        groupedApproachTurnIndices.removeAll()
+        trackingFinish = false
+        firedFinishAlerts.removeAll()
+        announcedHalfway = false
+        announcedArrival = false
+        announcedOffRoute = false
+        wasOffRoute = false
+        lastAnnouncementTime = .distantPast
     }
 
     func configureAudioSession() {
@@ -88,9 +105,11 @@ class VoiceNavigator: NSObject, ObservableObject {
         isStopped = false
     }
 
-    func update(nav: NavigationTracker, speed: Double) {
+    func update(nav: NavigationTracker, speed: Double, isActivelyMoving: Bool = true) {
         guard isEnabled, !isStopped else { return }
         guard let route = nav.processedRoute else { return }
+
+        self.isActivelyMoving = isActivelyMoving
 
         if nav.isRouteComplete {
             if !announcedArrival {
@@ -119,7 +138,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                 let dist = nav.distanceToNextTurn
                 let item = DispatchWorkItem { [weak self] in
                     guard let self, !self.isStopped else { return }
-                    self.speak("\(self.formatVoiceDistance(dist)), \(turn.direction.voiceLabel).")
+                    self.speak("in \(self.formatVoiceDistance(dist)), \(turn.direction.voiceLabel).")
                 }
                 pendingWorkItem?.cancel()
                 pendingWorkItem = item
@@ -132,24 +151,51 @@ class VoiceNavigator: NSObject, ObservableObject {
             let passedTurn = currentTurnIndex != nil
             currentTurnIndex = turn.index
             firedTurnAlerts.removeAll()
+            groupedApproachTurnIndices.remove(turn.index)
             trackingFinish = false
             firedFinishAlerts.removeAll()
 
             if passedTurn {
-                let dist = nav.distanceToNextTurn
-                speak("\(formatVoiceDistance(dist)), \(turn.direction.voiceLabel).")
-                markPassedThresholds(distance: dist, into: &firedTurnAlerts)
+                if isActivelyMoving {
+                    let dist = nav.distanceToNextTurn
+                    let followingTurn = nav.processedRoute
+                        .flatMap { nearbyFollowingTurn(after: turn, in: $0) }
+
+                    if let ft = followingTurn {
+                        groupedApproachTurnIndices.insert(ft.index)
+                        speak("in \(formatVoiceDistance(dist)), \(turn.direction.voiceLabel) then \(ft.direction.voiceLabel).")
+                    } else {
+                        speak("in \(formatVoiceDistance(dist)), \(turn.direction.voiceLabel).")
+                    }
+                    markPassedThresholds(distance: dist, into: &firedTurnAlerts)
+                }
                 return
             }
         }
 
         if let turn = nav.nextTurn {
+            // Check if this turn's approach was already covered
+            // as part of a grouped announcement from the previous turn
+            let approachSuppressed = groupedApproachTurnIndices.contains(turn.index)
+
+            // Build approach text — include following turn if nearby
+            let followingTurn = nav.processedRoute
+                .flatMap { nearbyFollowingTurn(after: turn, in: $0) }
+
             if fireDistanceAlert(
                 distance: nav.distanceToNextTurn,
                 speed: speed,
                 fired: &firedTurnAlerts,
+                suppressApproach: approachSuppressed,
                 atZeroText: "\(turn.direction.voiceLabel.localizedCapitalized).",
-                approachText: { d in "in \(self.formatVoiceDistance(d)), \(turn.direction.voiceLabel)." }
+                approachText: { d in
+                    if let ft = followingTurn {
+                        // "In 200 feet, turn right then left."
+                        self.groupedApproachTurnIndices.insert(ft.index)
+                        return "in \(self.formatVoiceDistance(d)), \(turn.direction.voiceLabel) then \(ft.direction.voiceLabel)."
+                    }
+                    return "in \(self.formatVoiceDistance(d)), \(turn.direction.voiceLabel)."
+                }
             ) { return }
 
             let isLastTurn = route.turnPoints.last?.index == turn.index
@@ -158,7 +204,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                     trackingFinish = true
                     firedFinishAlerts.removeAll()
                     let remaining = nav.distanceRemaining
-                    if remaining > atTurnThreshold {
+                    if remaining > atTurnThreshold, isActivelyMoving {
                         speak("Last turn complete. \(formatVoiceDistance(remaining)) to finish.")
                         markPassedThresholds(distance: remaining, into: &firedFinishAlerts)
                         return
@@ -172,8 +218,10 @@ class VoiceNavigator: NSObject, ObservableObject {
                 trackingFinish = true
                 firedFinishAlerts.removeAll()
                 let remaining = nav.distanceRemaining
-                speak("Last turn complete. \(formatVoiceDistance(remaining)) to finish.")
-                markPassedThresholds(distance: remaining, into: &firedFinishAlerts)
+                if isActivelyMoving {
+                    speak("Last turn complete. \(formatVoiceDistance(remaining)) to finish.")
+                    markPassedThresholds(distance: remaining, into: &firedFinishAlerts)
+                }
                 return
             }
 
@@ -190,18 +238,33 @@ class VoiceNavigator: NSObject, ObservableObject {
             let half = route.totalDistance / 2
             if nav.distanceAlongRoute >= half {
                 announcedHalfway = true
-                if canSpeak {
-                    speak("Halfway point. \(formatVoiceDistance(route.distanceRemaining)) to go.")
+                if isActivelyMoving, canSpeak {
+                    speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) to go.")
                 }
                 return
             }
         }
     }
+    
+    // Returns the turn immediately after `turn` if it's within
+    // groupTurnThreshold meters, otherwise nil.
+    private func nearbyFollowingTurn(
+        after turn: TurnPoint,
+        in route: ProcessedRoute
+    ) -> TurnPoint? {
+        guard let idx = route.turnPoints.firstIndex(where: { $0.index == turn.index }),
+              idx + 1 < route.turnPoints.count else { return nil }
+        let next = route.turnPoints[idx + 1]
+        let gap = next.distanceFromStart - turn.distanceFromStart
+        return gap <= groupTurnThreshold ? next : nil
+    }
 
+    
     private func fireDistanceAlert(
         distance: Double,
         speed: Double,
         fired: inout Set<Int>,
+        suppressApproach: Bool = false,
         atZeroText: String,
         approachText: (Double) -> String
     ) -> Bool {
@@ -211,6 +274,19 @@ class VoiceNavigator: NSObject, ObservableObject {
             let isAtTurn = alertDist == 0
             let threshold = isAtTurn ? atTurnThreshold : alertDist
             guard distance <= threshold else { continue }
+
+            // Suppress approach prompts when not actively moving
+            if !isAtTurn && !isActivelyMoving {
+                fired.insert(i)
+                continue
+            }
+
+            // Suppress approach prompts for turns already grouped
+            // with a prior turn's announcement (at-turn still fires)
+            if !isAtTurn && suppressApproach {
+                fired.insert(i)
+                continue
+            }
 
             if !isAtTurn && !canSpeak { continue }
 

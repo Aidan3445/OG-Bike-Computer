@@ -22,7 +22,9 @@ struct ContentView: View {
                 if workout.isSimulating {
                     SimPlaybackOverlay(simulator: simulator, workout: workout)
                 } else {
-                    WorkoutView(workout: workout, onStop: handleStop)
+                    WorkoutView(workout: workout, onStop: handleStop) {
+                        MidRideRouteList(store: store, workout: workout)
+                    }
                 }
             } else {
                 RouteList(store: store, workout: workout, simulator: simulator)

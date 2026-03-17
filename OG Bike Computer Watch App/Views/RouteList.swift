@@ -11,7 +11,7 @@ struct RouteList: View {
     @ObservedObject var store: RouteStore
     @ObservedObject var workout: WorkoutManager
     @ObservedObject var simulator: RideSimulator
-    
+
     var body: some View {
         NavigationStack {
             Group {
@@ -26,10 +26,27 @@ struct RouteList: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
+
+                        Divider().padding(.vertical, 4)
+
+                        NavigationLink {
+                            StartRideView(route: nil, workout: workout)
+                        } label: {
+                            Label("Free Ride", systemImage: "record.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .tint(.orange)
                     }
                     .padding()
                 } else {
                     List {
+                        NavigationLink {
+                            StartRideView(route: nil, workout: workout)
+                        } label: {
+                            Label("Free Ride", systemImage: "record.circle")
+                                .foregroundStyle(.orange)
+                        }
+
                         ForEach(store.routes) { route in
                             NavigationLink(value: route) {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -46,7 +63,7 @@ struct RouteList: View {
                                 store.delete(store.routes[i])
                             }
                         }
-                        
+
                         NavigationLink {
                             SimulationView(store: store, workout: workout, simulator: simulator)
                         } label: {

@@ -84,16 +84,21 @@ struct RouteMapView: View {
                             }
                         } label: {
                             Image(systemName: showFullRoute ? "scope" : "map")
-                                .font(.system(size: 13, weight: .semibold))
-                                .padding(6)
+                                .font(.system(size: 16, weight: .bold))
+                                .frame(width: 36, height: 36)
                                 .background(.ultraThinMaterial)
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Rectangle())
+                        .opacity(zoomIndex < zoomLevels.count - 1 ? 1 : 0.3)
 
-                        Text(cardinalDirection)
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.7))
+                        if workout.hasRoute {
+                            Text(cardinalDirection)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
                     }
                 }
                 .padding(.horizontal, 4)
@@ -115,6 +120,8 @@ struct RouteMapView: View {
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Rectangle())
                         .opacity(zoomIndex < zoomLevels.count - 1 ? 1 : 0.3)
 
                         Spacer()
@@ -131,10 +138,10 @@ struct RouteMapView: View {
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Rectangle())
                         .opacity(zoomIndex > 0 ? 1 : 0.3)
                     }
-                    .padding(.horizontal, 4)
-                    .padding(.bottom, 0)
                 }
             }
         }
@@ -258,6 +265,67 @@ private struct BreadcrumbCanvas: View {
             Canvas { context, size in
                 guard let processed = workout.navigation.processedRoute,
                       let location = workout.currentLocation else { return }
+                
+                // Free ride: draw rider trail only
+                if workout.navigation.processedRoute == nil {
+                    let riderScreenX = size.width / 2
+                    let riderScreenY = size.height * 0.75
+                    let metersPerPx = min(size.width, size.height) / viewDistance
+
+                    let center = location.coordinate
+                    let cosLat = cos(center.latitude * .pi / 180)
+
+                    let bearing: Double
+                    if useCompassHeading, workout.heading > 0 {
+                        bearing = workout.heading
+                    } else if location.course >= 0 {
+                        bearing = location.course
+                    } else {
+                        bearing = 0
+                    }
+                    let rotRad = bearing * .pi / 180
+
+                    func toScreen(_ coord: CLLocationCoordinate2D) -> CGPoint {
+                        let dx = (coord.longitude - center.longitude) * cosLat * 111_320
+                        let dy = (coord.latitude - center.latitude) * 111_320
+                        let rx = dx * cos(rotRad) - dy * sin(rotRad)
+                        let ry = dx * sin(rotRad) + dy * cos(rotRad)
+                        return CGPoint(
+                            x: riderScreenX + rx * metersPerPx,
+                            y: riderScreenY - ry * metersPerPx)
+                    }
+
+                    // Draw recorded trail
+                    let trail = workout.recordedLocations
+                    if trail.count >= 2 {
+                        // Only render points within view distance
+                        let viewMeters = viewDistance * 2
+                        var path = Path()
+                        var started = false
+                        for loc in trail {
+                            let dist = location.distance(from: loc)
+                            guard dist < viewMeters else { continue }
+                            let pt = toScreen(loc.coordinate)
+                            if !started {
+                                path.move(to: pt)
+                                started = true
+                            } else {
+                                path.addLine(to: pt)
+                            }
+                        }
+                        context.stroke(path, with: .color(.green.opacity(0.6)),
+                                       style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    }
+
+                    // Rider dot
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: riderScreenX - 8, y: riderScreenY - 8, width: 16, height: 16)),
+                        with: .color(.white))
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: riderScreenX - 6, y: riderScreenY - 6, width: 12, height: 12)),
+                        with: .color(.blue))
+                    return
+                }
 
                 let points = processed.points
                 let segIdx = workout.navigation.currentSegmentIndex
@@ -345,6 +413,32 @@ private struct BreadcrumbCanvas: View {
                 let style = StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round)
                 context.stroke(behindPath, with: .color(.green.opacity(0.4)), style: style)
                 context.stroke(aheadPath, with: .color(.white), style: style)
+                
+                if workout.navigation.isOffRoute {
+                    let trail = workout.recordedLocations
+                    if trail.count >= 2 {
+                        let viewMeters = viewDistance * 2
+                        var trailPath = Path()
+                        var started = false
+                        var lastPt = CGPoint.zero
+                        for loc in trail {
+                            let dist = location.distance(from: loc)
+                            guard dist < viewMeters else { continue }
+                            let pt = toScreen(loc.coordinate)
+                            // Skip points too close on screen
+                            if started && abs(pt.x - lastPt.x) + abs(pt.y - lastPt.y) < 2 { continue }
+                            if !started {
+                                trailPath.move(to: pt)
+                                started = true
+                            } else {
+                                trailPath.addLine(to: pt)
+                            }
+                            lastPt = pt
+                        }
+                        context.stroke(trailPath, with: .color(.orange.opacity(0.7)),
+                                       style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    }
+                }
 
                 // Off-route: dashed red line from rider to nearest route point
                 if workout.navigation.isOffRoute {
