@@ -105,13 +105,20 @@ struct RideDetailView: View {
                         .foregroundStyle(.secondary)
 
                     if expanded {
-                        HStack(spacing: 20) {
-                            StatItem(label: "Distance", value: formatDistance(ride.distance))
-                            StatItem(label: "Time", value: formatTime(ride.movingTime))
-                            StatItem(label: "Speed", value: formatSpeed(ride.avgSpeed))
+                        VStack(spacing: 6) {
+                            HStack(spacing: 0) {
+                                StatItem(label: "Distance", value: formatDistance(ride.distance))
+                                Spacer()
+                                StatItem(label: "Time", value: formatTime(ride.movingTime))
+                                Spacer()
+                                StatItem(label: "Speed", value: formatSpeed(ride.avgSpeed))
+                            }
                             if ride.elevationGain > 0 {
-                                StatItem(label: "Gain", value: formatElevation(ride.elevationGain))
-                                StatItem(label: "Gain", value: formatElevation(ride.elevationLoss))
+                                HStack(spacing: 0) {
+                                    StatItem(label: "Gain", value: formatElevation(ride.elevationGain))
+                                    Spacer()
+                                    StatItem(label: "Loss", value: formatElevation(ride.elevationLoss))
+                                }
                             }
                         }
                         .transition(.opacity.combined(with: .move(edge: .trailing)))

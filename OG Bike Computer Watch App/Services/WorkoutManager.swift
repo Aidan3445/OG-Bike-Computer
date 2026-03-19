@@ -617,7 +617,22 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func exportAndTransferRide() {
-        let rideName = navigation.processedRoute?.name ?? "Ride"
+        let hour = Calendar.current.component(.hour, from: Date())
+        let timeOfDay: String
+        switch hour {
+        case 5..<12: timeOfDay = "Morning Ride"
+        case 12..<17: timeOfDay = "Afternoon Ride"
+        case 17..<21: timeOfDay = "Evening Ride"
+        default: timeOfDay = "Night Ride"
+        }
+        
+        let rideName: String
+        if let routeName = navigation.processedRoute?.name {
+            rideName = "\(routeName) - \(timeOfDay)"
+        } else {
+            rideName = timeOfDay
+        }   
+
         let activity = currentActivity
 
         let avgSpeed = elapsedTime > 0 ? totalDistance / elapsedTime : 0

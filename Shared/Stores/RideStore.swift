@@ -48,6 +48,18 @@ class RideStore: ObservableObject {
         logger.log("[RideStore] deleted: \(ride.name)")
     }
 
+    func rename(_ ride: RideSummary, to newName: String) {
+        guard let index = rides.firstIndex(where: { $0.id == ride.id }) else { return }
+        var updated = ride
+        updated.name = newName
+        let fileURL = directory.appendingPathComponent("\(ride.id.uuidString).json")
+        if let data = try? JSONEncoder().encode(updated) {
+            try? data.write(to: fileURL)
+        }
+        rides[index] = updated
+        logger.log("[RideStore] renamed: \(newName)")
+    }
+
     var storageSize: Int64 {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }

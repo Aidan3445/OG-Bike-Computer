@@ -1,4 +1,11 @@
-mport Foundation
+//
+//  DateSection.swift
+//  OG Bike Computer
+//
+//  Created by Aidan Weinberg on 3/19/26.
+//
+
+import Foundation
 
 enum DateSection: Hashable {
     case today

@@ -9,7 +9,10 @@ import SwiftUI
 
 struct RideRow: View {
     let ride: RideSummary
-    let rideStore: RideStore
+    let onRename: (String) -> Void
+
+    @State private var showRenameSheet = false
+    @State private var editedName = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -46,6 +49,24 @@ struct RideRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+        .swipeActions(edge: .leading) {
+            Button {
+                editedName = ride.name
+                showRenameSheet = true
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            .tint(.orange)
+        }
+        .alert("Rename Ride", isPresented: $showRenameSheet) {
+            TextField("Ride name", text: $editedName)
+            Button("Save") {
+                let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    onRename(trimmed)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 }
-
