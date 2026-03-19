@@ -205,17 +205,35 @@ private struct FullRouteCanvas: View {
             if let loc = workout.currentLocation {
                 let pos = project(loc.coordinate, transform: transform)
 
-                // Off-route: draw dashed red line from rider to nearest route point
                 if workout.navigation.isOffRoute {
-                    let nearIdx = workout.navigation.currentSegmentIndex
-                    let nearPt = project(points[min(nearIdx, points.count - 1)].coordinate, transform: transform)
-                    var returnLine = Path()
-                    returnLine.move(to: pos)
-                    returnLine.addLine(to: nearPt)
-                    context.stroke(returnLine, with: .color(.red),
-                                   style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 4]))
+                    // Draw dashed lines to all rejoin candidates
+                    let candidates = workout.navigation.rejoinCandidates
+                    if candidates.isEmpty {
+                        // Fallback: single line to nearest
+                        let nearIdx = workout.navigation.currentSegmentIndex
+                        let nearPt = project(points[min(nearIdx, points.count - 1)].coordinate, transform: transform)
+                        var returnLine = Path()
+                        returnLine.move(to: pos)
+                        returnLine.addLine(to: nearPt)
+                        context.stroke(returnLine, with: .color(.red),
+                                       style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 4]))
+                    } else {
+                        for (i, candidate) in candidates.enumerated() {
+                            let candidatePt = project(candidate.coordinate, transform: transform)
+                            var returnLine = Path()
+                            returnLine.move(to: pos)
+                            returnLine.addLine(to: candidatePt)
+                            let opacity = i == 0 ? 1.0 : 0.6
+                            context.stroke(returnLine, with: .color(.red.opacity(opacity)),
+                                           style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 4]))
 
-                    // Red dot for rider when off-route
+                            // Small circle at rejoin point
+                            context.fill(
+                                Path(ellipseIn: CGRect(x: candidatePt.x - 3, y: candidatePt.y - 3, width: 6, height: 6)),
+                                with: .color(.red.opacity(0.4 * opacity)))
+                        }
+                    }
+
                     context.fill(Path(ellipseIn: CGRect(x: pos.x - 5, y: pos.y - 5, width: 10, height: 10)), with: .color(.red.opacity(0.3)))
                     context.fill(Path(ellipseIn: CGRect(x: pos.x - 3.5, y: pos.y - 3.5, width: 7, height: 7)), with: .color(.red))
                 } else {
@@ -265,7 +283,7 @@ private struct BreadcrumbCanvas: View {
             Canvas { context, size in
                 guard let processed = workout.navigation.processedRoute,
                       let location = workout.currentLocation else { return }
-                
+
                 // Free ride: draw rider trail only
                 if workout.navigation.processedRoute == nil {
                     let riderScreenX = size.width / 2
@@ -295,10 +313,8 @@ private struct BreadcrumbCanvas: View {
                             y: riderScreenY - ry * metersPerPx)
                     }
 
-                    // Draw recorded trail
                     let trail = workout.recordedLocations
                     if trail.count >= 2 {
-                        // Only render points within view distance
                         let viewMeters = viewDistance * 2
                         var path = Path()
                         var started = false
@@ -317,7 +333,6 @@ private struct BreadcrumbCanvas: View {
                                        style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
                     }
 
-                    // Rider dot
                     context.fill(
                         Path(ellipseIn: CGRect(x: riderScreenX - 8, y: riderScreenY - 8, width: 16, height: 16)),
                         with: .color(.white))
@@ -335,10 +350,8 @@ private struct BreadcrumbCanvas: View {
 
                 let bearing: Double
                 if useCompassHeading, workout.heading > 0 {
-                    // Compass heading — map aligns with physical watch orientation
                     bearing = workout.heading
                 } else if workout.speed > 1.0, location.course >= 0 {
-                    // GPS course fallback (used when luminance reduced / no compass)
                     bearing = location.course
                 } else {
                     bearing = processed.points[segIdx].bearingToNext
@@ -357,7 +370,6 @@ private struct BreadcrumbCanvas: View {
                 let cosLat = cos(center.latitude * .pi / 180)
                 let rotRad = bearing * .pi / 180
 
-                // Helper to project a coordinate to screen space
                 func toScreen(_ coord: CLLocationCoordinate2D) -> CGPoint {
                     let dx = (coord.longitude - center.longitude) * cosLat * 111_320
                     let dy = (coord.latitude - center.latitude) * 111_320
@@ -368,6 +380,49 @@ private struct BreadcrumbCanvas: View {
                         y: riderScreenY - ry * metersPerPx)
                 }
 
+                // Feature 2: Draw all visible route sections (distant sections first, dimmer)
+                let screenW = Double(size.width)
+                let screenH = Double(size.height)
+                let margin: Double = 20
+                let visStride = max(1, points.count / 800)
+
+                var distantPath = Path()
+                var distantStarted = false
+
+                for i in Swift.stride(from: 0, to: points.count, by: visStride) {
+                    let point = points[i]
+
+                    // Skip points already in the primary window
+                    if point.distanceFromStart >= minDist - 100 && point.distanceFromStart <= maxDist + 100 {
+                        if distantStarted {
+                            distantStarted = false
+                        }
+                        continue
+                    }
+
+                    let pt = toScreen(point.coordinate)
+
+                    // Check if point is on screen
+                    guard pt.x >= -margin && pt.x <= screenW + margin &&
+                          pt.y >= -margin && pt.y <= screenH + margin else {
+                        if distantStarted {
+                            distantStarted = false
+                        }
+                        continue
+                    }
+
+                    if !distantStarted {
+                        distantPath.move(to: pt)
+                        distantStarted = true
+                    } else {
+                        distantPath.addLine(to: pt)
+                    }
+                }
+
+                context.stroke(distantPath, with: .color(.gray.opacity(0.4)),
+                               style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+
+                // Primary behind/ahead rendering
                 var behindPath = Path()
                 var aheadPath = Path()
                 var startedBehind = false
@@ -413,7 +468,7 @@ private struct BreadcrumbCanvas: View {
                 let style = StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round)
                 context.stroke(behindPath, with: .color(.green.opacity(0.4)), style: style)
                 context.stroke(aheadPath, with: .color(.white), style: style)
-                
+
                 if workout.navigation.isOffRoute {
                     let trail = workout.recordedLocations
                     if trail.count >= 2 {
@@ -425,7 +480,6 @@ private struct BreadcrumbCanvas: View {
                             let dist = location.distance(from: loc)
                             guard dist < viewMeters else { continue }
                             let pt = toScreen(loc.coordinate)
-                            // Skip points too close on screen
                             if started && abs(pt.x - lastPt.x) + abs(pt.y - lastPt.y) < 2 { continue }
                             if !started {
                                 trailPath.move(to: pt)
@@ -440,21 +494,43 @@ private struct BreadcrumbCanvas: View {
                     }
                 }
 
-                // Off-route: dashed red line from rider to nearest route point
+                // Off-route: dashed red lines to rejoin candidates
                 if workout.navigation.isOffRoute {
-                    let nearestCoord = points[min(segIdx, points.count - 1)].coordinate
-                    let nearestScreen = toScreen(nearestCoord)
+                    let candidates = workout.navigation.rejoinCandidates
+                    if candidates.isEmpty {
+                        // Fallback: single line to nearest route point
+                        let nearestCoord = points[min(segIdx, points.count - 1)].coordinate
+                        let nearestScreen = toScreen(nearestCoord)
 
-                    var returnLine = Path()
-                    returnLine.move(to: CGPoint(x: riderScreenX, y: riderScreenY))
-                    returnLine.addLine(to: nearestScreen)
-                    context.stroke(returnLine, with: .color(.red),
-                                   style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [8, 5]))
+                        var returnLine = Path()
+                        returnLine.move(to: CGPoint(x: riderScreenX, y: riderScreenY))
+                        returnLine.addLine(to: nearestScreen)
+                        context.stroke(returnLine, with: .color(.red),
+                                       style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [8, 5]))
 
-                    // Small red circle at the route reconnect point
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: nearestScreen.x - 4, y: nearestScreen.y - 4, width: 8, height: 8)),
-                        with: .color(.red.opacity(0.5)))
+                        context.fill(
+                            Path(ellipseIn: CGRect(x: nearestScreen.x - 4, y: nearestScreen.y - 4, width: 8, height: 8)),
+                            with: .color(.red.opacity(0.5)))
+                    } else {
+                        for (i, candidate) in candidates.enumerated() {
+                            let candidateScreen = toScreen(candidate.coordinate)
+                            var returnLine = Path()
+                            returnLine.move(to: CGPoint(x: riderScreenX, y: riderScreenY))
+                            returnLine.addLine(to: candidateScreen)
+                            let opacity = i == 0 ? 1.0 : 0.5
+                            let lineWidth: CGFloat = i == 0 ? 3 : 2
+                            context.stroke(returnLine, with: .color(.red.opacity(opacity)),
+                                           style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, dash: [8, 5]))
+
+                            let dotSize: CGFloat = i == 0 ? 8 : 6
+                            context.fill(
+                                Path(ellipseIn: CGRect(
+                                    x: candidateScreen.x - dotSize / 2,
+                                    y: candidateScreen.y - dotSize / 2,
+                                    width: dotSize, height: dotSize)),
+                                with: .color(.red.opacity(0.5 * opacity)))
+                        }
+                    }
 
                     // Rider dot — red when off-route
                     context.fill(

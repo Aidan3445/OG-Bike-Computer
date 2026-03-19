@@ -60,6 +60,41 @@ struct WorkoutView<ExtraTab: View>: View {
                         .allowsHitTesting(false)
                 }
             }
+            .overlay(alignment: .bottom) {
+                if workout.navigation.showReversePrompt {
+                    VStack(spacing: 6) {
+                        Text("Heading back?")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("Reverse remaining route?")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Button {
+                                workout.navigation.reverseRemainingRoute()
+                            } label: {
+                                Text("Reverse")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .tint(.blue)
+
+                            Button {
+                                workout.navigation.dismissReversePrompt()
+                            } label: {
+                                Text("Dismiss")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .tint(.gray)
+                        }
+                    }
+                    .padding(10)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 4)
+                }
+            }
             .onChange(of: workout.hasRoute) { _, hasRoute in
                     if hasRoute && tab == 3 {
                         // Loaded a route mid-ride — switch to map

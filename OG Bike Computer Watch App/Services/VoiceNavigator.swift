@@ -38,6 +38,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var announcedArrival = false
     private var announcedOffRoute = false
     private var wasOffRoute = false
+    private var announcedReversePrompt = false
     private var lastAnnouncementTime: Date = .distantPast
 
     // Prevents any speech after stop
@@ -69,6 +70,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         announcedArrival = false
         announcedOffRoute = false
         wasOffRoute = false
+        announcedReversePrompt = false
         lastAnnouncementTime = .distantPast
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -88,6 +90,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         announcedArrival = false
         announcedOffRoute = false
         wasOffRoute = false
+        announcedReversePrompt = false
         lastAnnouncementTime = .distantPast
     }
 
@@ -145,6 +148,15 @@ class VoiceNavigator: NSObject, ObservableObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: item)
             }
             return
+        }
+
+        // Reverse prompt voice cue
+        if nav.showReversePrompt && !announcedReversePrompt {
+            announcedReversePrompt = true
+            speak("It looks like you're heading back. Check your watch to reverse the route.")
+            return
+        } else if !nav.showReversePrompt {
+            announcedReversePrompt = false
         }
 
         if let turn = nav.nextTurn, turn.index != currentTurnIndex {
