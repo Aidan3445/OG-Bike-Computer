@@ -28,7 +28,7 @@ struct ConnectionStatusButton: View {
                 connectivity: connectivity,
                 routeStore: routeStore
             )
-            .presentationDetents([.height(180)])
+            .presentationDetents([.height(240)])
             .presentationDragIndicator(.visible)
         }
     }
@@ -85,11 +85,23 @@ private struct ConnectionDetailSheet: View {
 
             if routeStore.storageSize > 0 {
                 HStack {
-                    Label("Local storage", systemImage: "internaldrive")
+                    Label("iPhone storage", systemImage: "iphone")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Text(formattedStorageSize(routeStore.storageSize))
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                }
+            }
+
+            if connectivity.watchStorageSize > 0 {
+                HStack {
+                    Label("Watch storage", systemImage: "applewatch")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(formattedStorageSize(connectivity.watchStorageSize))
                         .font(.subheadline.weight(.semibold))
                         .monospacedDigit()
                 }
