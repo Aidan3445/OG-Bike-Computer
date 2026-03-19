@@ -102,6 +102,12 @@ class RideSimulator: ObservableObject {
         currentPointIndex += 1
         progress = Double(currentPointIndex) / Double(track.locations.count)
 
+        if workout.navigation.showReversePrompt {
+            pause()
+            print("[Sim] Paused — reverse prompt")
+            return
+        }
+
         // Compute delay to next point
         if currentPointIndex < track.locations.count {
             let currentTS = track.locations[i].timestamp

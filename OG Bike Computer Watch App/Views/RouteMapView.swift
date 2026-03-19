@@ -386,17 +386,18 @@ private struct BreadcrumbCanvas: View {
                 let margin: Double = 20
                 let visStride = max(1, points.count / 800)
 
-                var distantPath = Path()
-                var distantStarted = false
+                var distantGrayPath = Path()
+                var distantGrayStarted = false
+                var distantGreenPath = Path()
+                var distantGreenStarted = false
 
                 for i in Swift.stride(from: 0, to: points.count, by: visStride) {
                     let point = points[i]
 
                     // Skip points already in the primary window
                     if point.distanceFromStart >= minDist - 100 && point.distanceFromStart <= maxDist + 100 {
-                        if distantStarted {
-                            distantStarted = false
-                        }
+                        if distantGrayStarted { distantGrayStarted = false }
+                        if distantGreenStarted { distantGreenStarted = false }
                         continue
                     }
 
@@ -405,21 +406,35 @@ private struct BreadcrumbCanvas: View {
                     // Check if point is on screen
                     guard pt.x >= -margin && pt.x <= screenW + margin &&
                           pt.y >= -margin && pt.y <= screenH + margin else {
-                        if distantStarted {
-                            distantStarted = false
-                        }
+                        if distantGrayStarted { distantGrayStarted = false }
+                        if distantGreenStarted { distantGreenStarted = false }
                         continue
                     }
 
-                    if !distantStarted {
-                        distantPath.move(to: pt)
-                        distantStarted = true
+                    if point.distanceFromStart <= currentDist {
+                        // Completed portion — green
+                        if distantGrayStarted { distantGrayStarted = false }
+                        if !distantGreenStarted {
+                            distantGreenPath.move(to: pt)
+                            distantGreenStarted = true
+                        } else {
+                            distantGreenPath.addLine(to: pt)
+                        }
                     } else {
-                        distantPath.addLine(to: pt)
+                        // Uncompleted portion — gray
+                        if distantGreenStarted { distantGreenStarted = false }
+                        if !distantGrayStarted {
+                            distantGrayPath.move(to: pt)
+                            distantGrayStarted = true
+                        } else {
+                            distantGrayPath.addLine(to: pt)
+                        }
                     }
                 }
 
-                context.stroke(distantPath, with: .color(.gray.opacity(0.4)),
+                context.stroke(distantGreenPath, with: .color(.green.opacity(0.4)),
+                               style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                context.stroke(distantGrayPath, with: .color(.gray.opacity(0.4)),
                                style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
 
                 // Primary behind/ahead rendering

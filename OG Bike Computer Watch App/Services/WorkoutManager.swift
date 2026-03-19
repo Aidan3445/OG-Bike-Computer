@@ -593,6 +593,11 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    func clearRoute() {
+        navigation.reset()
+        VoiceNavigator.shared.resetForRouteSwap()
+    }
+
     private func handleTurnAlert(_ alert: NavigationTracker.TurnAlert) {
         switch alert {
         case .warning(_):
