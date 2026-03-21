@@ -57,6 +57,7 @@ class WorkoutManager: NSObject, ObservableObject {
     // Speed sampling
     private var slowSampleCount = 0
     private let slowSamplesForPause = 5
+    private var resumeGraceUntil: Date = .distantPast
 
     // Tentative resume buffer
     private var tentativeLocations: [CLLocation] = []
@@ -383,6 +384,7 @@ class WorkoutManager: NSObject, ObservableObject {
         skipNextDistanceGap = true
         slowSampleCount = 0
         autoPauseState = .moving
+        resumeGraceUntil = Date().addingTimeInterval(5)
         resumeSession()
     }
 
@@ -393,6 +395,8 @@ class WorkoutManager: NSObject, ObservableObject {
 
         switch autoPauseState {
         case .moving:
+            guard Date() >= resumeGraceUntil else { return }
+
             if speedMPH < pauseThreshold {
                 slowSampleCount += 1
             } else {

@@ -69,6 +69,19 @@ struct RouteMapView: View {
                             .padding(.vertical, 3)
                             .background(.black.opacity(0.6))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else if !workout.hasRoute {
+                            VStack(spacing: 1) {
+                                Text(formatDistance(workout.totalDistance))
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .monospacedDigit()
+                                Text(formatTime(workout.movingTime))
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.black.opacity(0.6))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
                     }
 
@@ -92,7 +105,6 @@ struct RouteMapView: View {
                         .buttonStyle(.plain)
                         .frame(width: 48, height: 48)
                         .contentShape(Rectangle())
-                        .opacity(zoomIndex < zoomLevels.count - 1 ? 1 : 0.3)
 
                         if workout.hasRoute {
                             Text(cardinalDirection)
@@ -173,70 +185,112 @@ private struct FullRouteCanvas: View {
 
     var body: some View {
         Canvas { context, size in
-            guard let processed = workout.navigation.processedRoute else { return }
-            let points = processed.points
-            guard points.count >= 2 else { return }
+            // Safe area insets for watch: top/bottom for rounded corners + UI overlays
+            let insetTop: CGFloat = 36
+            let insetBottom: CGFloat = 20
+            let insetSide: CGFloat = 16
 
-            let transform = makeTransform(route: processed, size: size, padding: 12)
-            let stride = max(1, points.count / 500)
+            if let processed = workout.navigation.processedRoute {
+                // Route ride: show full planned route
+                let points = processed.points
+                guard points.count >= 2 else { return }
 
-            var path = Path()
-            path.move(to: project(points[0].coordinate, transform: transform))
-            for i in Swift.stride(from: 1, to: points.count, by: stride) {
-                path.addLine(to: project(points[i].coordinate, transform: transform))
-            }
-            path.addLine(to: project(points[points.count - 1].coordinate, transform: transform))
-            context.stroke(path, with: .color(.gray),
-                           style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                let transform = makeTransform(
+                    minLat: processed.minLat, maxLat: processed.maxLat,
+                    minLon: processed.minLon, maxLon: processed.maxLon,
+                    size: size, insetTop: insetTop, insetBottom: insetBottom, insetSide: insetSide)
+                let stride = max(1, points.count / 500)
 
-            let segIdx = workout.navigation.currentSegmentIndex
-            if segIdx > 0 {
-                var done = Path()
-                done.move(to: project(points[0].coordinate, transform: transform))
-                let doneStride = max(1, segIdx / 300)
-                for i in Swift.stride(from: 1, through: min(segIdx, points.count - 1), by: doneStride) {
-                    done.addLine(to: project(points[i].coordinate, transform: transform))
+                var path = Path()
+                path.move(to: project(points[0].coordinate, transform: transform))
+                for i in Swift.stride(from: 1, to: points.count, by: stride) {
+                    path.addLine(to: project(points[i].coordinate, transform: transform))
                 }
-                done.addLine(to: project(points[min(segIdx, points.count - 1)].coordinate, transform: transform))
-                context.stroke(done, with: .color(.green),
-                               style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-            }
+                path.addLine(to: project(points[points.count - 1].coordinate, transform: transform))
+                context.stroke(path, with: .color(.gray),
+                               style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
 
-            if let loc = workout.currentLocation {
-                let pos = project(loc.coordinate, transform: transform)
+                let segIdx = workout.navigation.currentSegmentIndex
+                if segIdx > 0 {
+                    var done = Path()
+                    done.move(to: project(points[0].coordinate, transform: transform))
+                    let doneStride = max(1, segIdx / 300)
+                    for i in Swift.stride(from: 1, through: min(segIdx, points.count - 1), by: doneStride) {
+                        done.addLine(to: project(points[i].coordinate, transform: transform))
+                    }
+                    done.addLine(to: project(points[min(segIdx, points.count - 1)].coordinate, transform: transform))
+                    context.stroke(done, with: .color(.green),
+                                   style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                }
 
-                if workout.navigation.isOffRoute {
-                    // Draw dashed lines to all rejoin candidates
-                    let candidates = workout.navigation.rejoinCandidates
-                    if candidates.isEmpty {
-                        // Fallback: single line to nearest
-                        let nearIdx = workout.navigation.currentSegmentIndex
-                        let nearPt = project(points[min(nearIdx, points.count - 1)].coordinate, transform: transform)
-                        var returnLine = Path()
-                        returnLine.move(to: pos)
-                        returnLine.addLine(to: nearPt)
-                        context.stroke(returnLine, with: .color(.red),
-                                       style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 4]))
-                    } else {
-                        for (i, candidate) in candidates.enumerated() {
-                            let candidatePt = project(candidate.coordinate, transform: transform)
+                if let loc = workout.currentLocation {
+                    let pos = project(loc.coordinate, transform: transform)
+
+                    if workout.navigation.isOffRoute {
+                        let candidates = workout.navigation.rejoinCandidates
+                        if candidates.isEmpty {
+                            let nearIdx = workout.navigation.currentSegmentIndex
+                            let nearPt = project(points[min(nearIdx, points.count - 1)].coordinate, transform: transform)
                             var returnLine = Path()
                             returnLine.move(to: pos)
-                            returnLine.addLine(to: candidatePt)
-                            let opacity = i == 0 ? 1.0 : 0.6
-                            context.stroke(returnLine, with: .color(.red.opacity(opacity)),
+                            returnLine.addLine(to: nearPt)
+                            context.stroke(returnLine, with: .color(.red),
                                            style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 4]))
-
-                            // Small circle at rejoin point
-                            context.fill(
-                                Path(ellipseIn: CGRect(x: candidatePt.x - 3, y: candidatePt.y - 3, width: 6, height: 6)),
-                                with: .color(.red.opacity(0.4 * opacity)))
+                        } else {
+                            for (i, candidate) in candidates.enumerated() {
+                                let candidatePt = project(candidate.coordinate, transform: transform)
+                                var returnLine = Path()
+                                returnLine.move(to: pos)
+                                returnLine.addLine(to: candidatePt)
+                                let opacity = i == 0 ? 1.0 : 0.6
+                                context.stroke(returnLine, with: .color(.red.opacity(opacity)),
+                                               style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 4]))
+                                context.fill(
+                                    Path(ellipseIn: CGRect(x: candidatePt.x - 3, y: candidatePt.y - 3, width: 6, height: 6)),
+                                    with: .color(.red.opacity(0.4 * opacity)))
+                            }
                         }
-                    }
 
-                    context.fill(Path(ellipseIn: CGRect(x: pos.x - 5, y: pos.y - 5, width: 10, height: 10)), with: .color(.red.opacity(0.3)))
-                    context.fill(Path(ellipseIn: CGRect(x: pos.x - 3.5, y: pos.y - 3.5, width: 7, height: 7)), with: .color(.red))
-                } else {
+                        context.fill(Path(ellipseIn: CGRect(x: pos.x - 5, y: pos.y - 5, width: 10, height: 10)), with: .color(.red.opacity(0.3)))
+                        context.fill(Path(ellipseIn: CGRect(x: pos.x - 3.5, y: pos.y - 3.5, width: 7, height: 7)), with: .color(.red))
+                    } else {
+                        context.fill(Path(ellipseIn: CGRect(x: pos.x - 5, y: pos.y - 5, width: 10, height: 10)), with: .color(.white))
+                        context.fill(Path(ellipseIn: CGRect(x: pos.x - 3.5, y: pos.y - 3.5, width: 7, height: 7)), with: .color(.blue))
+                    }
+                }
+            } else {
+                // Free ride: show entire recorded path
+                let trail = workout.recordedLocations
+                guard trail.count >= 2 else { return }
+
+                var minLat = Double.greatestFiniteMagnitude, maxLat = -Double.greatestFiniteMagnitude
+                var minLon = Double.greatestFiniteMagnitude, maxLon = -Double.greatestFiniteMagnitude
+                for loc in trail {
+                    let c = loc.coordinate
+                    if c.latitude < minLat { minLat = c.latitude }
+                    if c.latitude > maxLat { maxLat = c.latitude }
+                    if c.longitude < minLon { minLon = c.longitude }
+                    if c.longitude > maxLon { maxLon = c.longitude }
+                }
+
+                let transform = makeTransform(
+                    minLat: minLat, maxLat: maxLat,
+                    minLon: minLon, maxLon: maxLon,
+                    size: size, insetTop: insetTop, insetBottom: insetBottom, insetSide: insetSide)
+                let stride = max(1, trail.count / 500)
+
+                var path = Path()
+                path.move(to: project(trail[0].coordinate, transform: transform))
+                for i in Swift.stride(from: 1, to: trail.count, by: stride) {
+                    path.addLine(to: project(trail[i].coordinate, transform: transform))
+                }
+                path.addLine(to: project(trail[trail.count - 1].coordinate, transform: transform))
+                context.stroke(path, with: .color(.green),
+                               style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+
+                // Rider dot at current position (last recorded point)
+                if let loc = workout.currentLocation {
+                    let pos = project(loc.coordinate, transform: transform)
                     context.fill(Path(ellipseIn: CGRect(x: pos.x - 5, y: pos.y - 5, width: 10, height: 10)), with: .color(.white))
                     context.fill(Path(ellipseIn: CGRect(x: pos.x - 3.5, y: pos.y - 3.5, width: 7, height: 7)), with: .color(.blue))
                 }
@@ -248,19 +302,22 @@ private struct FullRouteCanvas: View {
         let offsetX: Double, offsetY: Double, scale: Double, cosLat: Double
     }
 
-    private func makeTransform(route: ProcessedRoute, size: CGSize, padding: CGFloat) -> MapTransform {
-        let centerLat = (route.minLat + route.maxLat) / 2
+    private func makeTransform(minLat: Double, maxLat: Double, minLon: Double, maxLon: Double,
+                               size: CGSize, insetTop: CGFloat, insetBottom: CGFloat, insetSide: CGFloat) -> MapTransform {
+        let centerLat = (minLat + maxLat) / 2
         let cosLat = cos(centerLat * .pi / 180)
-        let latSpan = route.maxLat - route.minLat
-        let lonSpan = (route.maxLon - route.minLon) * cosLat
-        let drawW = Double(size.width - padding * 2)
-        let drawH = Double(size.height - padding * 2)
+        let latSpan = maxLat - minLat
+        let lonSpan = (maxLon - minLon) * cosLat
+        let drawW = Double(size.width - insetSide * 2)
+        let drawH = Double(size.height - insetTop - insetBottom)
         let scale = (latSpan == 0 && lonSpan == 0) ? 1 : min(drawW / lonSpan, drawH / latSpan)
-        let midLon = (route.minLon + route.maxLon) / 2
-        let midLat = (route.minLat + route.maxLat) / 2
+        let midLon = (minLon + maxLon) / 2
+        let midLat = (minLat + maxLat) / 2
+        let centerX = Double(insetSide) + drawW / 2
+        let centerY = Double(insetTop) + drawH / 2
         return MapTransform(
-            offsetX: Double(size.width) / 2 - midLon * cosLat * scale,
-            offsetY: Double(size.height) / 2 + midLat * scale,
+            offsetX: centerX - midLon * cosLat * scale,
+            offsetY: centerY + midLat * scale,
             scale: scale, cosLat: cosLat)
     }
 
@@ -281,8 +338,7 @@ private struct BreadcrumbCanvas: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
             Canvas { context, size in
-                guard let processed = workout.navigation.processedRoute,
-                      let location = workout.currentLocation else { return }
+                guard let location = workout.currentLocation else { return }
 
                 // Free ride: draw rider trail only
                 if workout.navigation.processedRoute == nil {
@@ -342,6 +398,7 @@ private struct BreadcrumbCanvas: View {
                     return
                 }
 
+                guard let processed = workout.navigation.processedRoute else { return }
                 let points = processed.points
                 let segIdx = workout.navigation.currentSegmentIndex
                 guard points.count >= 2, segIdx < points.count else { return }
