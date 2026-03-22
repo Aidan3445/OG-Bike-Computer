@@ -128,15 +128,19 @@ struct RouteDetailView: View {
                         .foregroundStyle(.secondary)
 
                     if expanded {
-                        HStack(spacing: 20) {
-                            StatItem(label: "Distance", value: formatDistance(route.distance))
-
-                            if route.elevationGain > 0 {
-                                StatItem(label: "Gain", value: formatElevation(route.elevationGain))
+                        VStack(spacing: 6) {
+                            HStack(spacing: 0) {
+                                StatItem(label: "Distance", value: formatDistance(route.distance))
+                                if route.elevationGain > 0 {
+                                    Spacer()
+                                    StatItem(label: "Gain", value: formatElevation(route.elevationGain))
+                                }
                             }
-
                             if route.elevationLoss > 0 {
-                                StatItem(label: "Loss", value: formatElevation(route.elevationLoss))
+                                HStack(spacing: 0) {
+                                    StatItem(label: "Loss", value: formatElevation(route.elevationLoss))
+                                    Spacer()
+                                }
                             }
                         }
                         .transition(.opacity.combined(with: .move(edge: .trailing)))

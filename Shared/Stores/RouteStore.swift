@@ -69,16 +69,12 @@ class RouteStore: ObservableObject {
 
     func rename(_ route: Route, to newName: String) {
         guard let index = routes.firstIndex(where: { $0.id == route.id }) else { return }
-
-        let oldURL = directory.appendingPathComponent("\(route.id.uuidString).json")
-        try? FileManager.default.removeItem(at: oldURL)
-
-        let updated = Route(id: route.id, name: newName, points: route.points)
-
+        var updated = route
+        updated.name = newName
+        let fileURL = directory.appendingPathComponent("\(route.id.uuidString).json")
         if let data = try? JSONEncoder().encode(updated) {
-            try? data.write(to: oldURL)
+            try? data.write(to: fileURL)
         }
-
         routes[index] = updated
         onChange?()
     }

@@ -76,6 +76,7 @@ class WorkoutManager: NSObject, ObservableObject {
     // Speed sampling
     private var slowSampleCount = 0
     private let slowSamplesForPause = 5
+    private var resumeGraceUntil: Date = .distantPast
 
     // Tentative resume buffer
     private var tentativeLocations: [CLLocation] = []
@@ -404,6 +405,7 @@ class WorkoutManager: NSObject, ObservableObject {
         skipNextDistanceGap = true
         slowSampleCount = 0
         autoPauseState = .moving
+        resumeGraceUntil = Date().addingTimeInterval(5)
         resumeSession()
     }
 
@@ -414,6 +416,8 @@ class WorkoutManager: NSObject, ObservableObject {
 
         switch autoPauseState {
         case .moving:
+            guard Date() >= resumeGraceUntil else { return }
+
             if speedMPH < pauseThreshold {
                 slowSampleCount += 1
             } else {
@@ -712,6 +716,11 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    func clearRoute() {
+        navigation.reset()
+        VoiceNavigator.shared.resetForRouteSwap()
+    }
+
     private func handleTurnAlert(_ alert: NavigationTracker.TurnAlert) {
         switch alert {
         case .warning(_):
@@ -731,7 +740,22 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func exportAndTransferRide() {
-        let rideName = navigation.processedRoute?.name ?? "Ride"
+        let hour = Calendar.current.component(.hour, from: Date())
+        let timeOfDay: String
+        switch hour {
+        case 5..<12: timeOfDay = "Morning Ride"
+        case 12..<17: timeOfDay = "Afternoon Ride"
+        case 17..<21: timeOfDay = "Evening Ride"
+        default: timeOfDay = "Night Ride"
+        }
+        
+        let rideName: String
+        if let routeName = navigation.processedRoute?.name {
+            rideName = "\(routeName) - \(timeOfDay)"
+        } else {
+            rideName = timeOfDay
+        }   
+
         let activity = currentActivity
 
         let avgSpeed = elapsedTime > 0 ? totalDistance / elapsedTime : 0
