@@ -316,14 +316,14 @@ struct DynamicMetricsPage: View {
 
                 if row.count == 1 {
                     let resolved = resolver.resolve(row[0].type)
-                    MetricRow(label: resolved.label, value: resolved.value, unit: resolved.unit)
+                    MetricRow(label: resolved.label, value: resolved.value, unit: resolved.unit, alignment: .center)
                 } else {
                     HStack {
                         let r0 = resolver.resolve(row[0].type)
-                        MetricRow(label: r0.label, value: r0.value, unit: r0.unit)
+                        MetricRow(label: r0.label, value: r0.value, unit: r0.unit, alignment: .leading)
                         Spacer()
                         let r1 = resolver.resolve(row[1].type)
-                        MetricRow(label: r1.label, value: r1.value, unit: r1.unit)
+                        MetricRow(label: r1.label, value: r1.value, unit: r1.unit, alignment: .trailing)
                     }
                 }
             }

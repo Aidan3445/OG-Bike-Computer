@@ -35,7 +35,7 @@ func computeMileMarkers(points: [ProcessedPoint], intervalMiles: Double = 5) -> 
             let lon = points[i - 1].coordinate.longitude +
                 (points[i].coordinate.longitude - points[i - 1].coordinate.longitude) * ratio
 
-            let mileNumber = Int(nextThreshold / 1609.34)
+            let mileNumber = Int(round(nextThreshold / 1609.34))
             markers.append(MileMarker(
                 mile: mileNumber,
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
@@ -69,7 +69,7 @@ func computeRideMileMarkers(locations: [CLLocation], intervalMiles: Double = 5) 
             let lon = locations[i - 1].coordinate.longitude +
                 (locations[i].coordinate.longitude - locations[i - 1].coordinate.longitude) * ratio
 
-            let mileNumber = Int(nextThreshold / 1609.34)
+            let mileNumber = Int(round(nextThreshold / 1609.34))
             markers.append(MileMarker(
                 mile: mileNumber,
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
