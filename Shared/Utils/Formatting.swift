@@ -67,6 +67,38 @@ func turnColor(_ dist: Double) -> Color {
    return .green
 }
 
+func formatGrade(_ percent: Double) -> String {
+    String(format: "%.1f", percent)
+}
+
+func formatPower(_ watts: Double) -> String {
+    String(format: "%.0f", watts)
+}
+
+func formatHeartRate(_ bpm: Double) -> String {
+    String(format: "%.0f", bpm)
+}
+
+func formatElevationValue(_ meters: Double) -> String {
+    let feet = meters * 3.28084
+    return String(format: "%.0f", feet)
+}
+
+func formatHeading(_ degrees: Double) -> String {
+    let dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    let index = Int(((degrees + 22.5).truncatingRemainder(dividingBy: 360)) / 45)
+    let dir = dirs[max(0, min(index, dirs.count - 1))]
+    return "\(Int(degrees))° \(dir)"
+}
+
+extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        stride(from: 0, to: count, by: size).map {
+            Array(self[$0..<Swift.min($0 + size, count)])
+        }
+    }
+}
+
 func buttonColor(isUploading: Bool = false, isUploadBlocked: Bool = false, isOnWatch: Bool = false) -> Color {
     if isUploading { return .orange }
     if isUploadBlocked { return .secondary }

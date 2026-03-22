@@ -13,6 +13,7 @@ import Combine
 struct ContentView: View {
     @ObservedObject var routeStore: RouteStore
     @ObservedObject var rideStore: RideStore
+    @ObservedObject var metricConfig: MetricConfigStore
     @StateObject private var connectivity = ConnectivityManager.shared
 
     @State private var showFilePicker = false
@@ -117,6 +118,14 @@ struct ContentView: View {
                 Label("Rides", systemImage: "bicycle")
             }
             .tag(1)
+
+            NavigationStack {
+                MetricCustomizationView(metricConfig: metricConfig)
+            }
+            .tabItem {
+                Label("Metrics", systemImage: "gauge.with.dots.needle.33percent")
+            }
+            .tag(2)
         }
     }
 

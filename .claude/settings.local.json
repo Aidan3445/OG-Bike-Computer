@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcodebuild -project \"OG Bike Computer.xcodeproj\" -list)",
+      "Bash(xcodebuild -scheme \"OG Bike Computer Watch App\" -destination \"generic/platform=watchOS\" -configuration Debug build)",
+      "Bash(xcodebuild -scheme \"OG Bike Computer\" -destination \"generic/platform=iOS\" -configuration Debug build)"
+    ]
+  }
+}

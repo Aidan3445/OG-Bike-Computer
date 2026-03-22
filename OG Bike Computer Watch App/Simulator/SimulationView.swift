@@ -118,10 +118,12 @@ struct SimulationView: View {
 struct SimPlaybackOverlay: View {
     @ObservedObject var simulator: RideSimulator
     @ObservedObject var workout: WorkoutManager
+    @StateObject private var metricConfig = MetricConfigStore()
 
     var body: some View {
         WorkoutView(
             workout: workout,
+            metricConfig: metricConfig,
             onStop: {
                 simulator.stop()
                 workout.stop(save: false)

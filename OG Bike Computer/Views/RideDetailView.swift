@@ -20,6 +20,7 @@ struct RideDetailView: View {
     @State private var startCoord: CLLocationCoordinate2D?
     @State private var endCoord: CLLocationCoordinate2D?
     @State private var elevationExtremes: (high: ElevPoint, low: ElevPoint)?
+    @State private var mileMarkers: [MileMarker] = []
 
     let buttonHeight: CGFloat = 44
 
@@ -82,6 +83,24 @@ struct RideDetailView: View {
                                 .background(.cyan)
                                 .clipShape(Capsule())
                                 .opacity(0.5)
+                        }
+                    }
+                }
+
+                // Mile markers
+                ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
+                    Annotation("", coordinate: marker.coordinate) {
+                        VStack(spacing: 1) {
+                            Text("\(marker.mile) mi")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.orange)
+                                .clipShape(Capsule())
+                            Image(systemName: "flag.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.orange)
                         }
                     }
                 }
@@ -197,6 +216,9 @@ struct RideDetailView: View {
             segs.append(SpeedPolyline(coords: batchCoords, color: batchColor))
         }
         segments = segs
+
+        // Mile markers
+        mileMarkers = computeRideMileMarkers(locations: locations)
 
         // Elevation extremes
         let minElevDiff: Double = 50

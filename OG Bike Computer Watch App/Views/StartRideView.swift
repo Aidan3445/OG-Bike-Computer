@@ -15,16 +15,16 @@ struct StartRideView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: 10) {
                 if isLoading {
-                    Spacer()
+                    Spacer(minLength: 40)
                     ProgressView()
                         .scaleEffect(1.5)
                     Text("Processing route…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.top, 8)
-                    Spacer()
+                    Spacer(minLength: 40)
                 } else {
                     if let route {
                         Text(route.name)
@@ -45,6 +45,7 @@ struct StartRideView: View {
                     }
 
                     Divider()
+                        .padding(.vertical, 2)
 
                     ForEach(ActivityType.allCases) { activity in
                         Button {
@@ -57,8 +58,11 @@ struct StartRideView: View {
                     }
                 }
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.top, 4)
+            .padding(.bottom, 16)
         }
+        .scrollIndicators(.visible)
         .navigationTitle("Start")
         .navigationBarTitleDisplayMode(.inline)
     }

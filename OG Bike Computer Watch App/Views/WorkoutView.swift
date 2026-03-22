@@ -9,6 +9,7 @@ import SwiftUI
 
 struct WorkoutView<ExtraTab: View>: View {
     @ObservedObject var workout: WorkoutManager
+    @ObservedObject var metricConfig: MetricConfigStore
     var onStop: () -> Void
     var extraTab: ExtraTab?
 
@@ -16,14 +17,16 @@ struct WorkoutView<ExtraTab: View>: View {
     @State private var page = 2
     @State private var tab = 2
 
-    init(workout: WorkoutManager, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
+    init(workout: WorkoutManager, metricConfig: MetricConfigStore, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
         self.workout = workout
+        self.metricConfig = metricConfig
         self.onStop = onStop
         self.extraTab = nil
     }
 
-    init(workout: WorkoutManager, onStop: @escaping () -> Void, @ViewBuilder extraTab: () -> ExtraTab) {
+    init(workout: WorkoutManager, metricConfig: MetricConfigStore, onStop: @escaping () -> Void, @ViewBuilder extraTab: () -> ExtraTab) {
         self.workout = workout
+        self.metricConfig = metricConfig
         self.onStop = onStop
         self.extraTab = extraTab()
     }
@@ -40,8 +43,15 @@ struct WorkoutView<ExtraTab: View>: View {
                 RouteMapView(workout: workout)
                     .tag(2)
 
-                metricsPage
-                    .tag(3)
+                // Dynamic metric pages from config
+                ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, metricPage in
+                    DynamicMetricsPage(
+                        workout: workout,
+                        metricPage: metricPage,
+                        showOffRouteBanner: index == 0
+                    )
+                    .tag(3 + index)
+                }
             }
             .tabViewStyle(.verticalPage)
             .scrollIndicators(.visible)
@@ -96,11 +106,11 @@ struct WorkoutView<ExtraTab: View>: View {
                 }
             }
             .onChange(of: workout.hasRoute) { _, hasRoute in
-                    if hasRoute && tab == 3 {
+                    if hasRoute && tab >= 3 {
                         // Loaded a route mid-ride — switch to map
                         withAnimation { tab = 2 }
                     } else if !hasRoute {
-                        // Cleared route — go to metrics
+                        // Cleared route — go to first metrics page
                         withAnimation { tab = 3 }
                     }
                 }
@@ -191,75 +201,6 @@ struct WorkoutView<ExtraTab: View>: View {
         }
     }
 
-    @Environment(\.isLuminanceReduced) var isLuminanceReduced
-    private var metricsPage: some View {
-        VStack(spacing: 4) {
-            if workout.navigation.isOffRoute {
-                OffRouteBanner(workout: workout)
-            }
-
-            if isLuminanceReduced {
-                MetricRow(
-                    label: workout.currentActivity.speedLabel,
-                    value: workout.currentActivity.usesPace
-                    ? formatPace(workout.speed)
-                    : formatSpeed(workout.speed),
-                    unit: workout.currentActivity.usesPace ? "min/mi" : "mph")
-                Divider()
-                MetricRow(label: "DISTANCE", value: formatDistance(workout.totalDistance, false), unit: "mi")
-                Divider()
-                MetricRow(label: "TIME", value: formatTime(workout.elapsedTime), unit: "")
-            } else {
-                HStack {
-                    MetricRow(
-                        label: workout.currentActivity.speedLabel,
-                        value: workout.currentActivity.usesPace
-                        ? formatPace(workout.speed)
-                        : formatSpeed(workout.speed),
-                        unit: workout.currentActivity.usesPace ? "min/mi" : "mph")
-
-                    Spacer()
-
-                    MetricRow(label: "DISTANCE", value: formatDistance(workout.totalDistance, false), unit: "mi")
-                }
-
-                Divider()
-
-                HStack {
-                    MetricRow(label: "ELAPSED", value: formatTime(workout.elapsedTime), unit: "")
-                    Spacer()
-                    MetricRow(label: "MOVING", value: formatTime(workout.movingTime), unit: "")
-                }
-
-                Divider()
-
-                HStack {
-                    MetricRow(label: "HR", value: String(format: "%.0f", workout.heartRate), unit: "bpm")
-                    Spacer()
-                    MetricRow(label: "CAL", value: String(format: "%.0f", workout.activeCalories), unit: "kcal")
-                }
-
-                if let turn = workout.navigation.nextTurn {
-                    Divider()
-                    HStack(spacing: 6) {
-                        Image(systemName: turn.direction.icon)
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(turnColor(workout.navigation.distanceToNextTurn))
-                        Text("in \(formatTurnDistance(workout.navigation.distanceToNextTurn))")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(formatDistance(workout.navigation.distanceRemaining) + " to end")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-    }
-
     private var controlsOverlay: some View {
         ZStack(alignment: .topLeading) {
             Text(workout.isPaused || workout.isAutoPaused ? "Paused" : "Riding")
@@ -308,5 +249,63 @@ struct WorkoutView<ExtraTab: View>: View {
             .padding()
             .scrollIndicators(.hidden)
         }
+    }
+}
+
+// MARK: - Dynamic Metrics Page
+
+struct DynamicMetricsPage: View {
+    @ObservedObject var workout: WorkoutManager
+    let metricPage: MetricPage
+    let showOffRouteBanner: Bool
+
+    @Environment(\.isLuminanceReduced) var isLuminanceReduced
+
+    var body: some View {
+        let resolver = MetricResolver(workout: workout)
+        let slots = metricPage.slots
+        let rows = slots.chunked(into: isLuminanceReduced ? 1 : 2)
+
+        VStack(spacing: 4) {
+            if showOffRouteBanner && workout.navigation.isOffRoute {
+                OffRouteBanner(workout: workout)
+            }
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
+                if rowIdx > 0 { Divider() }
+
+                if row.count == 1 {
+                    let resolved = resolver.resolve(row[0].type)
+                    MetricRow(label: resolved.label, value: resolved.value, unit: resolved.unit)
+                } else {
+                    HStack {
+                        let r0 = resolver.resolve(row[0].type)
+                        MetricRow(label: r0.label, value: r0.value, unit: r0.unit)
+                        Spacer()
+                        let r1 = resolver.resolve(row[1].type)
+                        MetricRow(label: r1.label, value: r1.value, unit: r1.unit)
+                    }
+                }
+            }
+
+            // Show next turn info at bottom of first metrics page if on route
+            if showOffRouteBanner, let turn = workout.navigation.nextTurn, !isLuminanceReduced {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: turn.direction.icon)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(turnColor(workout.navigation.distanceToNextTurn))
+                    Text("in \(formatTurnDistance(workout.navigation.distanceToNextTurn))")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(formatDistance(workout.navigation.distanceRemaining) + " to end")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 }

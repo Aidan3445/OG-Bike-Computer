@@ -87,6 +87,24 @@ struct RouteDetailView: View {
                     }
                 }
 
+                // Mile markers
+                ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
+                    Annotation("", coordinate: marker.coordinate) {
+                        VStack(spacing: 1) {
+                            Text("\(marker.mile) mi")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.orange)
+                                .clipShape(Capsule())
+                            Image(systemName: "flag.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
                 // Current location
                 UserAnnotation()
             }
@@ -186,6 +204,27 @@ struct RouteDetailView: View {
         }
     }
 
+    private var mileMarkers: [MileMarker] {
+        // Convert route TrackPoints to ProcessedPoints for the shared utility
+        let pts = route.points
+        guard pts.count >= 2 else { return [] }
+        var cumDist: Double = 0
+        var processed: [ProcessedPoint] = []
+        for i in 0..<pts.count {
+            if i > 0 {
+                let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
+                let cur = CLLocation(latitude: pts[i].lat, longitude: pts[i].lon)
+                cumDist += cur.distance(from: prev)
+            }
+            processed.append(ProcessedPoint(
+                coordinate: CLLocationCoordinate2D(latitude: pts[i].lat, longitude: pts[i].lon),
+                elevation: pts[i].elevation,
+                distanceFromStart: cumDist,
+                bearingToNext: 0))
+        }
+        return computeMileMarkers(points: processed)
+    }
+
     private let minElevDiff: Double = 50 // meters — minimum difference to show markers
 
     private var elevationExtremes: (high: TrackPoint, low: TrackPoint)? {
@@ -214,10 +253,3 @@ private struct StatItem: View {
     }
 }
 
-extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
-        }
-    }
-}

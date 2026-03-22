@@ -20,6 +20,7 @@ final class ConnectivityManager: NSObject, ObservableObject {
     @Published var lastEvent: String = "none"
 
     var onRouteReceived: ((Route) -> Void)?
+    var onMetricConfigReceived: ((Data) -> Void)?
 
     #if os(watchOS)
     @Published var routeStore: RouteStore?
@@ -144,6 +145,27 @@ extension ConnectivityManager {
         )
 
         completion(.success(()))
+    }
+
+    func sendMetricConfig(_ data: Data) {
+        guard WCSession.default.activationState == .activated else { return }
+
+        // Try immediate delivery first (works even during a ride)
+        if WCSession.default.isReachable {
+            let base64 = data.base64EncodedString()
+            WCSession.default.sendMessage(
+                ["type": "metricConfig", "data": base64],
+                replyHandler: { _ in print("[MetricConfig] Sent via message") },
+                errorHandler: { error in
+                    print("[MetricConfig] Message failed, falling back to userInfo: \(error)")
+                    WCSession.default.transferUserInfo(["type": "metricConfig", "data": base64])
+                }
+            )
+        } else {
+            let base64 = data.base64EncodedString()
+            WCSession.default.transferUserInfo(["type": "metricConfig", "data": base64])
+            print("[MetricConfig] Queued via userInfo")
+        }
     }
 }
 #endif
@@ -285,6 +307,16 @@ extension ConnectivityManager: WCSessionDelegate {
             self.lastEvent = "got userInfo: \(userInfo.keys)"
         }
 
+        if let type = userInfo["type"] as? String,
+           type == "metricConfig",
+           let base64 = userInfo["data"] as? String,
+           let data = Data(base64Encoded: base64) {
+            DispatchQueue.main.async {
+                self.onMetricConfigReceived?(data)
+            }
+            return
+        }
+
         if let data = userInfo["route"] as? Data,
            let route = try? JSONDecoder().decode(Route.self, from: data) {
             DispatchQueue.main.async {
@@ -301,6 +333,18 @@ extension ConnectivityManager: WCSessionDelegate {
         if message["wake"] != nil {
             print("Woken by phone")
             replyHandler(["awake": true])
+            return
+        }
+
+        // Handle metric config on both platforms
+        if let type = message["type"] as? String,
+           type == "metricConfig",
+           let base64 = message["data"] as? String,
+           let data = Data(base64Encoded: base64) {
+            DispatchQueue.main.async {
+                self.onMetricConfigReceived?(data)
+            }
+            replyHandler(["received": true])
             return
         }
 
