@@ -10,8 +10,24 @@ import CoreLocation
 
 struct Route: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
-    let name: String
+    var name: String
     let points: [TrackPoint]
+    let createdAt: Date
+
+    init(id: UUID = UUID(), name: String, points: [TrackPoint], createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.points = points
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        points = try container.decode([TrackPoint].self, forKey: .points)
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+    }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
@@ -31,10 +47,17 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
     var elevationGain: Double {
         guard points.count > 1 else { return 0 }
         var gain: Double = 0
-        for i in 1..<points.count {
-            if let curr = points[i].elevation, let prev = points[i-1].elevation {
-                let delta = curr - prev
-                if delta > 0 { gain += delta }
+        let minDelta: Double = 4.0
+        var refElevation = points.first?.elevation
+
+        for point in points {
+            guard let elev = point.elevation, let ref = refElevation else { continue }
+            let delta = elev - ref
+            if delta > minDelta {
+                gain += delta
+                refElevation = elev
+            } else if delta < -minDelta {
+                refElevation = elev
             }
         }
         return gain
@@ -43,10 +66,17 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
     var elevationLoss: Double {
         guard points.count > 1 else { return 0 }
         var loss: Double = 0
-        for i in 1..<points.count {
-            if let curr = points[i].elevation, let prev = points[i-1].elevation {
-                let delta = curr - prev
-                if delta < 0 { loss -= delta }
+        let minDelta: Double = 4.0
+        var refElevation = points.first?.elevation
+
+        for point in points {
+            guard let elev = point.elevation, let ref = refElevation else { continue }
+            let delta = elev - ref
+            if delta > minDelta {
+                refElevation = elev
+            } else if delta < -minDelta {
+                loss -= delta
+                refElevation = elev
             }
         }
         return loss

@@ -15,6 +15,8 @@ struct WorkoutView<ExtraTab: View>: View {
     @State private var voiceEnabled = true
     @State private var page = 2
     @State private var tab = 2
+    @State private var endCountdown: Double = 0
+    @State private var endTimer: Timer?
 
     init(workout: WorkoutManager, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
         self.workout = workout
@@ -261,17 +263,16 @@ struct WorkoutView<ExtraTab: View>: View {
     }
 
     private var controlsOverlay: some View {
-        ZStack(alignment: .topLeading) {
+        VStack(spacing: 12) {
             Text(workout.isPaused || workout.isAutoPaused ? "Paused" : "Riding")
                 .font(.headline)
                 .foregroundStyle(workout.isAutoPaused || workout.isPaused ? .yellow : .green)
-                .padding(.top, 20)
-                .padding(.leading, 12)
-                .ignoresSafeArea(edges: .top)
-
-            VStack(spacing: 6) {
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top,16)
                 if workout.isPaused || workout.isAutoPaused {
                     Button {
+                        cancelEndCountdown()
                         workout.resume()
                         withAnimation { page = 2 }
                     } label: {
@@ -281,6 +282,7 @@ struct WorkoutView<ExtraTab: View>: View {
                     .tint(.green)
                 } else {
                     Button {
+                        cancelEndCountdown()
                         workout.pause()
                     } label: {
                         Label("Pause", systemImage: "pause.fill")
@@ -288,15 +290,32 @@ struct WorkoutView<ExtraTab: View>: View {
                     }
                     .tint(.yellow)
                 }
-                Button(role: .destructive) {
-                    onStop()
-                } label: {
-                    Label("End Ride", systemImage: "stop.fill")
-                        .frame(maxWidth: .infinity)
+                ZStack {
+                    if endCountdown > 0 {
+                        Button { cancelEndCountdown() } label: {
+                            ZStack {
+                                Circle()
+                                    .trim(from: 0, to: endCountdown / 3.0)
+                                    .stroke(.red, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                    .rotationEffect(.degrees(-90))
+                                    .frame(width: 36, height: 36)
+                                Text(String(Int(ceil(3.0 - endCountdown))))
+                                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.red)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button(role: .destructive) { startEndCountdown() } label: {
+                            Label("End Ride", systemImage: "stop.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
                 }
-
+                .frame(height: 44)
                 Divider()
-
                 Toggle(isOn: $voiceEnabled) {
                     Label("Voice", systemImage: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash")
                         .font(.caption)
@@ -304,9 +323,30 @@ struct WorkoutView<ExtraTab: View>: View {
                 .onChange(of: voiceEnabled) { _, newValue in
                     VoiceNavigator.shared.isEnabled = newValue
                 }
-            }
-            .padding()
-            .scrollIndicators(.hidden)
+            
         }
+        .ignoresSafeArea(edges: .top)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if endCountdown > 0 { cancelEndCountdown() }
+        }
+        .onChange(of: page) { _, _ in cancelEndCountdown() }
+    }
+
+    private func startEndCountdown() {
+        endCountdown = 0.001 // trigger visible state
+        endTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            endCountdown += 0.05
+            if endCountdown >= 3.0 {
+                cancelEndCountdown()
+                onStop()
+            }
+        }
+    }
+
+    private func cancelEndCountdown() {
+        endTimer?.invalidate()
+        endTimer = nil
+        endCountdown = 0
     }
 }

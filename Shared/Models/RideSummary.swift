@@ -10,7 +10,7 @@ import UIKit
 
 struct RideSummary: Codable, Identifiable {
     let id: UUID
-    let name: String
+    var name: String
     let activityType: ActivityType
     let date: Date
     let elapsedTime: TimeInterval

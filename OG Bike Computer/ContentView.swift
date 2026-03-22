@@ -23,6 +23,11 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var navigationPath = NavigationPath()
 
+    private var routeSections: [(DateSection, [Route])] {
+        let sorted = routeStore.routes.sorted { $0.createdAt > $1.createdAt }
+        return DateSection.group(sorted, by: \.createdAt)
+    }
+
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack(path: $navigationPath) {
@@ -34,23 +39,29 @@ struct ContentView: View {
                             description: Text("Import a GPX file to get started."))
                     } else {
                         List {
-                            ForEach(routeStore.routes) { route in
-                                NavigationLink(value: route) {
-                                    RouteRow(
-                                        route: route,
-                                        isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
-                                        isUploading: uploadingRouteID == route.id,
-                                        isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
-                                        onSend: { sendToWatch(route) },
-                                        onRename: { newName in
-                                            routeStore.rename(route, to: newName)
+                            ForEach(routeSections, id: \.0) { section, routes in
+                                Section {
+                                    ForEach(routes) { route in
+                                        NavigationLink(value: route) {
+                                            RouteRow(
+                                                route: route,
+                                                isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                                                isUploading: uploadingRouteID == route.id,
+                                                isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                                                onSend: { sendToWatch(route) },
+                                                onRename: { newName in
+                                                    routeStore.rename(route, to: newName)
+                                                }
+                                            )
                                         }
-                                    )
-                                }
-                            }
-                            .onDelete { indices in
-                                for i in indices {
-                                    routeStore.delete(routeStore.routes[i])
+                                    }
+                                    .onDelete { indices in
+                                        for i in indices {
+                                            routeStore.delete(routes[i])
+                                        }
+                                    }
+                                } header: {
+                                    Text(section.title)
                                 }
                             }
                         }

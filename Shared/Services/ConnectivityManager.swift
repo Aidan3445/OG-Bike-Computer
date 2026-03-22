@@ -17,6 +17,7 @@ final class ConnectivityManager: NSObject, ObservableObject {
     @Published var isPaired = false
     @Published var isWatchAppInstalled = false
     @Published var routeNamesOnWatch: Set<String> = []
+    @Published var watchStorageSize: Int64 = 0
     @Published var lastEvent: String = "none"
 
     var onRouteReceived: ((Route) -> Void)?
@@ -104,9 +105,12 @@ extension ConnectivityManager {
         guard WCSession.default.activationState == .activated else { return }
         let ctx = WCSession.default.receivedApplicationContext
 
-        if let names = ctx["watchRouteNames"] as? [String] {
-            DispatchQueue.main.async {
+        DispatchQueue.main.async {
+            if let names = ctx["watchRouteNames"] as? [String] {
                 self.routeNamesOnWatch = Set(names)
+            }
+            if let size = ctx["watchStorageSize"] as? Int64 {
+                self.watchStorageSize = size
             }
         }
     }
@@ -203,7 +207,11 @@ extension ConnectivityManager {
     func reportRoutes(_ routes: [Route]) {
         guard WCSession.default.activationState == .activated else { return }
         let names = routes.map { $0.name }
-        try? WCSession.default.updateApplicationContext(["watchRouteNames": names])
+        let totalSize = routes.reduce(0) { $0 + ($1.points.count * 32) } // ~32 bytes per coordinate
+        try? WCSession.default.updateApplicationContext([
+            "watchRouteNames": names,
+            "watchStorageSize": totalSize
+        ])
     }
 }
 #endif
@@ -270,9 +278,12 @@ extension ConnectivityManager: WCSessionDelegate {
         _ session: WCSession,
         didReceiveApplicationContext applicationContext: [String: Any]
     ) {
-        if let names = applicationContext["watchRouteNames"] as? [String] {
-            DispatchQueue.main.async {
+        DispatchQueue.main.async {
+            if let names = applicationContext["watchRouteNames"] as? [String] {
                 self.routeNamesOnWatch = Set(names)
+            }
+            if let size = applicationContext["watchStorageSize"] as? Int64 {
+                self.watchStorageSize = size
             }
         }
     }

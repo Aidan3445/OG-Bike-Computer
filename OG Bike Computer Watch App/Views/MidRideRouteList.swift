@@ -13,6 +13,7 @@ struct MidRideRouteList: View {
 
     @State private var swapping: Route?
     @State private var showConfirm = false
+    @State private var showRemoveConfirm = false
 
     var body: some View {
         List {
@@ -25,6 +26,15 @@ struct MidRideRouteList: View {
                         Text(name)
                             .font(.headline)
                             .lineLimit(1)
+                        Spacer()
+                        Button {
+                            showRemoveConfirm = true
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.red.opacity(0.7))
+                                .font(.system(size: 18))
+                        }
+                        .buttonStyle(.plain)
                     }
                 } else {
                     HStack {
@@ -47,7 +57,6 @@ struct MidRideRouteList: View {
                 } else {
                     ForEach(store.routes) { route in
                         let isActive = workout.navigation.processedRoute?.name == route.name
-
                         Button {
                             if !isActive {
                                 swapping = route
@@ -94,14 +103,20 @@ struct MidRideRouteList: View {
                 Text("Switch navigation to \(route.name)? Your ride recording continues uninterrupted.")
             }
         }
+        .alert("Remove Route?", isPresented: $showRemoveConfirm) {
+            Button("Remove", role: .destructive) {
+                workout.clearRoute()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Switch to Free Ride? Your ride recording continues uninterrupted.")
+        }
     }
 
     private func swapRoute(_ route: Route) {
-        // Process on background thread — can take a moment
         DispatchQueue.global(qos: .userInitiated).async {
             workout.loadRoute(route)
             DispatchQueue.main.async {
-                // Reset voice nav state for the new route
                 VoiceNavigator.shared.resetForRouteSwap()
             }
         }
