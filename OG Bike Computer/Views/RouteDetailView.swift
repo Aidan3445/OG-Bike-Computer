@@ -20,15 +20,20 @@ struct RouteDetailView: View {
     @State private var expanded = true
     @State private var showOverwriteAlert = false
 
+    // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
+    @State private var cachedCoordinates: [CLLocationCoordinate2D] = []
+    @State private var cachedMileMarkers: [MileMarker] = []
+    @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
+
     var body: some View {
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
                 // Route polyline
-                MapPolyline(coordinates: coordinates)
+                MapPolyline(coordinates: cachedCoordinates)
                     .stroke(.blue, lineWidth: 4)
 
                 // Start marker
-                if let first = coordinates.first {
+                if let first = cachedCoordinates.first {
                     Annotation("Start", coordinate: first) {
                         Circle()
                             .fill(.green)
@@ -38,7 +43,7 @@ struct RouteDetailView: View {
                 }
 
                 // End marker
-                if let last = coordinates.last {
+                if let last = cachedCoordinates.last {
                     Annotation("End", coordinate: last) {
                         Circle()
                             .fill(.red)
@@ -48,7 +53,7 @@ struct RouteDetailView: View {
                 }
 
                 // Elevation markers
-                if let peaks = elevationExtremes {
+                if let peaks = cachedElevationExtremes {
                     Annotation("", coordinate: peaks.high.coordinate) {
                         VStack(spacing: 2) {
                             Text(formatElevation(peaks.high.elevation!))
@@ -86,7 +91,7 @@ struct RouteDetailView: View {
                 }
 
                 // Mile markers
-                ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
+                ForEach(Array(cachedMileMarkers.enumerated()), id: \.offset) { _, marker in
                     Annotation("", coordinate: marker.coordinate) {
                         VStack(spacing: 1) {
                             Text("\(marker.mile) mi")
@@ -203,45 +208,43 @@ struct RouteDetailView: View {
         } message: {
             Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
         }
-    }
-        
-    private var coordinates: [CLLocationCoordinate2D] {
-        route.points.map {
-            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
-        }
-    }
-
-    private var mileMarkers: [MileMarker] {
-        // Convert route TrackPoints to ProcessedPoints for the shared utility
-        let pts = route.points
-        guard pts.count >= 2 else { return [] }
-        var cumDist: Double = 0
-        var processed: [ProcessedPoint] = []
-        for i in 0..<pts.count {
-            if i > 0 {
-                let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
-                let cur = CLLocation(latitude: pts[i].lat, longitude: pts[i].lon)
-                cumDist += cur.distance(from: prev)
-            }
-            processed.append(ProcessedPoint(
-                coordinate: CLLocationCoordinate2D(latitude: pts[i].lat, longitude: pts[i].lon),
-                elevation: pts[i].elevation,
-                distanceFromStart: cumDist,
-                bearingToNext: 0))
-        }
-        return computeMileMarkers(points: processed)
+        .onAppear { buildRouteCache() }
     }
 
     private let minElevDiff: Double = 50 // meters — minimum difference to show markers
 
-    private var elevationExtremes: (high: TrackPoint, low: TrackPoint)? {
-        let withElev = route.points.filter { $0.elevation != nil }
-        guard let highest = withElev.max(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-              let lowest = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-              let highElev = highest.elevation,
-              let lowElev = lowest.elevation,
-              highElev - lowElev >= minElevDiff else { return nil }
-        return (highest, lowest)
+    private func buildRouteCache() {
+        cachedCoordinates = route.points.map {
+            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+        }
+
+        let pts = route.points
+        if pts.count >= 2 {
+            var cumDist: Double = 0
+            var processed: [ProcessedPoint] = []
+            for i in 0..<pts.count {
+                if i > 0 {
+                    let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
+                    let cur  = CLLocation(latitude: pts[i].lat,     longitude: pts[i].lon)
+                    cumDist += cur.distance(from: prev)
+                }
+                processed.append(ProcessedPoint(
+                    coordinate: CLLocationCoordinate2D(latitude: pts[i].lat, longitude: pts[i].lon),
+                    elevation: pts[i].elevation,
+                    distanceFromStart: cumDist,
+                    bearingToNext: 0))
+            }
+            cachedMileMarkers = computeMileMarkers(points: processed)
+        }
+
+        let withElev = pts.filter { $0.elevation != nil }
+        if let highest = withElev.max(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
+           let lowest  = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
+           let highElev = highest.elevation,
+           let lowElev  = lowest.elevation,
+           highElev - lowElev >= minElevDiff {
+            cachedElevationExtremes = (highest, lowest)
+        }
     }
 }
 
