@@ -14,87 +14,110 @@ struct MetricCustomizationView: View {
     @State private var selectedPage: Int = 0
     @State private var showAddPage = false
     @State private var newPageName = ""
+    @State private var showResetConfirm = false
+    @State private var editingPageIndex: Int?
+
+    /// Total number of carousel items: pages + 1 "Add Page" card
+    private var totalItems: Int { metricConfig.config.pages.count + 1 }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Carousel
-            TabView(selection: $selectedPage) {
-                ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, page in
-                    WatchPagePreview(page: page)
-                        .tag(index)
-                        .padding(.horizontal, 32)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 320)
-
-            // Page dots
-            HStack(spacing: 6) {
-                ForEach(metricConfig.config.pages.indices, id: \.self) { i in
-                    Circle()
-                        .fill(i == selectedPage ? Color.primary : Color.secondary.opacity(0.4))
-                        .frame(width: i == selectedPage ? 8 : 6, height: i == selectedPage ? 8 : 6)
-                        .animation(.spring(response: 0.2), value: selectedPage)
-                }
-            }
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-
-            // Page name
-            if metricConfig.config.pages.indices.contains(selectedPage) {
-                Text(metricConfig.config.pages[selectedPage].name)
-                    .font(.headline)
-                    .padding(.bottom, 4)
-                Text("\(metricConfig.config.pages[selectedPage].slots.count)/\(MetricPage.maxSlots) metrics")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 16)
-            }
-
-            Divider()
-
-            // Actions
-            List {
-                if metricConfig.config.pages.indices.contains(selectedPage) {
-                    Section {
+        ScrollView {
+            VStack(spacing: 0) {
+                // Carousel of watch previews
+                TabView(selection: $selectedPage) {
+                    ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, page in
                         NavigationLink {
                             MetricPageEditor(
                                 metricConfig: metricConfig,
-                                pageIndex: selectedPage
+                                pageIndex: index
                             )
                         } label: {
-                            Label("Edit This Page", systemImage: "slider.horizontal.3")
+                            WatchPagePreview(page: page)
                         }
-
-                        Button(role: .destructive) {
-                            guard metricConfig.config.pages.count > 1 else { return }
-                            metricConfig.removePage(at: selectedPage)
-                            selectedPage = max(0, selectedPage - 1)
-                            syncToWatch()
-                        } label: {
-                            Label("Delete This Page", systemImage: "trash")
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button {
+                                editingPageIndex = index
+                            } label: {
+                                Label("Edit Page", systemImage: "slider.horizontal.3")
+                            }
+                            if metricConfig.config.pages.count > 1 {
+                                Button(role: .destructive) {
+                                    withAnimation {
+                                        metricConfig.removePage(at: index)
+                                        selectedPage = max(0, min(selectedPage, metricConfig.config.pages.count - 1))
+                                        syncToWatch()
+                                    }
+                                } label: {
+                                    Label("Delete Page", systemImage: "trash")
+                                }
+                            }
                         }
-                        .disabled(metricConfig.config.pages.count <= 1)
+                        .tag(index)
+                        .padding(.horizontal, 32)
                     }
-                }
 
-                Section {
+                    // "Add Page" card at the end
                     Button {
                         showAddPage = true
                     } label: {
-                        Label("Add Page", systemImage: "plus.circle")
+                        AddPageCard()
                     }
+                    .buttonStyle(.plain)
+                    .tag(metricConfig.config.pages.count)
+                    .padding(.horizontal, 32)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(height: 240)
 
-                    Button(role: .destructive) {
-                        metricConfig.resetToDefault()
-                        selectedPage = 0
-                        syncToWatch()
-                    } label: {
-                        Label("Reset to Defaults", systemImage: "arrow.counterclockwise")
+                // Page dots (include the + card)
+                HStack(spacing: 6) {
+                    ForEach(0..<totalItems, id: \.self) { i in
+                        if i < metricConfig.config.pages.count {
+                            Circle()
+                                .fill(i == selectedPage ? Color.primary : Color.secondary.opacity(0.4))
+                                .frame(width: i == selectedPage ? 8 : 6, height: i == selectedPage ? 8 : 6)
+                        } else {
+                            // "Add" dot
+                            Image(systemName: "plus")
+                                .font(.system(size: 6, weight: .bold))
+                                .foregroundStyle(i == selectedPage ? Color.primary : Color.secondary.opacity(0.5))
+                        }
                     }
                 }
+                .animation(.spring(response: 0.2), value: selectedPage)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
+
+                // Page label
+                if metricConfig.config.pages.indices.contains(selectedPage) {
+                    let page = metricConfig.config.pages[selectedPage]
+                    Text(page.name)
+                        .font(.headline)
+                        .padding(.bottom, 2)
+                    Text("\(page.slots.count)/\(MetricPage.maxSlots) metrics")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Tap to edit · Hold to reorder or delete")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
+                } else if selectedPage == metricConfig.config.pages.count {
+                    Text("Add a new page")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    showResetConfirm = true
+                } label: {
+                    Text("Reset to Defaults")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .listStyle(.insetGrouped)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
         }
         .navigationTitle("Customize Metrics")
         .alert("New Page", isPresented: $showAddPage) {
@@ -108,16 +131,71 @@ struct MetricCustomizationView: View {
             }
             Button("Cancel", role: .cancel) { newPageName = "" }
         }
-        // Keep selectedPage in bounds if pages are deleted elsewhere
-        .onChange(of: metricConfig.config.pages.count) { _, count in
-            if selectedPage >= count { selectedPage = max(0, count - 1) }
+        .confirmationDialog("Reset all metric pages to defaults?", isPresented: $showResetConfirm, titleVisibility: .visible) {
+            Button("Reset to Defaults", role: .destructive) {
+                metricConfig.resetToDefault()
+                selectedPage = 0
+                syncToWatch()
+            }
+            Button("Cancel", role: .cancel) {}
         }
+        .onChange(of: metricConfig.config.pages.count) { _, count in
+            if selectedPage >= count + 1 { selectedPage = max(0, count) }
+        }
+        // NavigationLink destination triggered by context menu "Edit"
+        .background(
+            NavigationLink(
+                destination: Group {
+                    if let idx = editingPageIndex, metricConfig.config.pages.indices.contains(idx) {
+                        MetricPageEditor(metricConfig: metricConfig, pageIndex: idx)
+                    }
+                },
+                isActive: Binding(
+                    get: { editingPageIndex != nil },
+                    set: { if !$0 { editingPageIndex = nil } }
+                )
+            ) { EmptyView() }
+                .hidden()
+        )
     }
 
     private func syncToWatch() {
         if let data = metricConfig.encodedConfig {
             ConnectivityManager.shared.sendMetricConfig(data)
         }
+    }
+}
+
+// MARK: - "Add Page" Card
+
+private struct AddPageCard: View {
+    private let watchWidth: CGFloat  = 160
+    private let watchHeight: CGFloat = 182
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 34)
+                .fill(Color(white: 0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 34)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
+            RoundedRectangle(cornerRadius: 28)
+                .fill(Color.black)
+                .padding(5)
+                .overlay(
+                    VStack(spacing: 8) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 32, weight: .light))
+                            .foregroundStyle(.secondary)
+                        Text("Add Page")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                )
+        }
+        .frame(width: watchWidth, height: watchHeight)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
 
@@ -128,6 +206,8 @@ struct MetricPageEditor: View {
     let pageIndex: Int
     @State private var showMetricPicker = false
     @State private var replacingSlotIndex: Int?
+    @State private var showDeleteConfirm = false
+    @Environment(\.dismiss) private var dismiss
 
     private var page: MetricPage {
         guard metricConfig.config.pages.indices.contains(pageIndex) else {
@@ -179,6 +259,15 @@ struct MetricPageEditor: View {
                                     Text(slot.type.label)
                                         .font(.body)
                                         .foregroundStyle(.primary)
+                                    if slot.type.isEstimate {
+                                        Text("EST")
+                                            .font(.system(size: 8, weight: .bold))
+                                            .foregroundStyle(.purple)
+                                            .padding(.horizontal, 3)
+                                            .padding(.vertical, 1)
+                                            .background(.purple.opacity(0.15))
+                                            .clipShape(Capsule())
+                                    }
                                     usageBadge(for: slot.type)
                                 }
                                 Text(metricDescription(slot.type))
@@ -227,7 +316,25 @@ struct MetricPageEditor: View {
         }
         .navigationTitle(page.name)
         .toolbar {
-            EditButton()
+            ToolbarItem(placement: .primaryAction) {
+                EditButton()
+            }
+            ToolbarItem(placement: .destructiveAction) {
+                Button(role: .destructive) {
+                    showDeleteConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(metricConfig.config.pages.count <= 1)
+            }
+        }
+        .confirmationDialog("Delete \"\(page.name)\"?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete Page", role: .destructive) {
+                metricConfig.removePage(at: pageIndex)
+                syncToWatch()
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $showMetricPicker) {
             MetricPickerSheet(
@@ -338,6 +445,15 @@ struct MetricPickerSheet: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
+                            if metric.isEstimate {
+                                Text("EST")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.purple)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(.purple.opacity(0.15))
+                                    .clipShape(Capsule())
+                            }
                             if metric.requiresRoute {
                                 Image(systemName: "map")
                                     .font(.caption)
@@ -376,37 +492,36 @@ struct MetricPickerSheet: View {
 }
 
 // MARK: - Watch Page Preview
-// Mirrors the watch's DynamicMetricsPage layout using the same MetricRow
-// styling (MetricRow lives in the Watch target; we replicate it here).
 
 struct WatchPagePreview: View {
     let page: MetricPage
 
-    // Approximate Apple Watch Ultra 2 / Series 9 45mm display ratio
-    private let watchWidth: CGFloat  = 198
-    private let watchHeight: CGFloat = 242
+    // Scaled down to ~1/3 screen height
+    private let watchWidth: CGFloat  = 148
+    private let watchHeight: CGFloat = 182
 
     var body: some View {
         ZStack {
             // Watch body
-            RoundedRectangle(cornerRadius: 44)
+            RoundedRectangle(cornerRadius: 34)
                 .fill(Color(white: 0.08))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 44)
+                    RoundedRectangle(cornerRadius: 34)
                         .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
                 )
 
             // Screen
-            RoundedRectangle(cornerRadius: 38)
+            RoundedRectangle(cornerRadius: 28)
                 .fill(Color.black)
-                .padding(6)
+                .padding(5)
                 .overlay(
                     screenContent
-                        .padding(6)
+                        .padding(5)
                 )
         }
         .frame(width: watchWidth, height: watchHeight)
-        .shadow(color: .black.opacity(0.4), radius: 16, y: 8)
+        .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     private var screenContent: some View {
@@ -436,7 +551,6 @@ struct WatchPagePreview: View {
                     }
                 }
             }
-            Spacer(minLength: 0)
         }
         .padding(.top, 10)
         .padding(.horizontal, 10)

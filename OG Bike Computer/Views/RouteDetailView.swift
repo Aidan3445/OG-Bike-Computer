@@ -19,8 +19,6 @@ struct RouteDetailView: View {
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var expanded = true
     @State private var showOverwriteAlert = false
-    
-    let buttonHeight: CGFloat = 44
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -115,53 +113,58 @@ struct RouteDetailView: View {
                 MapScaleView()
             }
 
-            // Floating stats bar
-            Button {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "chevron.left")
-                        .rotationEffect(expanded ? .zero : .degrees(180))
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+            // Stats overlay — panel collapses into the button
+            VStack(spacing: 0) {
+                Spacer()
 
+                VStack(spacing: 12) {
                     if expanded {
-                        VStack(spacing: 6) {
-                            HStack(spacing: 0) {
-                                StatItem(label: "Distance", value: formatDistance(route.distance))
-                                if route.elevationGain > 0 {
-                                    Spacer()
-                                    StatItem(label: "Gain", value: formatElevation(route.elevationGain))
-                                }
+                        Capsule()
+                            .fill(Color.white.opacity(0.3))
+                            .frame(width: 36, height: 4)
+                            .padding(.top, 8)
+
+                        LazyVGrid(columns: [
+                            GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
+                        ], spacing: 10) {
+                            StatItem(label: "Distance", value: formatDistance(route.distance))
+                            if route.elevationGain > 0 {
+                                StatItem(label: "Elev Gain", value: formatElevation(route.elevationGain))
                             }
                             if route.elevationLoss > 0 {
-                                HStack(spacing: 0) {
-                                    StatItem(label: "Loss", value: formatElevation(route.elevationLoss))
-                                    Spacer()
-                                }
+                                StatItem(label: "Elev Loss", value: formatElevation(route.elevationLoss))
                             }
                         }
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    } else {
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.top, 8)
                     }
                 }
                 .padding(.horizontal, expanded ? 16 : 0)
+                .padding(.bottom, expanded ? 16 : 8)
                 .frame(
-                    width: expanded ? nil : buttonHeight,
-                    height: buttonHeight,
-                    alignment: .center
+                    maxWidth: expanded ? .infinity : nil,
+                    alignment: expanded ? .center : .trailing
                 )
-                .clipped()
+                .frame(width: expanded ? nil : 48, height: expanded ? nil : 48)
+                .background(
+                    RoundedRectangle(cornerRadius: expanded ? 16 : 24)
+                        .fill(Color.black.opacity(0.7))
+                        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                )
+                .padding(.horizontal, expanded ? 12 : 0)
+                .padding(.bottom, expanded ? 12 : 24)
+                .padding(.trailing, expanded ? 0 : 16)
+                .frame(maxWidth: .infinity, alignment: expanded ? .center : .trailing)
                 .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        expanded.toggle()
+                    }
+                }
             }
-            .padding(.bottom, 24)
-            .padding(.trailing, 8)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .tint(.black.opacity(0.65))
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
         }
         .navigationTitle(route.name)
         .navigationBarTitleDisplayMode(.inline)

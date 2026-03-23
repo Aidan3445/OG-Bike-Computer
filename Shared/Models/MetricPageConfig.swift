@@ -43,20 +43,15 @@ struct MetricPagesConfig: Codable, Equatable {
 
     static var `default`: MetricPagesConfig {
         MetricPagesConfig(pages: [
-            MetricPage(name: "Main", metrics: [
-                .speed, .distance,
-                .elapsedTime, .movingTime,
-                .heartRate, .calories
+            MetricPage(name: "Ride", metrics: [
+                .distance, .movingTime,
+                .speed, .averageSpeed,
+                .heartRate, .currentElevation
             ]),
-            MetricPage(name: "Performance", metrics: [
-                .averageSpeed, .maxSpeed,
-                .powerEstimate, .grade,
-                .elevationGain, .elevationLoss
-            ]),
-            MetricPage(name: "Elevation", metrics: [
-                .currentElevation, .highestElevation,
+            MetricPage(name: "Climb", metrics: [
                 .elevationGain, .elevationLoss,
-                .grade, .distance
+                .grade, .powerEstimate,
+                .elapsedTime, .calories
             ])
         ])
     }

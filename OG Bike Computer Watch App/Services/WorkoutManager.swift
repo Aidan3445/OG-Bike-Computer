@@ -44,11 +44,16 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Grade + power computation state
     private var gradeWindowLocations: [CLLocation] = []
-    private let gradeWindowDistance: Double = 30 // meters of horizontal travel for grade calc
+    private let gradeWindowDistance: Double = 50 // meters of horizontal travel for grade calc
     private var heartRateSum: Double = 0
     private var heartRateSampleCount: Int = 0
     private var liveElevRefAltitude: Double?
     private let liveElevMinDelta: Double = 2.0
+
+    // User-configurable mass for power estimate (synced from phone)
+    var riderMass: Double = 75  // kg
+    var bikeMass: Double = 10   // kg
+    var totalMass: Double { riderMass + bikeMass }
 
     var onRideCompleted: ((RideSummary) -> Void)?
 
@@ -651,38 +656,48 @@ class WorkoutManager: NSObject, ObservableObject {
             }
         }
 
-        // Grade calculation: use sliding window of recent locations
-        gradeWindowLocations.append(location)
+        // Grade calculation: prefer route GPX elevation when on-route, fall back to GPS
+        let routeGrade = computeRouteGrade()
+        if let rg = routeGrade {
+            // Smooth toward route-derived grade to avoid jumps
+            let alpha = 0.3
+            currentGrade = currentGrade * (1 - alpha) + rg * alpha
+        } else {
+            // Fall back to GPS altitude sliding window
+            gradeWindowLocations.append(location)
 
-        // Trim window to keep only recent points spanning ~gradeWindowDistance
-        while gradeWindowLocations.count > 2 {
-            let oldest = gradeWindowLocations[0]
-            let horizDist = horizontalDistance(from: oldest, to: location)
-            if horizDist > gradeWindowDistance * 2 {
-                gradeWindowLocations.removeFirst()
-            } else {
-                break
+            // Trim window to keep only recent points spanning ~gradeWindowDistance
+            while gradeWindowLocations.count > 2 {
+                let oldest = gradeWindowLocations[0]
+                let horizDist = horizontalDistance(from: oldest, to: location)
+                if horizDist > gradeWindowDistance * 2 {
+                    gradeWindowLocations.removeFirst()
+                } else {
+                    break
+                }
+            }
+
+            if gradeWindowLocations.count >= 2,
+               location.verticalAccuracy >= 0,
+               location.verticalAccuracy < 20 { // Only use good GPS altitude
+                let first = gradeWindowLocations[0]
+                guard first.verticalAccuracy >= 0, first.verticalAccuracy < 20 else { return }
+                let horizDist = horizontalDistance(from: first, to: location)
+                if horizDist > 10 { // Need at least 10m horizontal to compute grade
+                    let elevChange = location.altitude - first.altitude
+                    let rawGrade = (elevChange / horizDist) * 100
+                    // Smooth and clamp: steepest paved road is ~35%
+                    let clampedGrade = max(-45, min(45, rawGrade))
+                    let alpha = 0.4
+                    currentGrade = currentGrade * (1 - alpha) + clampedGrade * alpha
+                }
             }
         }
 
-        if gradeWindowLocations.count >= 2,
-           location.verticalAccuracy >= 0 {
-            let first = gradeWindowLocations[0]
-            guard first.verticalAccuracy >= 0 else { return }
-            let horizDist = horizontalDistance(from: first, to: location)
-            if horizDist > 5 { // Need at least 5m horizontal to compute grade
-                let elevChange = location.altitude - first.altitude
-                currentGrade = (elevChange / horizDist) * 100
-            }
-        }
-
-        // Power estimate (cycling model)
+        // Power estimate (cycling physics model)
         // P = (Fg + Fr + Fa) * v
-        // Fg = m*g*sin(atan(grade/100))
-        // Fr = Crr * m * g * cos(atan(grade/100))
-        // Fa = 0.5 * CdA * rho * v^2
         if spd > 0.5 { // Only estimate when moving
-            let mass: Double = 80 // kg (rider + bike)
+            let mass = totalMass
             let g: Double = 9.81
             let crr: Double = 0.005 // rolling resistance
             let cdA: Double = 0.4 // drag area m^2
@@ -704,6 +719,40 @@ class WorkoutManager: NSObject, ObservableObject {
         let flatA = CLLocation(latitude: a.coordinate.latitude, longitude: a.coordinate.longitude)
         let flatB = CLLocation(latitude: b.coordinate.latitude, longitude: b.coordinate.longitude)
         return flatA.distance(from: flatB)
+    }
+
+    /// Compute grade from GPX route elevation data when on-route.
+    /// Uses a ~50m window of route points around the current position.
+    private func computeRouteGrade() -> Double? {
+        guard let route = navigation.processedRoute,
+              !navigation.isOffRoute else { return nil }
+
+        let points = route.points
+        let segIdx = navigation.currentSegmentIndex
+        guard segIdx < points.count else { return nil }
+
+        // Find points ~25m behind and ~25m ahead along the route
+        let currentDist = navigation.distanceAlongRoute
+        let lookback: Double = 25
+        let lookahead: Double = 25
+
+        var behindIdx = segIdx
+        while behindIdx > 0 && (currentDist - points[behindIdx].distanceFromStart) < lookback {
+            behindIdx -= 1
+        }
+        var aheadIdx = segIdx
+        while aheadIdx < points.count - 1 && (points[aheadIdx].distanceFromStart - currentDist) < lookahead {
+            aheadIdx += 1
+        }
+
+        guard let elevBehind = points[behindIdx].elevation,
+              let elevAhead = points[aheadIdx].elevation else { return nil }
+
+        let horizDist = points[aheadIdx].distanceFromStart - points[behindIdx].distanceFromStart
+        guard horizDist > 10 else { return nil }
+
+        let grade = ((elevAhead - elevBehind) / horizDist) * 100
+        return max(-45, min(45, grade))
     }
 
     func loadRoute(_ route: Route) {

@@ -141,4 +141,14 @@ enum MetricType: String, Codable, CaseIterable, Identifiable {
             return false
         }
     }
+
+    /// Whether this metric is an estimate rather than a direct measurement
+    var isEstimate: Bool {
+        switch self {
+        case .powerEstimate, .grade:
+            return true
+        default:
+            return false
+        }
+    }
 }

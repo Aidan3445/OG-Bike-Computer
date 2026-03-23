@@ -43,6 +43,12 @@ struct ContentView: View {
                 metricConfig.applyFromRemote(data)
             }
 
+            ConnectivityManager.shared.onUserSettingsReceived = { data in
+                guard let settings = try? JSONDecoder().decode(UserSettings.self, from: data) else { return }
+                workout.riderMass = settings.riderWeight
+                workout.bikeMass = settings.bikeWeight
+            }
+
             workout.onRideCompleted = { summary in
                 rideStore.save(summary)
             }

@@ -18,6 +18,8 @@ struct WorkoutView<ExtraTab: View>: View {
     @State private var tab = 2
     @State private var endCountdown: Double = 0
     @State private var endTimer: Timer?
+    @State private var showNavOverlay = false
+    @State private var navOverlayTask: Task<Void, Never>?
 
     init(workout: WorkoutManager, metricConfig: MetricConfigStore, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
         self.workout = workout
@@ -105,6 +107,53 @@ struct WorkoutView<ExtraTab: View>: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal, 8)
                     .padding(.bottom, 4)
+                }
+            }
+            // Nav turn overlay — flash map when a turn is imminent and rider is on a metrics page
+            .overlay {
+                if showNavOverlay && tab >= 3 {
+                    ZStack {
+                        Color.black.opacity(0.85)
+                        RouteMapView(workout: workout)
+                    }
+                    .transition(.opacity)
+                    .allowsHitTesting(true)
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.25)) { showNavOverlay = false }
+                    }
+                }
+            }
+            .onChange(of: workout.navigation.nextTurn?.index) { oldTurn, newTurn in
+                // A new turn became the next turn (rider passed one or a new one appeared)
+                guard newTurn != nil, tab >= 3 else { return }
+                navOverlayTask?.cancel()
+                withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
+                navOverlayTask = Task {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        withAnimation(.easeOut(duration: 0.3)) { showNavOverlay = false }
+                    }
+                }
+            }
+            .onChange(of: workout.navigation.distanceToNextTurn) { _, dist in
+                // Also flash when approaching a turn closely
+                guard dist > 0, dist < 150, tab >= 3, !showNavOverlay else { return }
+                navOverlayTask?.cancel()
+                withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
+                navOverlayTask = Task {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        withAnimation(.easeOut(duration: 0.3)) { showNavOverlay = false }
+                    }
+                }
+            }
+            .onChange(of: tab) { _, newTab in
+                // Dismiss overlay when user swipes to map themselves
+                if newTab <= 2 && showNavOverlay {
+                    withAnimation(.easeOut(duration: 0.2)) { showNavOverlay = false }
+                    navOverlayTask?.cancel()
                 }
             }
             .onChange(of: workout.hasRoute) { _, hasRoute in

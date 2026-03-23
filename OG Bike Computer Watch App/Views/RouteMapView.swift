@@ -51,6 +51,14 @@ struct RouteMapView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                         } else if let turn = workout.navigation.nextTurn {
                             VStack(spacing: 1) {
+                                HStack(spacing: 2) {
+                                    Text(formatSpeed(workout.speed, false))
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .monospacedDigit()
+                                    Text("mph")
+                                        .font(.system(size: 7))
+                                        .foregroundStyle(.secondary)
+                                }
                                 HStack(spacing: 4) {
                                     Image(systemName: turn.direction.icon)
                                         .font(.system(size: 13, weight: .bold))
@@ -71,6 +79,14 @@ struct RouteMapView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                         } else if !workout.hasRoute {
                             VStack(spacing: 1) {
+                                HStack(spacing: 2) {
+                                    Text(formatSpeed(workout.speed, false))
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .monospacedDigit()
+                                    Text("mph")
+                                        .font(.system(size: 7))
+                                        .foregroundStyle(.secondary)
+                                }
                                 Text(formatDistance(workout.totalDistance))
                                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                                     .monospacedDigit()

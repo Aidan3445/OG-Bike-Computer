@@ -22,8 +22,6 @@ struct RideDetailView: View {
     @State private var elevationExtremes: (high: ElevPoint, low: ElevPoint)?
     @State private var mileMarkers: [MileMarker] = []
 
-    let buttonHeight: CGFloat = 44
-
     var body: some View {
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
@@ -111,53 +109,77 @@ struct RideDetailView: View {
                 MapScaleView()
             }
 
-            // Floating stats bar — matches RouteDetailView
-            Button {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "chevron.left")
-                        .rotationEffect(expanded ? .zero : .degrees(180))
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+            // Stats overlay — panel collapses into the button
+            VStack(spacing: 0) {
+                Spacer()
 
+                VStack(spacing: 12) {
                     if expanded {
-                        VStack(spacing: 6) {
-                            HStack(spacing: 0) {
-                                StatItem(label: "Distance", value: formatDistance(ride.distance))
-                                Spacer()
-                                StatItem(label: "Time", value: formatTime(ride.movingTime))
-                                Spacer()
-                                StatItem(label: "Speed", value: formatSpeed(ride.avgSpeed))
-                            }
-                            if ride.elevationGain > 0 {
-                                HStack(spacing: 0) {
-                                    StatItem(label: "Gain", value: formatElevation(ride.elevationGain))
-                                    Spacer()
-                                    StatItem(label: "Loss", value: formatElevation(ride.elevationLoss))
-                                }
+                        // Drag handle
+                        Capsule()
+                            .fill(Color.white.opacity(0.3))
+                            .frame(width: 36, height: 4)
+                            .padding(.top, 8)
+
+                        LazyVGrid(columns: [
+                            GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
+                        ], spacing: 10) {
+                            StatItem(label: "Distance", value: formatDistance(ride.distance))
+                            StatItem(label: "Moving Time", value: formatTime(ride.movingTime))
+                            StatItem(label: "Avg Speed", value: formatSpeed(ride.avgSpeed))
+                        }
+
+                        if ride.elevationGain > 0 || ride.elevationLoss > 0 {
+                            Divider().overlay(Color.white.opacity(0.15))
+                            LazyVGrid(columns: [
+                                GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
+                            ], spacing: 10) {
+                                StatItem(label: "Elev Gain", value: formatElevation(ride.elevationGain))
+                                StatItem(label: "Elev Loss", value: formatElevation(ride.elevationLoss))
+                                StatItem(label: "Elapsed", value: formatTime(ride.elapsedTime))
                             }
                         }
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+
+                        if ride.calories > 0 {
+                            Divider().overlay(Color.white.opacity(0.15))
+                            LazyVGrid(columns: [
+                                GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
+                            ], spacing: 10) {
+                                StatItem(label: "Calories", value: String(format: "%.0f kcal", ride.calories))
+                                StatItem(label: "Points", value: "\(ride.pointCount)")
+                                StatItem(label: "Activity", value: ride.activityType.rawValue.capitalized)
+                            }
+                        }
+                    } else {
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.top, 8)
                     }
                 }
                 .padding(.horizontal, expanded ? 16 : 0)
+                .padding(.bottom, expanded ? 16 : 8)
                 .frame(
-                    width: expanded ? nil : buttonHeight,
-                    height: buttonHeight,
-                    alignment: .center)
-                .clipped()
+                    maxWidth: expanded ? .infinity : nil,
+                    alignment: expanded ? .center : .trailing
+                )
+                .frame(width: expanded ? nil : 48, height: expanded ? nil : 48)
+                .background(
+                    RoundedRectangle(cornerRadius: expanded ? 16 : 24)
+                        .fill(Color.black.opacity(0.7))
+                        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                )
+                .padding(.horizontal, expanded ? 12 : 0)
+                .padding(.bottom, expanded ? 12 : 24)
+                .padding(.trailing, expanded ? 0 : 16)
+                .frame(maxWidth: .infinity, alignment: expanded ? .center : .trailing)
                 .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        expanded.toggle()
+                    }
+                }
             }
-            .padding(.bottom, 24)
-            .padding(.trailing, 8)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .tint(.black.opacity(0.65))
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
         }
         .navigationTitle(ride.name)
         .navigationBarTitleDisplayMode(.inline)
