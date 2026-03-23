@@ -65,11 +65,10 @@ struct UserSettings: Codable, Equatable {
 // MARK: - Store
 
 class UserSettingsStore: ObservableObject {
-    @Published var settings: UserSettings {
-        didSet { save() }
-    }
+    @Published var settings: UserSettings
 
     private let fileURL: URL
+    private var cancellables = Set<AnyCancellable>()
 
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -86,6 +85,17 @@ class UserSettingsStore: ObservableObject {
         if settings.activeBikeID == nil, let first = settings.bikes.first {
             settings.activeBikeID = first.id
         }
+
+        // Debounce disk writes and watch sync to avoid flooding I/O and WCSession traffic
+        // while the user is actively editing text fields.
+        $settings
+            .dropFirst()
+            .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.save()
+                self?.sendToWatch()
+            }
+            .store(in: &cancellables)
     }
 
     private func save() {
