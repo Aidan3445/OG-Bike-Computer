@@ -348,16 +348,30 @@ struct WorkoutView<ExtraTab: View>: View {
 
             if workout.navigation.processedRoute?.hasWaypoints == true {
                 Divider()
-                Picker(selection: Binding(
-                    get: { workout.navigation.turnMode },
-                    set: { workout.navigation.setTurnMode($0) }
-                )) {
-                    Text("Cues").tag(TurnMode.provided)
-                    Text("Calc").tag(TurnMode.calculated)
-                    Text("Both").tag(TurnMode.both)
-                } label: {
+                HStack {
                     Label("Turns", systemImage: "arrow.triangle.turn.up.right.diamond")
                         .font(.caption)
+                    Spacer()
+                    HStack(spacing: 4) {
+                        ForEach([TurnMode.provided, .calculated, .both], id: \.self) { mode in
+                            Button {
+                                workout.navigation.setTurnMode(mode)
+                            } label: {
+                                Text(turnModeShortLabel(mode))
+                                    .font(.system(size: 11, weight: workout.navigation.turnMode == mode ? .bold : .regular))
+                                    .foregroundStyle(workout.navigation.turnMode == mode ? .white : .secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        workout.navigation.turnMode == mode
+                                            ? Color.white.opacity(0.2)
+                                            : Color.clear
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
             }
 
@@ -378,6 +392,14 @@ struct WorkoutView<ExtraTab: View>: View {
                 cancelEndCountdown()
                 onStop()
             }
+        }
+    }
+
+    private func turnModeShortLabel(_ mode: TurnMode) -> String {
+        switch mode {
+        case .provided:   return "Cues"
+        case .calculated: return "Calc"
+        case .both:       return "Both"
         }
     }
 

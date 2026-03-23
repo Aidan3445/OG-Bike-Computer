@@ -38,8 +38,11 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var liveElevationGain: Double = 0
     @Published var liveElevationLoss: Double = 0
     @Published var highestElevation: Double = -Double.greatestFiniteMagnitude
+    @Published var lowestElevation: Double = Double.greatestFiniteMagnitude
     @Published var currentGrade: Double = 0
     @Published var estimatedPower: Double = 0
+    @Published var averagePower: Double = 0
+    @Published var maxPower: Double = 0
     @Published var averageHeartRate: Double = 0
     @Published var maxHeartRate: Double = 0
 
@@ -48,6 +51,8 @@ class WorkoutManager: NSObject, ObservableObject {
     private let gradeWindowDistance: Double = 50 // meters of horizontal travel for grade calc
     private var heartRateSum: Double = 0
     private var heartRateSampleCount: Int = 0
+    private var powerSum: Double = 0
+    private var powerSampleCount: Int = 0
     private var liveElevRefAltitude: Double?
     private let liveElevMinDelta: Double = 2.0
 
@@ -604,12 +609,17 @@ class WorkoutManager: NSObject, ObservableObject {
             self.liveElevationGain = 0
             self.liveElevationLoss = 0
             self.highestElevation = -Double.greatestFiniteMagnitude
+            self.lowestElevation = Double.greatestFiniteMagnitude
             self.currentGrade = 0
             self.estimatedPower = 0
+            self.averagePower = 0
+            self.maxPower = 0
             self.averageHeartRate = 0
             self.maxHeartRate = 0
             self.heartRateSum = 0
             self.heartRateSampleCount = 0
+            self.powerSum = 0
+            self.powerSampleCount = 0
             self.gradeWindowLocations = []
             self.liveElevRefAltitude = nil
         }
@@ -655,6 +665,7 @@ class WorkoutManager: NSObject, ObservableObject {
             let alt = location.altitude
             currentElevation = alt
             if alt > highestElevation { highestElevation = alt }
+            if alt < lowestElevation { lowestElevation = alt }
 
             // Live elevation gain/loss with noise filtering
             if let ref = liveElevRefAltitude {
@@ -723,8 +734,12 @@ class WorkoutManager: NSObject, ObservableObject {
             let fr = crr * mass * g * cos(gradeRad)
             let fa = 0.5 * cdA * rho * spd * spd
 
-            let power = (fg + fr + fa) * spd
-            estimatedPower = max(0, power)
+            let power = max(0, (fg + fr + fa) * spd)
+            estimatedPower = power
+            if power > maxPower { maxPower = power }
+            powerSum += power
+            powerSampleCount += 1
+            averagePower = powerSum / Double(powerSampleCount)
         } else {
             estimatedPower = 0
         }
@@ -886,7 +901,14 @@ class WorkoutManager: NSObject, ObservableObject {
             elevationLoss: elevLoss,
             avgSpeed: avgSpeed,
             pointCount: recordedLocations.count,
-            trackFilename: trackFilename)
+            trackFilename: trackFilename,
+            maxSpeed: maxSpeed > 0 ? maxSpeed : nil,
+            avgPower: powerSampleCount > 0 ? averagePower : nil,
+            maxPower: maxPower > 0 ? maxPower : nil,
+            avgHeartRate: heartRateSampleCount > 0 ? averageHeartRate : nil,
+            maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
+            highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
+            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil)
 
         DispatchQueue.main.async {
             self.onRideCompleted?(summary)
