@@ -22,8 +22,10 @@ struct RouteProcessor {
             return ProcessedRoute(
                 name: route.name,
                 points: [],
-                turnPoints: [],
+                waypointTurnPoints: [],
+                calculatedTurnPoints: [],
                 totalDistance: 0,
+                hasWaypoints: false,
                 minLat: 0, maxLat: 0, minLon: 0, maxLon: 0)
         }
 
@@ -63,7 +65,7 @@ struct RouteProcessor {
                 bearingToNext: bearing))
         }
 
-        // Step 2: Detect turns
+        // Step 2: Detect calculated turns
         var turnPoints: [TurnPoint] = []
         var lastTurnDistance: Double = -minTurnSpacing
 
@@ -86,7 +88,7 @@ struct RouteProcessor {
                 }
             }
         }
-        
+
         // Step 2b: Remove canceling turn pairs
         // Two turns within cancelPairDistance whose angles roughly
         // cancel out (sum near zero) are noise, not real turns.
@@ -113,19 +115,65 @@ struct RouteProcessor {
             }
             filtered.append(turnPoints[j])
         }
-        turnPoints = filtered
+        let calculatedTurns = filtered
 
-        // Step 3: Bounding box
+        // Step 3: Map waypoints to route points
+        let waypointTurns: [TurnPoint]
+        if let waypoints = route.waypoints, !waypoints.isEmpty {
+            waypointTurns = mapWaypoints(waypoints, to: processedPoints)
+        } else {
+            waypointTurns = []
+        }
+
+        // Step 4: Bounding box
         let lats = coords.map { $0.latitude }
         let lons = coords.map { $0.longitude }
 
         return ProcessedRoute(
             name: route.name,
             points: processedPoints,
-            turnPoints: turnPoints,
+            waypointTurnPoints: waypointTurns,
+            calculatedTurnPoints: calculatedTurns,
             totalDistance: cumulativeDistance,
+            hasWaypoints: !waypointTurns.isEmpty,
             minLat: lats.min()!, maxLat: lats.max()!,
             minLon: lons.min()!, maxLon: lons.max()!)
+    }
+
+    /// Map GPX waypoints to the nearest processed route points, creating TurnPoints.
+    private static func mapWaypoints(_ waypoints: [Waypoint], to processedPoints: [ProcessedPoint]) -> [TurnPoint] {
+        return waypoints.compactMap { wpt in
+            let wptLoc = CLLocation(latitude: wpt.lat, longitude: wpt.lon)
+
+            var bestIndex = 0
+            var bestDist = Double.greatestFiniteMagnitude
+
+            for i in 0..<processedPoints.count {
+                let pt = processedPoints[i]
+                let ptLoc = CLLocation(latitude: pt.coordinate.latitude, longitude: pt.coordinate.longitude)
+                let dist = wptLoc.distance(from: ptLoc)
+                if dist < bestDist {
+                    bestDist = dist
+                    bestIndex = i
+                }
+            }
+
+            // Reject waypoints that are too far from the route
+            guard bestDist < 200 else { return nil }
+
+            let direction = TurnDirection.from(waypointName: wpt.name)
+
+            return TurnPoint(
+                index: bestIndex,
+                angle: 0,
+                direction: direction,
+                distanceFromStart: processedPoints[bestIndex].distanceFromStart,
+                coordinate: processedPoints[bestIndex].coordinate,
+                description: wpt.description,
+                isWaypoint: true
+            )
+        }
+        .sorted { $0.distanceFromStart < $1.distanceFromStart }
     }
 
     nonisolated static func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {

@@ -212,6 +212,14 @@ struct WorkoutView<ExtraTab: View>: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
 
+                    if let desc = turn.description {
+                        Text(desc)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                    }
+
                     Spacer()
 
                     HStack {
@@ -313,7 +321,22 @@ struct WorkoutView<ExtraTab: View>: View {
                 .onChange(of: voiceEnabled) { _, newValue in
                     VoiceNavigator.shared.isEnabled = newValue
                 }
-            
+
+                if workout.navigation.processedRoute?.hasWaypoints == true {
+                    Divider()
+                    Picker(selection: Binding(
+                        get: { workout.navigation.turnMode },
+                        set: { workout.navigation.setTurnMode($0) }
+                    )) {
+                        Label("Cues", systemImage: "mappin.circle").tag(TurnMode.provided)
+                        Label("Calc", systemImage: "point.topleft.down.to.point.bottomright.curvepath").tag(TurnMode.calculated)
+                        Label("Both", systemImage: "arrow.triangle.merge").tag(TurnMode.both)
+                    } label: {
+                        Label("Turns", systemImage: "arrow.triangle.turn.up.right.diamond")
+                            .font(.caption)
+                    }
+                }
+
         }
         .ignoresSafeArea(edges: .top)
         .contentShape(Rectangle())

@@ -30,6 +30,13 @@ class NavigationTracker: ObservableObject {
     @Published var bearingToRoute: Double = 0
     @Published var rejoinCandidates: [RejoinCandidate] = []
     @Published var showReversePrompt: Bool = false
+    @Published var turnMode: TurnMode = .calculated
+
+    /// The active turn list based on the current turn mode.
+    var activeTurnPoints: [TurnPoint] {
+        guard let route = route else { return [] }
+        return route.turnPoints(for: turnMode)
+    }
 
     private var wasOffRoute = false
     private var lastPassedTurn: TurnPoint?
@@ -61,6 +68,7 @@ class NavigationTracker: ObservableObject {
 
     func load(_ processedRoute: ProcessedRoute) {
         route = processedRoute
+        turnMode = processedRoute.hasWaypoints ? .provided : .calculated
         lastSearchIndex = 0
         distanceAlongRoute = 0
         distanceToNextTurn = 0
@@ -226,7 +234,7 @@ class NavigationTracker: ObservableObject {
         let previousTurn = nextTurn
         let previousDistance = distanceToNextTurn
 
-        let newNextTurn = route.turnPoints.first { $0.distanceFromStart > distanceAlongRoute - turnConfirmationBuffer }
+        let newNextTurn = activeTurnPoints.first { $0.distanceFromStart > distanceAlongRoute - turnConfirmationBuffer }
         if let prev = nextTurn, newNextTurn?.index != prev.index {
             lastPassedTurn = prev
         }
@@ -248,6 +256,29 @@ class NavigationTracker: ObservableObject {
         showReversePrompt = false
         reversePromptDismissed = true
         alternateCandidate = nil
+    }
+
+    /// Change the turn mode mid-ride and recompute the next turn.
+    func setTurnMode(_ mode: TurnMode) {
+        turnMode = mode
+        let turns = activeTurnPoints
+        let newNext = turns.first { $0.distanceFromStart > distanceAlongRoute - turnConfirmationBuffer }
+        nextTurn = newNext
+        distanceToNextTurn = newNext.map { max(0, $0.distanceFromStart - distanceAlongRoute) } ?? 0
+        lastPassedTurn = nil
+        lastAlertedTurnIndex = nil
+        lastAlertLevel = nil
+        VoiceNavigator.shared.resetForRouteSwap()
+    }
+
+    /// Returns the turn immediately after `turn` if it's within `threshold` meters, using the active turn list.
+    func nearbyFollowingTurn(after turn: TurnPoint, threshold: Double = 150) -> TurnPoint? {
+        let turns = activeTurnPoints
+        guard let idx = turns.firstIndex(where: { $0.index == turn.index }),
+              idx + 1 < turns.count else { return nil }
+        let next = turns[idx + 1]
+        let gap = next.distanceFromStart - turn.distanceFromStart
+        return gap <= threshold ? next : nil
     }
 
     func reverseRemainingRoute() {
@@ -296,8 +327,8 @@ class NavigationTracker: ObservableObject {
 
         // Recompute turns for reversed section
         var newTurns: [TurnPoint] = []
-        // Keep turns that are already behind us
-        for t in route.turnPoints {
+        // Keep turns that are already behind us (from the active turn list)
+        for t in activeTurnPoints {
             if t.distanceFromStart < distanceAlongRoute - turnConfirmationBuffer {
                 newTurns.append(t)
             }
@@ -332,13 +363,17 @@ class NavigationTracker: ObservableObject {
         let newRoute = ProcessedRoute(
             name: route.name,
             points: allPoints,
-            turnPoints: newTurns,
+            waypointTurnPoints: [],
+            calculatedTurnPoints: newTurns,
             totalDistance: totalDist,
+            hasWaypoints: false,
             minLat: lats.min()!, maxLat: lats.max()!,
             minLon: lons.min()!, maxLon: lons.max()!)
 
         // Reload with new route, preserving position
+        // Waypoints are invalidated by reversal — force calculated mode
         self.route = newRoute
+        self.turnMode = .calculated
         currentSegmentIndex = min(startIdx, allPoints.count - 1)
         lastSearchIndex = currentSegmentIndex
         distanceRemaining = totalDist - distanceAlongRoute
