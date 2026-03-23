@@ -590,11 +590,10 @@ private struct BreadcrumbCanvas: View {
                     private static var lastCount: Int = -1
                     private static var cachedMarkers: [MileMarker] = []
 
-                    static func markers<T>(for points: [T],
-                                            compute: ([T]) -> [MileMarker]) -> [MileMarker] {
+                    static func markers(for points: [ProcessedPoint], compute: ([ProcessedPoint], Double) -> [MileMarker]) -> [MileMarker] {
                         let count = points.count
                         if count != lastCount {
-                            cachedMarkers = compute(points)
+                            cachedMarkers = compute(points, 5)
                             lastCount = count
                         }
                         return cachedMarkers
