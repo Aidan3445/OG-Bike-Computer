@@ -352,9 +352,6 @@ struct RiderProfileView: View {
             }
         }
         .navigationTitle("Rider Profile")
-        .onChange(of: userSettings.settings) { _, _ in
-            userSettings.sendToWatch()
-        }
         .alert("Add Bike", isPresented: $showAddBike) {
             TextField("Name (e.g. Road Bike)", text: $newBikeName)
             TextField("Weight in lbs", text: $newBikeWeight)
