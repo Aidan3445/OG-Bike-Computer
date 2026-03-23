@@ -165,6 +165,13 @@ struct WorkoutView<ExtraTab: View>: View {
                         withAnimation { tab = 3 }
                     }
                 }
+            .onChange(of: metricConfig.config.pages.count) { _, count in
+                // Clamp tab to valid range when pages are added/removed
+                let maxTab = 2 + count
+                if tab > maxTab {
+                    withAnimation { tab = max(maxTab, 1) }
+                }
+            }
             .tag(2)
 
             if let extraTab {
