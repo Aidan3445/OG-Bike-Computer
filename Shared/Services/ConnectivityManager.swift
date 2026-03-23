@@ -21,6 +21,8 @@ final class ConnectivityManager: NSObject, ObservableObject {
     @Published var lastEvent: String = "none"
 
     var onRouteReceived: ((Route) -> Void)?
+    var onMetricConfigReceived: ((Data) -> Void)?
+    var onUserSettingsReceived: ((Data) -> Void)?
 
     #if os(watchOS)
     @Published var routeStore: RouteStore?
@@ -149,6 +151,66 @@ extension ConnectivityManager {
 
         completion(.success(()))
     }
+
+    func sendMetricConfig(_ data: Data) {
+        guard WCSession.default.activationState == .activated else { return }
+
+        // Try immediate delivery first (works even during a ride)
+        if WCSession.default.isReachable {
+            let base64 = data.base64EncodedString()
+            WCSession.default.sendMessage(
+                ["type": "metricConfig", "data": base64],
+                replyHandler: { _ in print("[MetricConfig] Sent via message") },
+                errorHandler: { error in
+                    print("[MetricConfig] Message failed, falling back to userInfo: \(error)")
+                    WCSession.default.transferUserInfo(["type": "metricConfig", "data": base64])
+                }
+            )
+        } else {
+            let base64 = data.base64EncodedString()
+            WCSession.default.transferUserInfo(["type": "metricConfig", "data": base64])
+            print("[MetricConfig] Queued via userInfo")
+        }
+    }
+
+    func sendUserSettings(_ data: Data) {
+        guard WCSession.default.activationState == .activated else { return }
+
+        if WCSession.default.isReachable {
+            let base64 = data.base64EncodedString()
+            WCSession.default.sendMessage(
+                ["type": "userSettings", "data": base64],
+                replyHandler: { _ in print("[UserSettings] Sent via message") },
+                errorHandler: { error in
+                    print("[UserSettings] Message failed, falling back to userInfo: \(error)")
+                    WCSession.default.transferUserInfo(["type": "userSettings", "data": base64])
+                }
+            )
+        } else {
+            let base64 = data.base64EncodedString()
+            WCSession.default.transferUserInfo(["type": "userSettings", "data": base64])
+            print("[UserSettings] Queued via userInfo")
+        }
+    }
+
+    /// Send acknowledgment to watch that a ride was successfully received.
+    func sendRideAck(rideID: UUID) {
+        guard WCSession.default.activationState == .activated else { return }
+
+        let msg: [String: Any] = ["type": "rideAck", "rideID": rideID.uuidString]
+
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: { _ in
+                print("[Transfer] Ack sent via message for \(rideID)")
+            }, errorHandler: { error in
+                print("[Transfer] Ack message failed, using userInfo: \(error)")
+                WCSession.default.transferUserInfo(msg)
+            })
+        } else {
+            WCSession.default.transferUserInfo(msg)
+            print("[Transfer] Ack queued via userInfo for \(rideID)")
+        }
+    }
 }
 #endif
 
@@ -161,8 +223,22 @@ extension ConnectivityManager {
         // Save locally on watch first
         saveRideLocally(summary: summary, trackURL: trackURL)
 
+        // Record in transfer ledger as pending
+        TransferLedger.shared.recordTransfer(rideID: summary.id)
+
         guard WCSession.default.activationState == .activated else {
-            print("Cannot send ride: WCSession not activated (saved locally)")
+            print("Cannot send ride: WCSession not activated (saved locally, will retry)")
+            return
+        }
+
+        transferRideToPhone(summary: summary)
+    }
+
+    /// Transfer a ride's track file to the phone. The track must already exist in the local rides directory.
+    private func transferRideToPhone(summary: RideSummary) {
+        let trackURL = Self.ridesDirectory.appendingPathComponent(summary.trackFilename)
+        guard FileManager.default.fileExists(atPath: trackURL.path) else {
+            print("[Transfer] Track file missing for \(summary.name), cannot transfer")
             return
         }
 
@@ -204,6 +280,73 @@ extension ConnectivityManager {
         print("Ride saved locally on watch: \(summary.name)")
     }
 
+    /// Retry transferring any unconfirmed rides to the phone.
+    func retryPendingTransfers() {
+        guard WCSession.default.activationState == .activated else { return }
+
+        let pending = TransferLedger.shared.pendingRideIDs()
+        guard !pending.isEmpty else { return }
+
+        print("[Transfer] Retrying \(pending.count) unconfirmed ride(s)")
+
+        let dir = Self.ridesDirectory
+        for rideID in pending {
+            let summaryURL = dir.appendingPathComponent("\(rideID.uuidString).json")
+            guard let data = try? Data(contentsOf: summaryURL),
+                  let summary = try? JSONDecoder().decode(RideSummary.self, from: data) else {
+                print("[Transfer] Cannot load summary for \(rideID), removing from ledger")
+                TransferLedger.shared.remove(rideID: rideID)
+                continue
+            }
+            transferRideToPhone(summary: summary)
+        }
+    }
+
+    /// Handle a transfer acknowledgment from the phone.
+    func handleTransferAck(rideID: UUID) {
+        TransferLedger.shared.markConfirmed(rideID: rideID)
+        print("[Transfer] Confirmed: \(rideID)")
+    }
+
+    /// Clean up old confirmed rides (7 days) and expired unconfirmed rides (30 days).
+    func cleanupOldRides() {
+        let dir = Self.ridesDirectory
+        let fm = FileManager.default
+
+        // Clean confirmed rides older than 7 days
+        let confirmedToRemove = TransferLedger.shared.confirmedRideIDsOlderThan(days: 7)
+        for rideID in confirmedToRemove {
+            deleteLocalRide(rideID: rideID, dir: dir, fm: fm)
+            TransferLedger.shared.remove(rideID: rideID)
+            print("[Transfer] Cleaned up confirmed ride: \(rideID)")
+        }
+
+        // Clean unconfirmed rides older than 30 days (data likely lost, can't keep forever)
+        let expiredToRemove = TransferLedger.shared.pendingRideIDsOlderThan(days: 30)
+        for rideID in expiredToRemove {
+            deleteLocalRide(rideID: rideID, dir: dir, fm: fm)
+            TransferLedger.shared.remove(rideID: rideID)
+            print("[Transfer] Expired unconfirmed ride: \(rideID)")
+        }
+    }
+
+    private func deleteLocalRide(rideID: UUID, dir: URL, fm: FileManager) {
+        let summaryURL = dir.appendingPathComponent("\(rideID.uuidString).json")
+
+        // Read summary to get track filename before deleting
+        if let data = try? Data(contentsOf: summaryURL),
+           let summary = try? JSONDecoder().decode(RideSummary.self, from: data) {
+            let trackURL = dir.appendingPathComponent(summary.trackFilename)
+            try? fm.removeItem(at: trackURL)
+        }
+        try? fm.removeItem(at: summaryURL)
+
+        // Remove from in-memory store
+        DispatchQueue.main.async {
+            self.rideStore?.rides.removeAll { $0.id == rideID }
+        }
+    }
+
     func reportRoutes(_ routes: [Route]) {
         guard WCSession.default.activationState == .activated else { return }
         let names = routes.map { $0.name }
@@ -239,12 +382,27 @@ extension ConnectivityManager: WCSessionDelegate {
         if activationState == .activated, session.hasContentPending {
             print("WCSession has content pending delivery")
         }
+
+        #if os(watchOS)
+        if activationState == .activated {
+            retryPendingTransfers()
+            cleanupOldRides()
+        }
+        #endif
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
             self.isReachable = session.isReachable
         }
+
+        #if os(watchOS)
+        // When phone becomes reachable, retry any pending transfers and clean up old rides
+        if session.isReachable {
+            retryPendingTransfers()
+            cleanupOldRides()
+        }
+        #endif
     }
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
@@ -296,6 +454,36 @@ extension ConnectivityManager: WCSessionDelegate {
             self.lastEvent = "got userInfo: \(userInfo.keys)"
         }
 
+        if let type = userInfo["type"] as? String,
+           type == "metricConfig",
+           let base64 = userInfo["data"] as? String,
+           let data = Data(base64Encoded: base64) {
+            DispatchQueue.main.async {
+                self.onMetricConfigReceived?(data)
+            }
+            return
+        }
+
+        if let type = userInfo["type"] as? String,
+           type == "userSettings",
+           let base64 = userInfo["data"] as? String,
+           let data = Data(base64Encoded: base64) {
+            DispatchQueue.main.async {
+                self.onUserSettingsReceived?(data)
+            }
+            return
+        }
+
+        #if os(watchOS)
+        if let type = userInfo["type"] as? String,
+           type == "rideAck",
+           let idString = userInfo["rideID"] as? String,
+           let rideID = UUID(uuidString: idString) {
+            handleTransferAck(rideID: rideID)
+            return
+        }
+        #endif
+
         if let data = userInfo["route"] as? Data,
            let route = try? JSONDecoder().decode(Route.self, from: data) {
             DispatchQueue.main.async {
@@ -314,6 +502,42 @@ extension ConnectivityManager: WCSessionDelegate {
             replyHandler(["awake": true])
             return
         }
+
+        // Handle metric config on both platforms
+        if let type = message["type"] as? String,
+           type == "metricConfig",
+           let base64 = message["data"] as? String,
+           let data = Data(base64Encoded: base64) {
+            DispatchQueue.main.async {
+                self.onMetricConfigReceived?(data)
+            }
+            replyHandler(["received": true])
+            return
+        }
+
+        // Handle user settings on both platforms
+        if let type = message["type"] as? String,
+           type == "userSettings",
+           let base64 = message["data"] as? String,
+           let data = Data(base64Encoded: base64) {
+            DispatchQueue.main.async {
+                self.onUserSettingsReceived?(data)
+            }
+            replyHandler(["received": true])
+            return
+        }
+
+        // Handle ride transfer acknowledgment on watch
+        #if os(watchOS)
+        if let type = message["type"] as? String,
+           type == "rideAck",
+           let idString = message["rideID"] as? String,
+           let rideID = UUID(uuidString: idString) {
+            handleTransferAck(rideID: rideID)
+            replyHandler(["received": true])
+            return
+        }
+        #endif
 
         #if os(iOS)
         print("Received message: \(message.keys), \(message["type"] as? String ?? "no type")")
@@ -384,6 +608,9 @@ private extension ConnectivityManager {
             }
             print("Ride received: \(summary.name)")
         }
+
+        // Send acknowledgment back to watch so it can mark the ride as confirmed
+        sendRideAck(rideID: summary.id)
     }
     #endif
 }

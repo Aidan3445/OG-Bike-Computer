@@ -11,6 +11,7 @@ import WatchKit
 class ExtensionDelegate: NSObject, WKApplicationDelegate {
     let store = RouteStore()
     let rideStore = RideStore()
+    let metricConfig = MetricConfigStore()
 
     func applicationDidFinishLaunching() {
         ConnectivityManager.shared.activate()
@@ -35,7 +36,7 @@ struct OG_Bike_ComputerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(store: delegate.store, rideStore: delegate.rideStore)
+            ContentView(store: delegate.store, rideStore: delegate.rideStore, metricConfig: delegate.metricConfig)
         }
     }
 }

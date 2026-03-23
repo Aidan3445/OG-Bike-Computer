@@ -151,12 +151,14 @@ struct OG_Bike_ComputerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var routeStore = RouteStore()
     @StateObject private var rideStore = RideStore()
+    @StateObject private var metricConfig = MetricConfigStore()
+    @StateObject private var userSettings = UserSettingsStore()
 
     @State private var importedFileURL: URL?
 
     var body: some Scene {
         WindowGroup {
-            ContentView(routeStore: routeStore, rideStore: rideStore)
+            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings)
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                 }

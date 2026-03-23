@@ -19,18 +19,21 @@ struct RouteDetailView: View {
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var expanded = true
     @State private var showOverwriteAlert = false
-    
-    let buttonHeight: CGFloat = 44
+
+    // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
+    @State private var cachedCoordinates: [CLLocationCoordinate2D] = []
+    @State private var cachedMileMarkers: [MileMarker] = []
+    @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
                 // Route polyline
-                MapPolyline(coordinates: coordinates)
+                MapPolyline(coordinates: cachedCoordinates)
                     .stroke(.blue, lineWidth: 4)
 
                 // Start marker
-                if let first = coordinates.first {
+                if let first = cachedCoordinates.first {
                     Annotation("Start", coordinate: first) {
                         Circle()
                             .fill(.green)
@@ -40,7 +43,7 @@ struct RouteDetailView: View {
                 }
 
                 // End marker
-                if let last = coordinates.last {
+                if let last = cachedCoordinates.last {
                     Annotation("End", coordinate: last) {
                         Circle()
                             .fill(.red)
@@ -50,7 +53,7 @@ struct RouteDetailView: View {
                 }
 
                 // Elevation markers
-                if let peaks = elevationExtremes {
+                if let peaks = cachedElevationExtremes {
                     Annotation("", coordinate: peaks.high.coordinate) {
                         VStack(spacing: 2) {
                             Text(formatElevation(peaks.high.elevation!))
@@ -87,6 +90,24 @@ struct RouteDetailView: View {
                     }
                 }
 
+                // Mile markers
+                ForEach(Array(cachedMileMarkers.enumerated()), id: \.offset) { _, marker in
+                    Annotation("", coordinate: marker.coordinate) {
+                        VStack(spacing: 1) {
+                            Text("\(marker.mile) mi")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.orange)
+                                .clipShape(Capsule())
+                            Image(systemName: "flag.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
                 // Current location
                 UserAnnotation()
             }
@@ -97,53 +118,58 @@ struct RouteDetailView: View {
                 MapScaleView()
             }
 
-            // Floating stats bar
-            Button {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "chevron.left")
-                        .rotationEffect(expanded ? .zero : .degrees(180))
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+            // Stats overlay — panel collapses into the button
+            VStack(spacing: 0) {
+                Spacer()
 
+                VStack(spacing: 12) {
                     if expanded {
-                        VStack(spacing: 6) {
-                            HStack(spacing: 0) {
-                                StatItem(label: "Distance", value: formatDistance(route.distance))
-                                if route.elevationGain > 0 {
-                                    Spacer()
-                                    StatItem(label: "Gain", value: formatElevation(route.elevationGain))
-                                }
+                        Capsule()
+                            .fill(Color.white.opacity(0.3))
+                            .frame(width: 36, height: 4)
+                            .padding(.top, 8)
+
+                        LazyVGrid(columns: [
+                            GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
+                        ], spacing: 10) {
+                            StatItem(label: "Distance", value: formatDistance(route.distance))
+                            if route.elevationGain > 0 {
+                                StatItem(label: "Elev Gain", value: formatElevation(route.elevationGain))
                             }
                             if route.elevationLoss > 0 {
-                                HStack(spacing: 0) {
-                                    StatItem(label: "Loss", value: formatElevation(route.elevationLoss))
-                                    Spacer()
-                                }
+                                StatItem(label: "Elev Loss", value: formatElevation(route.elevationLoss))
                             }
                         }
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    } else {
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.top, 8)
                     }
                 }
                 .padding(.horizontal, expanded ? 16 : 0)
+                .padding(.bottom, expanded ? 16 : 8)
                 .frame(
-                    width: expanded ? nil : buttonHeight,
-                    height: buttonHeight,
-                    alignment: .center
+                    maxWidth: expanded ? .infinity : nil,
+                    alignment: expanded ? .center : .trailing
                 )
-                .clipped()
+                .frame(width: expanded ? nil : 48, height: expanded ? nil : 48)
+                .background(
+                    RoundedRectangle(cornerRadius: expanded ? 16 : 24)
+                        .fill(Color.black.opacity(0.7))
+                        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                )
+                .padding(.horizontal, expanded ? 12 : 0)
+                .padding(.bottom, expanded ? 12 : 24)
+                .padding(.trailing, expanded ? 0 : 16)
+                .frame(maxWidth: .infinity, alignment: expanded ? .center : .trailing)
                 .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        expanded.toggle()
+                    }
+                }
             }
-            .padding(.bottom, 24)
-            .padding(.trailing, 8)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .tint(.black.opacity(0.65))
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
         }
         .navigationTitle(route.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -182,24 +208,43 @@ struct RouteDetailView: View {
         } message: {
             Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
         }
-    }
-        
-    private var coordinates: [CLLocationCoordinate2D] {
-        route.points.map {
-            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
-        }
+        .onAppear { buildRouteCache() }
     }
 
     private let minElevDiff: Double = 50 // meters — minimum difference to show markers
 
-    private var elevationExtremes: (high: TrackPoint, low: TrackPoint)? {
-        let withElev = route.points.filter { $0.elevation != nil }
-        guard let highest = withElev.max(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-              let lowest = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-              let highElev = highest.elevation,
-              let lowElev = lowest.elevation,
-              highElev - lowElev >= minElevDiff else { return nil }
-        return (highest, lowest)
+    private func buildRouteCache() {
+        cachedCoordinates = route.points.map {
+            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+        }
+
+        let pts = route.points
+        if pts.count >= 2 {
+            var cumDist: Double = 0
+            var processed: [ProcessedPoint] = []
+            for i in 0..<pts.count {
+                if i > 0 {
+                    let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
+                    let cur  = CLLocation(latitude: pts[i].lat,     longitude: pts[i].lon)
+                    cumDist += cur.distance(from: prev)
+                }
+                processed.append(ProcessedPoint(
+                    coordinate: CLLocationCoordinate2D(latitude: pts[i].lat, longitude: pts[i].lon),
+                    elevation: pts[i].elevation,
+                    distanceFromStart: cumDist,
+                    bearingToNext: 0))
+            }
+            cachedMileMarkers = computeMileMarkers(points: processed)
+        }
+
+        let withElev = pts.filter { $0.elevation != nil }
+        if let highest = withElev.max(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
+           let lowest  = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
+           let highElev = highest.elevation,
+           let lowElev  = lowest.elevation,
+           highElev - lowElev >= minElevDiff {
+            cachedElevationExtremes = (highest, lowest)
+        }
     }
 }
 
@@ -218,10 +263,3 @@ private struct StatItem: View {
     }
 }
 
-extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
-        }
-    }
-}

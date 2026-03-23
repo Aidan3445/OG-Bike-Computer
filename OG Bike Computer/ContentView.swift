@@ -13,6 +13,8 @@ import Combine
 struct ContentView: View {
     @ObservedObject var routeStore: RouteStore
     @ObservedObject var rideStore: RideStore
+    @ObservedObject var metricConfig: MetricConfigStore
+    @ObservedObject var userSettings: UserSettingsStore
     @StateObject private var connectivity = ConnectivityManager.shared
 
     @State private var showFilePicker = false
@@ -128,6 +130,14 @@ struct ContentView: View {
                 Label("Rides", systemImage: "bicycle")
             }
             .tag(1)
+
+            NavigationStack {
+                SettingsView(metricConfig: metricConfig, userSettings: userSettings)
+            }
+            .tabItem {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .tag(2)
         }
     }
 

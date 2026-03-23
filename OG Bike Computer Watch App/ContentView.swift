@@ -10,6 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var store: RouteStore
     @ObservedObject var rideStore: RideStore
+    @ObservedObject var metricConfig: MetricConfigStore
     @StateObject private var connectivity = ConnectivityManager.shared
     @StateObject private var workout = WorkoutManager()
     @StateObject private var simulator = RideSimulator()
@@ -22,7 +23,7 @@ struct ContentView: View {
                 if workout.isSimulating {
                     SimPlaybackOverlay(simulator: simulator, workout: workout)
                 } else {
-                    WorkoutView(workout: workout, onStop: handleStop) {
+                    WorkoutView(workout: workout, metricConfig: metricConfig, onStop: handleStop) {
                         MidRideRouteList(store: store, workout: workout)
                     }
                 }
@@ -36,6 +37,16 @@ struct ContentView: View {
 
             store.onChange = {
                 ConnectivityManager.shared.reportRoutes(store.routes)
+            }
+
+            ConnectivityManager.shared.onMetricConfigReceived = { data in
+                metricConfig.applyFromRemote(data)
+            }
+
+            ConnectivityManager.shared.onUserSettingsReceived = { data in
+                guard let settings = try? JSONDecoder().decode(UserSettings.self, from: data) else { return }
+                workout.riderMass = settings.riderWeight
+                workout.bikeMass = settings.bikeWeight
             }
 
             workout.onRideCompleted = { summary in

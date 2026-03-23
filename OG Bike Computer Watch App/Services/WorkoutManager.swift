@@ -31,6 +31,30 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var currentActivity: ActivityType = .cycling
     var hasRoute: Bool { navigation.processedRoute != nil }
 
+    // Extended metrics
+    @Published var maxSpeed: Double = 0
+    @Published var currentElevation: Double = 0
+    @Published var liveElevationGain: Double = 0
+    @Published var liveElevationLoss: Double = 0
+    @Published var highestElevation: Double = -Double.greatestFiniteMagnitude
+    @Published var currentGrade: Double = 0
+    @Published var estimatedPower: Double = 0
+    @Published var averageHeartRate: Double = 0
+    @Published var maxHeartRate: Double = 0
+
+    // Grade + power computation state
+    private var gradeWindowLocations: [CLLocation] = []
+    private let gradeWindowDistance: Double = 50 // meters of horizontal travel for grade calc
+    private var heartRateSum: Double = 0
+    private var heartRateSampleCount: Int = 0
+    private var liveElevRefAltitude: Double?
+    private let liveElevMinDelta: Double = 2.0
+
+    // User-configurable mass for power estimate (synced from phone)
+    var riderMass: Double = 75  // kg
+    var bikeMass: Double = 10   // kg
+    var totalMass: Double { riderMass + bikeMass }
+
     var onRideCompleted: ((RideSummary) -> Void)?
 
     private var routeInsertionTimer: Timer?
@@ -135,6 +159,8 @@ class WorkoutManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.currentLocation = location
             self.speed = max(location.speed, 0)
+
+            self.updateExtendedMetrics(location)
 
             // Navigation + voice only when a route is loaded
             if self.hasRoute {
@@ -562,6 +588,19 @@ class WorkoutManager: NSObject, ObservableObject {
             self.heartRate = 0
             self.activeCalories = 0
             self.currentLocation = nil
+            self.maxSpeed = 0
+            self.currentElevation = 0
+            self.liveElevationGain = 0
+            self.liveElevationLoss = 0
+            self.highestElevation = -Double.greatestFiniteMagnitude
+            self.currentGrade = 0
+            self.estimatedPower = 0
+            self.averageHeartRate = 0
+            self.maxHeartRate = 0
+            self.heartRateSum = 0
+            self.heartRateSampleCount = 0
+            self.gradeWindowLocations = []
+            self.liveElevRefAltitude = nil
         }
     }
 
@@ -585,6 +624,135 @@ class WorkoutManager: NSObject, ObservableObject {
     private func stopDisplayTimer() {
         displayTimer?.invalidate()
         displayTimer = nil
+    }
+
+    var averageSpeed: Double {
+        movingTime > 0 ? totalDistance / movingTime : 0
+    }
+
+    private func updateExtendedMetrics(_ location: CLLocation) {
+        // Max speed
+        let spd = max(location.speed, 0)
+        if spd > maxSpeed { maxSpeed = spd }
+
+        // Elevation (only if valid vertical accuracy)
+        if location.verticalAccuracy >= 0 {
+            let alt = location.altitude
+            currentElevation = alt
+            if alt > highestElevation { highestElevation = alt }
+
+            // Live elevation gain/loss with noise filtering
+            if let ref = liveElevRefAltitude {
+                let delta = alt - ref
+                if delta > liveElevMinDelta {
+                    liveElevationGain += delta
+                    liveElevRefAltitude = alt
+                } else if delta < -liveElevMinDelta {
+                    liveElevationLoss -= delta
+                    liveElevRefAltitude = alt
+                }
+            } else {
+                liveElevRefAltitude = alt
+            }
+        }
+
+        // Grade calculation: prefer route GPX elevation when on-route, fall back to GPS
+        let routeGrade = computeRouteGrade()
+        if let rg = routeGrade {
+            // Smooth toward route-derived grade to avoid jumps
+            let alpha = 0.3
+            currentGrade = currentGrade * (1 - alpha) + rg * alpha
+        } else {
+            // Fall back to GPS altitude sliding window
+            gradeWindowLocations.append(location)
+
+            // Trim window to keep only recent points spanning ~gradeWindowDistance
+            while gradeWindowLocations.count > 2 {
+                let oldest = gradeWindowLocations[0]
+                let horizDist = horizontalDistance(from: oldest, to: location)
+                if horizDist > gradeWindowDistance * 2 {
+                    gradeWindowLocations.removeFirst()
+                } else {
+                    break
+                }
+            }
+
+            if gradeWindowLocations.count >= 2,
+               location.verticalAccuracy >= 0,
+               location.verticalAccuracy < 20 { // Only use good GPS altitude
+                let first = gradeWindowLocations[0]
+                guard first.verticalAccuracy >= 0, first.verticalAccuracy < 20 else { return }
+                let horizDist = horizontalDistance(from: first, to: location)
+                if horizDist > 10 { // Need at least 10m horizontal to compute grade
+                    let elevChange = location.altitude - first.altitude
+                    let rawGrade = (elevChange / horizDist) * 100
+                    // Smooth and clamp: steepest paved road is ~35%
+                    let clampedGrade = max(-45, min(45, rawGrade))
+                    let alpha = 0.4
+                    currentGrade = currentGrade * (1 - alpha) + clampedGrade * alpha
+                }
+            }
+        }
+
+        // Power estimate (cycling physics model)
+        // P = (Fg + Fr + Fa) * v
+        if spd > 0.5 { // Only estimate when moving
+            let mass = totalMass
+            let g: Double = 9.81
+            let crr: Double = 0.005 // rolling resistance
+            let cdA: Double = 0.4 // drag area m^2
+            let rho: Double = 1.225 // air density kg/m^3
+
+            let gradeRad = atan(currentGrade / 100)
+            let fg = mass * g * sin(gradeRad)
+            let fr = crr * mass * g * cos(gradeRad)
+            let fa = 0.5 * cdA * rho * spd * spd
+
+            let power = (fg + fr + fa) * spd
+            estimatedPower = max(0, power)
+        } else {
+            estimatedPower = 0
+        }
+    }
+
+    private func horizontalDistance(from a: CLLocation, to b: CLLocation) -> Double {
+        let flatA = CLLocation(latitude: a.coordinate.latitude, longitude: a.coordinate.longitude)
+        let flatB = CLLocation(latitude: b.coordinate.latitude, longitude: b.coordinate.longitude)
+        return flatA.distance(from: flatB)
+    }
+
+    /// Compute grade from GPX route elevation data when on-route.
+    /// Uses a ~50m window of route points around the current position.
+    private func computeRouteGrade() -> Double? {
+        guard let route = navigation.processedRoute,
+              !navigation.isOffRoute else { return nil }
+
+        let points = route.points
+        let segIdx = navigation.currentSegmentIndex
+        guard segIdx < points.count else { return nil }
+
+        // Find points ~25m behind and ~25m ahead along the route
+        let currentDist = navigation.distanceAlongRoute
+        let lookback: Double = 25
+        let lookahead: Double = 25
+
+        var behindIdx = segIdx
+        while behindIdx > 0 && (currentDist - points[behindIdx].distanceFromStart) < lookback {
+            behindIdx -= 1
+        }
+        var aheadIdx = segIdx
+        while aheadIdx < points.count - 1 && (points[aheadIdx].distanceFromStart - currentDist) < lookahead {
+            aheadIdx += 1
+        }
+
+        guard let elevBehind = points[behindIdx].elevation,
+              let elevAhead = points[aheadIdx].elevation else { return nil }
+
+        let horizDist = points[aheadIdx].distanceFromStart - points[behindIdx].distanceFromStart
+        guard horizDist > 10 else { return nil }
+
+        let grade = ((elevAhead - elevBehind) / horizDist) * 100
+        return max(-45, min(45, grade))
     }
 
     func loadRoute(_ route: Route) {
@@ -822,7 +990,14 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
                 switch quantityType {
                 case HKQuantityType(.heartRate):
                     let unit = HKUnit.count().unitDivided(by: .minute())
-                    self.heartRate = statistics?.mostRecentQuantity()?.doubleValue(for: unit) ?? 0
+                    let hr = statistics?.mostRecentQuantity()?.doubleValue(for: unit) ?? 0
+                    self.heartRate = hr
+                    if hr > 0 {
+                        self.heartRateSum += hr
+                        self.heartRateSampleCount += 1
+                        self.averageHeartRate = self.heartRateSum / Double(self.heartRateSampleCount)
+                        if hr > self.maxHeartRate { self.maxHeartRate = hr }
+                    }
                 case HKQuantityType(.activeEnergyBurned):
                     let unit = HKUnit.kilocalorie()
                     self.activeCalories = statistics?.sumQuantity()?.doubleValue(for: unit) ?? 0

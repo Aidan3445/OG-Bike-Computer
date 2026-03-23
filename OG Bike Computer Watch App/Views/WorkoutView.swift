@@ -9,6 +9,7 @@ import SwiftUI
 
 struct WorkoutView<ExtraTab: View>: View {
     @ObservedObject var workout: WorkoutManager
+    @ObservedObject var metricConfig: MetricConfigStore
     var onStop: () -> Void
     var extraTab: ExtraTab?
 
@@ -17,15 +18,19 @@ struct WorkoutView<ExtraTab: View>: View {
     @State private var tab = 2
     @State private var endCountdown: Double = 0
     @State private var endTimer: Timer?
+    @State private var showNavOverlay = false
+    @State private var navOverlayTask: Task<Void, Never>?
 
-    init(workout: WorkoutManager, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
+    init(workout: WorkoutManager, metricConfig: MetricConfigStore, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
         self.workout = workout
+        self.metricConfig = metricConfig
         self.onStop = onStop
         self.extraTab = nil
     }
 
-    init(workout: WorkoutManager, onStop: @escaping () -> Void, @ViewBuilder extraTab: () -> ExtraTab) {
+    init(workout: WorkoutManager, metricConfig: MetricConfigStore, onStop: @escaping () -> Void, @ViewBuilder extraTab: () -> ExtraTab) {
         self.workout = workout
+        self.metricConfig = metricConfig
         self.onStop = onStop
         self.extraTab = extraTab()
     }
@@ -42,8 +47,15 @@ struct WorkoutView<ExtraTab: View>: View {
                 RouteMapView(workout: workout)
                     .tag(2)
 
-                metricsPage
-                    .tag(3)
+                // Dynamic metric pages from config
+                ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, metricPage in
+                    DynamicMetricsPage(
+                        workout: workout,
+                        metricPage: metricPage,
+                        showOffRouteBanner: index == 0
+                    )
+                    .tag(3 + index)
+                }
             }
             .tabViewStyle(.verticalPage)
             .scrollIndicators(.visible)
@@ -97,15 +109,69 @@ struct WorkoutView<ExtraTab: View>: View {
                     .padding(.bottom, 4)
                 }
             }
+            // Nav turn overlay — flash map when a turn is imminent and rider is on a metrics page
+            .overlay {
+                if showNavOverlay && tab >= 3 {
+                    ZStack {
+                        Color.black.opacity(0.85)
+                        RouteMapView(workout: workout)
+                    }
+                    .transition(.opacity)
+                    .allowsHitTesting(true)
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.25)) { showNavOverlay = false }
+                    }
+                }
+            }
+            .onChange(of: workout.navigation.nextTurn?.index) { oldTurn, newTurn in
+                // A new turn became the next turn (rider passed one or a new one appeared)
+                guard newTurn != nil, tab >= 3 else { return }
+                navOverlayTask?.cancel()
+                withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
+                navOverlayTask = Task {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        withAnimation(.easeOut(duration: 0.3)) { showNavOverlay = false }
+                    }
+                }
+            }
+            .onChange(of: workout.navigation.distanceToNextTurn) { _, dist in
+                // Also flash when approaching a turn closely
+                guard dist > 0, dist < 150, tab >= 3, !showNavOverlay else { return }
+                navOverlayTask?.cancel()
+                withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
+                navOverlayTask = Task {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        withAnimation(.easeOut(duration: 0.3)) { showNavOverlay = false }
+                    }
+                }
+            }
+            .onChange(of: tab) { _, newTab in
+                // Dismiss overlay when user swipes to map themselves
+                if newTab <= 2 && showNavOverlay {
+                    withAnimation(.easeOut(duration: 0.2)) { showNavOverlay = false }
+                    navOverlayTask?.cancel()
+                }
+            }
             .onChange(of: workout.hasRoute) { _, hasRoute in
-                    if hasRoute && tab == 3 {
+                    if hasRoute && tab >= 3 {
                         // Loaded a route mid-ride — switch to map
                         withAnimation { tab = 2 }
                     } else if !hasRoute {
-                        // Cleared route — go to metrics
+                        // Cleared route — go to first metrics page
                         withAnimation { tab = 3 }
                     }
                 }
+            .onChange(of: metricConfig.config.pages.count) { _, count in
+                // Clamp tab to valid range when pages are added/removed
+                let maxTab = 2 + count
+                if tab > maxTab {
+                    withAnimation { tab = max(maxTab, 1) }
+                }
+            }
             .tag(2)
 
             if let extraTab {
@@ -114,6 +180,11 @@ struct WorkoutView<ExtraTab: View>: View {
             }
         }
         .tabViewStyle(.page)
+        .onDisappear {
+            navOverlayTask?.cancel()
+            navOverlayTask = nil
+            showNavOverlay = false
+        }
     }
 
     private var navigationPage: some View {
@@ -191,75 +262,6 @@ struct WorkoutView<ExtraTab: View>: View {
                 .padding(.bottom, 4)
             }
         }
-    }
-
-    @Environment(\.isLuminanceReduced) var isLuminanceReduced
-    private var metricsPage: some View {
-        VStack(spacing: 4) {
-            if workout.navigation.isOffRoute {
-                OffRouteBanner(workout: workout)
-            }
-
-            if isLuminanceReduced {
-                MetricRow(
-                    label: workout.currentActivity.speedLabel,
-                    value: workout.currentActivity.usesPace
-                    ? formatPace(workout.speed)
-                    : formatSpeed(workout.speed),
-                    unit: workout.currentActivity.usesPace ? "min/mi" : "mph")
-                Divider()
-                MetricRow(label: "DISTANCE", value: formatDistance(workout.totalDistance, false), unit: "mi")
-                Divider()
-                MetricRow(label: "TIME", value: formatTime(workout.elapsedTime), unit: "")
-            } else {
-                HStack {
-                    MetricRow(
-                        label: workout.currentActivity.speedLabel,
-                        value: workout.currentActivity.usesPace
-                        ? formatPace(workout.speed)
-                        : formatSpeed(workout.speed),
-                        unit: workout.currentActivity.usesPace ? "min/mi" : "mph")
-
-                    Spacer()
-
-                    MetricRow(label: "DISTANCE", value: formatDistance(workout.totalDistance, false), unit: "mi")
-                }
-
-                Divider()
-
-                HStack {
-                    MetricRow(label: "ELAPSED", value: formatTime(workout.elapsedTime), unit: "")
-                    Spacer()
-                    MetricRow(label: "MOVING", value: formatTime(workout.movingTime), unit: "")
-                }
-
-                Divider()
-
-                HStack {
-                    MetricRow(label: "HR", value: String(format: "%.0f", workout.heartRate), unit: "bpm")
-                    Spacer()
-                    MetricRow(label: "CAL", value: String(format: "%.0f", workout.activeCalories), unit: "kcal")
-                }
-
-                if let turn = workout.navigation.nextTurn {
-                    Divider()
-                    HStack(spacing: 6) {
-                        Image(systemName: turn.direction.icon)
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(turnColor(workout.navigation.distanceToNextTurn))
-                        Text("in \(formatTurnDistance(workout.navigation.distanceToNextTurn))")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(formatDistance(workout.navigation.distanceRemaining) + " to end")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
     }
 
     private var controlsOverlay: some View {
@@ -348,5 +350,63 @@ struct WorkoutView<ExtraTab: View>: View {
         endTimer?.invalidate()
         endTimer = nil
         endCountdown = 0
+    }
+}
+
+// MARK: - Dynamic Metrics Page
+
+struct DynamicMetricsPage: View {
+    @ObservedObject var workout: WorkoutManager
+    let metricPage: MetricPage
+    let showOffRouteBanner: Bool
+
+    @Environment(\.isLuminanceReduced) var isLuminanceReduced
+
+    var body: some View {
+        let resolver = MetricResolver(workout: workout)
+        let slots = metricPage.slots
+        let rows = slots.chunked(into: isLuminanceReduced ? 1 : 2)
+
+        VStack(spacing: 4) {
+            if showOffRouteBanner && workout.navigation.isOffRoute {
+                OffRouteBanner(workout: workout)
+            }
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
+                if rowIdx > 0 { Divider() }
+
+                if row.count == 1 {
+                    let resolved = resolver.resolve(row[0].type)
+                    MetricRow(label: resolved.label, value: resolved.value, unit: resolved.unit, alignment: .center)
+                } else {
+                    HStack {
+                        let r0 = resolver.resolve(row[0].type)
+                        MetricRow(label: r0.label, value: r0.value, unit: r0.unit, alignment: .leading)
+                        Spacer()
+                        let r1 = resolver.resolve(row[1].type)
+                        MetricRow(label: r1.label, value: r1.value, unit: r1.unit, alignment: .trailing)
+                    }
+                }
+            }
+
+            // Show next turn info at bottom of first metrics page if on route
+            if showOffRouteBanner, let turn = workout.navigation.nextTurn, !isLuminanceReduced {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: turn.direction.icon)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(turnColor(workout.navigation.distanceToNextTurn))
+                    Text("in \(formatTurnDistance(workout.navigation.distanceToNextTurn))")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(formatDistance(workout.navigation.distanceRemaining) + " to end")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 }

@@ -51,6 +51,14 @@ struct RouteMapView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                         } else if let turn = workout.navigation.nextTurn {
                             VStack(spacing: 1) {
+                                HStack(spacing: 2) {
+                                    Text(formatSpeed(workout.speed, false))
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .monospacedDigit()
+                                    Text("mph")
+                                        .font(.system(size: 7))
+                                        .foregroundStyle(.secondary)
+                                }
                                 HStack(spacing: 4) {
                                     Image(systemName: turn.direction.icon)
                                         .font(.system(size: 13, weight: .bold))
@@ -71,6 +79,14 @@ struct RouteMapView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                         } else if !workout.hasRoute {
                             VStack(spacing: 1) {
+                                HStack(spacing: 2) {
+                                    Text(formatSpeed(workout.speed, false))
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .monospacedDigit()
+                                    Text("mph")
+                                        .font(.system(size: 7))
+                                        .foregroundStyle(.secondary)
+                                }
                                 Text(formatDistance(workout.totalDistance))
                                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                                     .monospacedDigit()
@@ -223,9 +239,37 @@ private struct FullRouteCanvas: View {
                                    style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 }
 
-                if let loc = workout.currentLocation {
-                    let pos = project(loc.coordinate, transform: transform)
+            // Mile markers
+            let markers = computeMileMarkers(points: points)
+            for marker in markers {
+                let pt = project(marker.coordinate, transform: transform)
+                // Flag pole
+                context.stroke(
+                    Path { p in
+                        p.move(to: CGPoint(x: pt.x, y: pt.y))
+                        p.addLine(to: CGPoint(x: pt.x, y: pt.y - 10))
+                    },
+                    with: .color(.orange),
+                    style: StrokeStyle(lineWidth: 1.5))
+                // Flag
+                context.fill(
+                    Path { p in
+                        p.move(to: CGPoint(x: pt.x, y: pt.y - 10))
+                        p.addLine(to: CGPoint(x: pt.x + 7, y: pt.y - 8))
+                        p.addLine(to: CGPoint(x: pt.x, y: pt.y - 6))
+                        p.closeSubpath()
+                    },
+                    with: .color(.orange))
+                // Label
+                let text = Text("\(marker.mile)")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundColor(.white)
+                context.draw(context.resolve(text),
+                             at: CGPoint(x: pt.x + 4, y: pt.y - 14))
+            }
 
+            if let loc = workout.currentLocation {
+                let pos = project(loc.coordinate, transform: transform)
                     if workout.navigation.isOffRoute {
                         let candidates = workout.navigation.rejoinCandidates
                         if candidates.isEmpty {
@@ -540,6 +584,52 @@ private struct BreadcrumbCanvas: View {
                 let style = StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round)
                 context.stroke(behindPath, with: .color(.green.opacity(0.4)), style: style)
                 context.stroke(aheadPath, with: .color(.white), style: style)
+
+                // Mile markers on breadcrumb view
+                struct MileMarkerCache {
+                    private static var lastCount: Int = -1
+                    private static var cachedMarkers: [MileMarker] = []
+
+                    static func markers(for points: [ProcessedPoint], compute: ([ProcessedPoint], Double) -> [MileMarker]) -> [MileMarker] {
+                        let count = points.count
+                        if count != lastCount {
+                            cachedMarkers = compute(points, 5)
+                            lastCount = count
+                        }
+                        return cachedMarkers
+                    }
+                }
+
+                let markers = MileMarkerCache.markers(for: points, compute: computeMileMarkers)
+                for marker in markers {
+                    let pt = toScreen(marker.coordinate)
+                    // Only draw if on screen
+                    guard pt.x >= -10 && pt.x <= screenW + 10 &&
+                          pt.y >= -10 && pt.y <= screenH + 10 else { continue }
+                    // Flag pole
+                    context.stroke(
+                        Path { p in
+                            p.move(to: CGPoint(x: pt.x, y: pt.y))
+                            p.addLine(to: CGPoint(x: pt.x, y: pt.y - 12))
+                        },
+                        with: .color(.orange),
+                        style: StrokeStyle(lineWidth: 1.5))
+                    // Flag
+                    context.fill(
+                        Path { p in
+                            p.move(to: CGPoint(x: pt.x, y: pt.y - 12))
+                            p.addLine(to: CGPoint(x: pt.x + 8, y: pt.y - 9.5))
+                            p.addLine(to: CGPoint(x: pt.x, y: pt.y - 7))
+                            p.closeSubpath()
+                        },
+                        with: .color(.orange))
+                    // Label
+                    let text = Text("\(marker.mile)")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(.white)
+                    context.draw(context.resolve(text),
+                                 at: CGPoint(x: pt.x + 5, y: pt.y - 16))
+                }
 
                 if workout.navigation.isOffRoute {
                     let trail = workout.recordedLocations
