@@ -173,6 +173,11 @@ struct WorkoutView<ExtraTab: View>: View {
             }
         }
         .tabViewStyle(.page)
+        .onDisappear {
+            navOverlayTask?.cancel()
+            navOverlayTask = nil
+            showNavOverlay = false
+        }
     }
 
     private var navigationPage: some View {
