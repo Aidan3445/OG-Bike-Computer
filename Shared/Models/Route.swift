@@ -12,12 +12,14 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     var name: String
     let points: [TrackPoint]
+    let waypoints: [Waypoint]?
     let createdAt: Date
 
-    init(id: UUID = UUID(), name: String, points: [TrackPoint], createdAt: Date = Date()) {
+    init(id: UUID = UUID(), name: String, points: [TrackPoint], waypoints: [Waypoint]? = nil, createdAt: Date = Date()) {
         self.id = id
         self.name = name
         self.points = points
+        self.waypoints = waypoints
         self.createdAt = createdAt
     }
 
@@ -26,6 +28,7 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         points = try container.decode([TrackPoint].self, forKey: .points)
+        waypoints = try container.decodeIfPresent([Waypoint].self, forKey: .waypoints)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
     }
 

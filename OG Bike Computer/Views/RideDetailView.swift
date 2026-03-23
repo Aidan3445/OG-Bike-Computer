@@ -15,6 +15,7 @@ struct RideDetailView: View {
 
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var expanded = true
+    @State private var showAllStats = false
     @State private var showShareSheet = false
     @State private var segments: [SpeedPolyline] = []
     @State private var startCoord: CLLocationCoordinate2D?
@@ -120,10 +121,17 @@ struct RideDetailView: View {
                             .fill(Color.white.opacity(0.3))
                             .frame(width: 36, height: 4)
                             .padding(.top, 8)
+                            .onTapGesture {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                    expanded = false
+                                }
+                            }
 
-                        LazyVGrid(columns: [
+                        let columns = [
                             GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
-                        ], spacing: 10) {
+                        ]
+
+                        LazyVGrid(columns: columns, spacing: 10) {
                             StatItem(label: "Distance", value: formatDistance(ride.distance))
                             StatItem(label: "Moving Time", value: formatTime(ride.movingTime))
                             StatItem(label: "Avg Speed", value: formatSpeed(ride.avgSpeed))
@@ -131,24 +139,79 @@ struct RideDetailView: View {
 
                         if ride.elevationGain > 0 || ride.elevationLoss > 0 {
                             Divider().overlay(Color.white.opacity(0.15))
-                            LazyVGrid(columns: [
-                                GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
-                            ], spacing: 10) {
+                            LazyVGrid(columns: columns, spacing: 10) {
                                 StatItem(label: "Elev Gain", value: formatElevation(ride.elevationGain))
                                 StatItem(label: "Elev Loss", value: formatElevation(ride.elevationLoss))
                                 StatItem(label: "Elapsed", value: formatTime(ride.elapsedTime))
                             }
                         }
 
-                        if ride.calories > 0 {
-                            Divider().overlay(Color.white.opacity(0.15))
-                            LazyVGrid(columns: [
-                                GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
-                            ], spacing: 10) {
-                                StatItem(label: "Calories", value: String(format: "%.0f kcal", ride.calories))
-                                StatItem(label: "Points", value: "\(ride.pointCount)")
-                                StatItem(label: "Activity", value: ride.activityType.rawValue.capitalized)
+                        if showAllStats {
+                            if ride.calories > 0 {
+                                Divider().overlay(Color.white.opacity(0.15))
+                                LazyVGrid(columns: columns, spacing: 10) {
+                                    StatItem(label: "Calories", value: String(format: "%.0f kcal", ride.calories))
+                                    StatItem(label: "Points", value: "\(ride.pointCount)")
+                                    StatItem(label: "Activity", value: ride.activityType.rawValue.capitalized)
+                                }
                             }
+
+                            if hasExtendedStats {
+                                Divider().overlay(Color.white.opacity(0.15))
+                                LazyVGrid(columns: columns, spacing: 10) {
+                                    if let maxSpd = ride.maxSpeed {
+                                        StatItem(label: "Max Speed", value: formatSpeed(maxSpd))
+                                    }
+                                    if let avgPwr = ride.avgPower {
+                                        StatItem(label: "Avg Power", value: "\(Int(avgPwr.rounded())) W")
+                                    }
+                                    if let maxPwr = ride.maxPower {
+                                        StatItem(label: "Max Power", value: "\(Int(maxPwr.rounded())) W")
+                                    }
+                                }
+
+                                if ride.avgHeartRate != nil || ride.highestElevation != nil {
+                                    Divider().overlay(Color.white.opacity(0.15))
+                                    LazyVGrid(columns: columns, spacing: 10) {
+                                        if let avgHR = ride.avgHeartRate {
+                                            StatItem(label: "Avg HR", value: "\(Int(avgHR.rounded())) bpm")
+                                        }
+                                        if let maxHR = ride.maxHeartRate {
+                                            StatItem(label: "Max HR", value: "\(Int(maxHR.rounded())) bpm")
+                                        }
+                                        if let high = ride.highestElevation {
+                                            StatItem(label: "High Elev", value: formatElevation(high))
+                                        }
+                                    }
+                                }
+
+                                if ride.lowestElevation != nil {
+                                    Divider().overlay(Color.white.opacity(0.15))
+                                    LazyVGrid(columns: columns, spacing: 10) {
+                                        if let low = ride.lowestElevation {
+                                            StatItem(label: "Low Elev", value: formatElevation(low))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Show More / Show Less toggle
+                        if hasExtendedStats || ride.calories > 0 {
+                            Button {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                    showAllStats.toggle()
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(showAllStats ? "Less" : "More")
+                                        .font(.caption2.weight(.medium))
+                                    Image(systemName: showAllStats ? "chevron.up" : "chevron.down")
+                                        .font(.caption2)
+                                }
+                                .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
                         }
                     } else {
                         Image(systemName: "chart.bar.xaxis")
@@ -175,8 +238,10 @@ struct RideDetailView: View {
                 .frame(maxWidth: .infinity, alignment: expanded ? .center : .trailing)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                        expanded.toggle()
+                    if !expanded {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            expanded = true
+                        }
                     }
                 }
             }
@@ -198,6 +263,12 @@ struct RideDetailView: View {
             }
         }
         .onAppear { loadTrack() }
+    }
+
+    private var hasExtendedStats: Bool {
+        ride.maxSpeed != nil || ride.avgPower != nil || ride.maxPower != nil ||
+        ride.avgHeartRate != nil || ride.maxHeartRate != nil ||
+        ride.highestElevation != nil || ride.lowestElevation != nil
     }
 
     private func loadTrack() {

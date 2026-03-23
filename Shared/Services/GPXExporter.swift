@@ -10,17 +10,38 @@ import CoreLocation
 
 struct GPXExporter {
 
+    /// Per-point power/HR data for GPX extensions
+    struct PointExtras {
+        let power: Double?  // watts
+        let heartRate: Double?  // bpm
+    }
+
     static func export(
         name: String,
         locations: [CLLocation],
-        activityType: String = "cycling"
+        activityType: String = "cycling",
+        pointExtras: [PointExtras]? = nil
     ) -> String {
         let df = ISO8601DateFormatter()
         df.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
+        let hasExtensions = pointExtras?.contains(where: { $0.power != nil || $0.heartRate != nil }) ?? false
+
         var xml = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <gpx version="1.1" creator="Computa" xmlns="http://www.topografix.com/GPX/1/1">
+        <gpx version="1.1" creator="Computa"
+          xmlns="http://www.topografix.com/GPX/1/1"
+        """
+
+        if hasExtensions {
+            xml += """
+
+              xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
+            """
+        }
+
+        xml += """
+        >
           <metadata>
             <name>\(escapeXML(name))</name>
             <time>\(df.string(from: locations.first?.timestamp ?? Date()))</time>
@@ -31,12 +52,27 @@ struct GPXExporter {
             <trkseg>\n
         """
 
-        for loc in locations {
+        for (i, loc) in locations.enumerated() {
             xml += "      <trkpt lat=\"\(loc.coordinate.latitude)\" lon=\"\(loc.coordinate.longitude)\">"
             if loc.altitude != 0 {
                 xml += "<ele>\(String(format: "%.1f", loc.altitude))</ele>"
             }
             xml += "<time>\(df.string(from: loc.timestamp))</time>"
+
+            if let extras = pointExtras, i < extras.count {
+                let ext = extras[i]
+                if ext.power != nil || ext.heartRate != nil {
+                    xml += "<extensions><gpxtpx:TrackPointExtension>"
+                    if let hr = ext.heartRate {
+                        xml += "<gpxtpx:hr>\(Int(hr.rounded()))</gpxtpx:hr>"
+                    }
+                    if let power = ext.power {
+                        xml += "<gpxtpx:power>\(Int(power.rounded()))</gpxtpx:power>"
+                    }
+                    xml += "</gpxtpx:TrackPointExtension></extensions>"
+                }
+            }
+
             xml += "</trkpt>\n"
         }
 
@@ -53,9 +89,10 @@ struct GPXExporter {
         name: String,
         locations: [CLLocation],
         directory: URL,
-        activityType: String = "cycling"
+        activityType: String = "cycling",
+        pointExtras: [PointExtras]? = nil
     ) -> String? {
-        let gpxString = export(name: name, locations: locations, activityType: activityType)
+        let gpxString = export(name: name, locations: locations, activityType: activityType, pointExtras: pointExtras)
         guard let data = gpxString.data(using: .utf8) else { return nil }
 
         let sanitized = name

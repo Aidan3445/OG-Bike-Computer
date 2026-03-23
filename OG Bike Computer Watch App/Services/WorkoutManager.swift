@@ -30,6 +30,7 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var currentLocation: CLLocation?
     @Published var currentActivity: ActivityType = .cycling
     var hasRoute: Bool { navigation.processedRoute != nil }
+    private var needsAnchor = false
 
     // Extended metrics
     @Published var maxSpeed: Double = 0
@@ -37,8 +38,11 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var liveElevationGain: Double = 0
     @Published var liveElevationLoss: Double = 0
     @Published var highestElevation: Double = -Double.greatestFiniteMagnitude
+    @Published var lowestElevation: Double = Double.greatestFiniteMagnitude
     @Published var currentGrade: Double = 0
     @Published var estimatedPower: Double = 0
+    @Published var averagePower: Double = 0
+    @Published var maxPower: Double = 0
     @Published var averageHeartRate: Double = 0
     @Published var maxHeartRate: Double = 0
 
@@ -47,6 +51,8 @@ class WorkoutManager: NSObject, ObservableObject {
     private let gradeWindowDistance: Double = 50 // meters of horizontal travel for grade calc
     private var heartRateSum: Double = 0
     private var heartRateSampleCount: Int = 0
+    private var powerSum: Double = 0
+    private var powerSampleCount: Int = 0
     private var liveElevRefAltitude: Double?
     private let liveElevMinDelta: Double = 2.0
 
@@ -71,6 +77,7 @@ class WorkoutManager: NSObject, ObservableObject {
     private var timerStart: Date?
     private var timerAccumulated: TimeInterval = 0
     private var displayTimer: Timer?
+    private var workoutStartDate: Date?
 
     let navigation = NavigationTracker()
 
@@ -143,7 +150,8 @@ class WorkoutManager: NSObject, ObservableObject {
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.workoutManager = self
 
-        timerStart = Date()
+        workoutStartDate = Date()
+        timerStart = workoutStartDate
         timerAccumulated = 0
         startDisplayTimer()
 
@@ -164,6 +172,12 @@ class WorkoutManager: NSObject, ObservableObject {
 
             // Navigation + voice only when a route is loaded
             if self.hasRoute {
+                // Deferred anchor: if route was loaded before location was available
+                if self.needsAnchor {
+                    self.needsAnchor = false
+                    self.navigation.anchorToLocation(location)
+                }
+
                 if let alert = self.navigation.update(location: location) {
                     self.handleTurnAlert(alert)
                 }
@@ -357,7 +371,8 @@ class WorkoutManager: NSObject, ObservableObject {
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
 
-        timerStart = Date()
+        workoutStartDate = Date()
+        timerStart = workoutStartDate
         timerAccumulated = 0
         startDisplayTimer()
 
@@ -375,7 +390,7 @@ class WorkoutManager: NSObject, ObservableObject {
             timerAccumulated += Date().timeIntervalSince(start)
         }
         timerStart = nil
-        stopDisplayTimer()
+        // Don't stop display timer — elapsed time should keep ticking while paused
         isPaused = true
     }
 
@@ -583,6 +598,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.clearTentativeBuffer()
             self.speed = 0
             self.totalDistance = 0
+            self.workoutStartDate = nil
             self.elapsedTime = 0
             self.movingTime = 0
             self.heartRate = 0
@@ -593,12 +609,17 @@ class WorkoutManager: NSObject, ObservableObject {
             self.liveElevationGain = 0
             self.liveElevationLoss = 0
             self.highestElevation = -Double.greatestFiniteMagnitude
+            self.lowestElevation = Double.greatestFiniteMagnitude
             self.currentGrade = 0
             self.estimatedPower = 0
+            self.averagePower = 0
+            self.maxPower = 0
             self.averageHeartRate = 0
             self.maxHeartRate = 0
             self.heartRateSum = 0
             self.heartRateSampleCount = 0
+            self.powerSum = 0
+            self.powerSampleCount = 0
             self.gradeWindowLocations = []
             self.liveElevRefAltitude = nil
         }
@@ -611,9 +632,13 @@ class WorkoutManager: NSObject, ObservableObject {
     private func startDisplayTimer() {
         displayTimer?.invalidate()
         displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self, let start = self.timerStart else { return }
+            guard let self = self else { return }
             DispatchQueue.main.async {
-                self.elapsedTime = self.timerAccumulated + Date().timeIntervalSince(start)
+                // Elapsed time always counts from workout start (wall-clock time)
+                if let startDate = self.workoutStartDate {
+                    self.elapsedTime = Date().timeIntervalSince(startDate)
+                }
+                // Moving time only ticks while not paused
                 if !self.isAutoPaused && !self.isPaused {
                     self.movingTime += 1
                 }
@@ -640,6 +665,7 @@ class WorkoutManager: NSObject, ObservableObject {
             let alt = location.altitude
             currentElevation = alt
             if alt > highestElevation { highestElevation = alt }
+            if alt < lowestElevation { lowestElevation = alt }
 
             // Live elevation gain/loss with noise filtering
             if let ref = liveElevRefAltitude {
@@ -708,8 +734,12 @@ class WorkoutManager: NSObject, ObservableObject {
             let fr = crr * mass * g * cos(gradeRad)
             let fa = 0.5 * cdA * rho * spd * spd
 
-            let power = (fg + fr + fa) * spd
-            estimatedPower = max(0, power)
+            let power = max(0, (fg + fr + fa) * spd)
+            estimatedPower = power
+            if power > maxPower { maxPower = power }
+            powerSum += power
+            powerSampleCount += 1
+            averagePower = powerSum / Double(powerSampleCount)
         } else {
             estimatedPower = 0
         }
@@ -762,11 +792,16 @@ class WorkoutManager: NSObject, ObservableObject {
         // Anchor to current position so we don't start at segment 0
         if let loc = currentLocation {
             navigation.anchorToLocation(loc)
+            needsAnchor = false
+        } else {
+            // Defer anchoring until the first location update arrives
+            needsAnchor = true
         }
     }
 
     func clearRoute() {
         navigation.reset()
+        needsAnchor = false
         VoiceNavigator.shared.resetForRouteSwap()
     }
 
@@ -866,7 +901,14 @@ class WorkoutManager: NSObject, ObservableObject {
             elevationLoss: elevLoss,
             avgSpeed: avgSpeed,
             pointCount: recordedLocations.count,
-            trackFilename: trackFilename)
+            trackFilename: trackFilename,
+            maxSpeed: maxSpeed > 0 ? maxSpeed : nil,
+            avgPower: powerSampleCount > 0 ? averagePower : nil,
+            maxPower: maxPower > 0 ? maxPower : nil,
+            avgHeartRate: heartRateSampleCount > 0 ? averageHeartRate : nil,
+            maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
+            highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
+            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil)
 
         DispatchQueue.main.async {
             self.onRideCompleted?(summary)

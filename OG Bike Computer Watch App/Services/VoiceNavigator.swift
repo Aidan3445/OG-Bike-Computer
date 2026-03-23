@@ -139,9 +139,10 @@ class VoiceNavigator: NSObject, ObservableObject {
             speak("Back on route.")
             if let turn = nav.nextTurn {
                 let dist = nav.distanceToNextTurn
+                let turnText = voiceText(for: turn)
                 let item = DispatchWorkItem { [weak self] in
                     guard let self, !self.isStopped else { return }
-                    self.speak("in \(self.formatVoiceDistance(dist)), \(turn.direction.voiceLabel).")
+                    self.speak("in \(self.formatVoiceDistance(dist)), \(turnText).")
                 }
                 pendingWorkItem?.cancel()
                 pendingWorkItem = item
@@ -170,14 +171,13 @@ class VoiceNavigator: NSObject, ObservableObject {
             if passedTurn {
                 if isActivelyMoving {
                     let dist = nav.distanceToNextTurn
-                    let followingTurn = nav.processedRoute
-                        .flatMap { nearbyFollowingTurn(after: turn, in: $0) }
+                    let followingTurn = nav.nearbyFollowingTurn(after: turn)
 
                     if let ft = followingTurn {
                         groupedApproachTurnIndices.insert(ft.index)
-                        speak("in \(formatVoiceDistance(dist)), \(turn.direction.voiceLabel) then \(ft.direction.voiceLabel).")
+                        speak("in \(formatVoiceDistance(dist)), \(voiceText(for: turn)) then \(ft.direction.voiceLabel).")
                     } else {
-                        speak("in \(formatVoiceDistance(dist)), \(turn.direction.voiceLabel).")
+                        speak("in \(formatVoiceDistance(dist)), \(voiceText(for: turn)).")
                     }
                     markPassedThresholds(distance: dist, into: &firedTurnAlerts)
                 }
@@ -191,26 +191,25 @@ class VoiceNavigator: NSObject, ObservableObject {
             let approachSuppressed = groupedApproachTurnIndices.contains(turn.index)
 
             // Build approach text — include following turn if nearby
-            let followingTurn = nav.processedRoute
-                .flatMap { nearbyFollowingTurn(after: turn, in: $0) }
+            let followingTurn = nav.nearbyFollowingTurn(after: turn)
 
             if fireDistanceAlert(
                 distance: nav.distanceToNextTurn,
                 speed: speed,
                 fired: &firedTurnAlerts,
                 suppressApproach: approachSuppressed,
-                atZeroText: "\(turn.direction.voiceLabel.localizedCapitalized).",
+                atZeroText: "\(self.voiceText(for: turn).localizedCapitalized).",
                 approachText: { d in
                     if let ft = followingTurn {
-                        // "In 200 feet, turn right then left."
+                        // "In 200 feet, turn right onto Main St then left."
                         self.groupedApproachTurnIndices.insert(ft.index)
-                        return "in \(self.formatVoiceDistance(d)), \(turn.direction.voiceLabel) then \(ft.direction.voiceLabel)."
+                        return "in \(self.formatVoiceDistance(d)), \(self.voiceText(for: turn)) then \(ft.direction.voiceLabel)."
                     }
-                    return "in \(self.formatVoiceDistance(d)), \(turn.direction.voiceLabel)."
+                    return "in \(self.formatVoiceDistance(d)), \(self.voiceText(for: turn))."
                 }
             ) { return }
 
-            let isLastTurn = route.turnPoints.last?.index == turn.index
+            let isLastTurn = nav.activeTurnPoints.last?.index == turn.index
             if isLastTurn, firedTurnAlerts.contains(alertDistances.count - 1) {
                 if !trackingFinish {
                     trackingFinish = true
@@ -258,17 +257,26 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
     }
     
-    // Returns the turn immediately after `turn` if it's within
-    // groupTurnThreshold meters, otherwise nil.
-    private func nearbyFollowingTurn(
-        after turn: TurnPoint,
-        in route: ProcessedRoute
-    ) -> TurnPoint? {
-        guard let idx = route.turnPoints.firstIndex(where: { $0.index == turn.index }),
-              idx + 1 < route.turnPoints.count else { return nil }
-        let next = route.turnPoints[idx + 1]
-        let gap = next.distanceFromStart - turn.distanceFromStart
-        return gap <= groupTurnThreshold ? next : nil
+    /// Build voice text for a turn, including street name from description when available.
+    /// Uses the description's own phrasing when possible (e.g. "Keep right onto Navy Pier Flyover")
+    /// so that turns like "keep right" aren't awkwardly converted to "slight right".
+    private func voiceText(for turn: TurnPoint) -> String {
+        guard let desc = turn.description, !desc.isEmpty else {
+            return turn.direction.voiceLabel
+        }
+
+        // Use the full description as the voice cue — it's already human-readable
+        // e.g. "Turn right onto West School Street", "Keep left onto Lakewood Ave"
+        let lower = desc.lowercased()
+
+        // Strip leading "Make a " prefix (e.g. "Make a U-turn onto ...")
+        if lower.hasPrefix("make a ") {
+            return String(desc.dropFirst(7)).lowercased()
+        }
+
+        // Use the description directly — it reads naturally
+        // "Turn left", "Turn right onto X", "Keep right onto X"
+        return desc.lowercased()
     }
 
     

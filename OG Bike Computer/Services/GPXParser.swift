@@ -20,8 +20,15 @@ class GPXParser: NSObject, XMLParserDelegate {
     private var currentElement: String = ""
     private var textBuffer: String = ""
 
+    // Waypoint parsing state
+    private var waypoints: [Waypoint] = []
+    private var inWpt: Bool = false
+    private var currentWptName: String?
+    private var currentWptDesc: String?
+
     func parse(data: Data) -> [Route] {
         routes = []
+        waypoints = []
         let parser = XMLParser(data: data)
         parser.delegate = self
         parser.parse()
@@ -42,6 +49,12 @@ class GPXParser: NSObject, XMLParserDelegate {
             currentLat = Double(attributes["lat"] ?? "")
             currentLon = Double(attributes["lon"] ?? "")
             currentElevation = nil
+        case "wpt":
+            inWpt = true
+            currentLat = Double(attributes["lat"] ?? "")
+            currentLon = Double(attributes["lon"] ?? "")
+            currentWptName = nil
+            currentWptDesc = nil
         default:
             break
         }
@@ -60,11 +73,22 @@ class GPXParser: NSObject, XMLParserDelegate {
 
         switch element {
         case "name":
-            if currentTrackName == nil {
+            if inWpt {
+                currentWptName = text
+            } else if currentTrackName == nil {
                 currentTrackName = text
             }
         case "ele":
             currentElevation = Double(text)
+        case "desc":
+            if inWpt && !text.isEmpty {
+                currentWptDesc = text
+            }
+        case "cmt":
+            // Use cmt as fallback if desc wasn't set
+            if inWpt && currentWptDesc == nil && !text.isEmpty {
+                currentWptDesc = text
+            }
         case "trkpt", "rtept":
             if let lat = currentLat, let lon = currentLon {
                 let point = TrackPoint(
@@ -73,12 +97,23 @@ class GPXParser: NSObject, XMLParserDelegate {
                     elevation: currentElevation)
                 currentPoints.append(point)
             }
+        case "wpt":
+            if let lat = currentLat, let lon = currentLon, let name = currentWptName, !name.isEmpty {
+                waypoints.append(Waypoint(
+                    lat: lat,
+                    lon: lon,
+                    name: name,
+                    description: currentWptDesc
+                ))
+            }
+            inWpt = false
         case "trk", "rte":
             if !currentPoints.isEmpty {
                 let route = Route(
                     id: UUID(),
                     name: currentTrackName ?? "Unnamed Route",
-                    points: currentPoints)
+                    points: currentPoints,
+                    waypoints: waypoints.isEmpty ? nil : waypoints)
                 routes.append(route)
             }
         default:
