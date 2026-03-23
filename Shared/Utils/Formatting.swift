@@ -86,9 +86,17 @@ func formatElevationValue(_ meters: Double) -> String {
 
 func formatHeading(_ degrees: Double) -> String {
     let dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-    let index = Int(((degrees + 22.5).truncatingRemainder(dividingBy: 360)) / 45)
+    // Normalize degrees into [0, 360)
+    let remainder = degrees.truncatingRemainder(dividingBy: 360)
+    let normalizedDegrees = remainder < 0 ? remainder + 360 : remainder
+
+    let index = Int(((normalizedDegrees + 22.5).truncatingRemainder(dividingBy: 360)) / 45)
     let dir = dirs[max(0, min(index, dirs.count - 1))]
-    return "\(Int(degrees))° \(dir)"
+
+    // Display normalized, rounded degrees so the number matches the compass direction
+    let displayDegrees = Int((normalizedDegrees.rounded()).truncatingRemainder(dividingBy: 360))
+
+    return "\(displayDegrees)° \(dir)"
 }
 
 extension Array {
