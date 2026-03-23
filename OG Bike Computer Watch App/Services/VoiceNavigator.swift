@@ -258,18 +258,25 @@ class VoiceNavigator: NSObject, ObservableObject {
     }
     
     /// Build voice text for a turn, including street name from description when available.
-    /// e.g. "turn right onto West School Street" instead of just "turn right"
+    /// Uses the description's own phrasing when possible (e.g. "Keep right onto Navy Pier Flyover")
+    /// so that turns like "keep right" aren't awkwardly converted to "slight right".
     private func voiceText(for turn: TurnPoint) -> String {
-        guard let desc = turn.description else {
+        guard let desc = turn.description, !desc.isEmpty else {
             return turn.direction.voiceLabel
         }
+
+        // Use the full description as the voice cue — it's already human-readable
+        // e.g. "Turn right onto West School Street", "Keep left onto Lakewood Ave"
         let lower = desc.lowercased()
-        if let ontoRange = lower.range(of: "onto ") {
-            let street = desc[ontoRange.upperBound...]
-            return "\(turn.direction.voiceLabel) onto \(street)"
+
+        // Strip leading "Make a " prefix (e.g. "Make a U-turn onto ...")
+        if lower.hasPrefix("make a ") {
+            return String(desc.dropFirst(7)).lowercased()
         }
-        // If description is just the direction repeated, fall back
-        return turn.direction.voiceLabel
+
+        // Use the description directly — it reads naturally
+        // "Turn left", "Turn right onto X", "Keep right onto X"
+        return desc.lowercased()
     }
 
     

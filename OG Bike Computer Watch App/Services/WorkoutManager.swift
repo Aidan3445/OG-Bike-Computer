@@ -30,6 +30,7 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var currentLocation: CLLocation?
     @Published var currentActivity: ActivityType = .cycling
     var hasRoute: Bool { navigation.processedRoute != nil }
+    private var needsAnchor = false
 
     // Extended metrics
     @Published var maxSpeed: Double = 0
@@ -71,6 +72,7 @@ class WorkoutManager: NSObject, ObservableObject {
     private var timerStart: Date?
     private var timerAccumulated: TimeInterval = 0
     private var displayTimer: Timer?
+    private var workoutStartDate: Date?
 
     let navigation = NavigationTracker()
 
@@ -143,7 +145,8 @@ class WorkoutManager: NSObject, ObservableObject {
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.workoutManager = self
 
-        timerStart = Date()
+        workoutStartDate = Date()
+        timerStart = workoutStartDate
         timerAccumulated = 0
         startDisplayTimer()
 
@@ -164,6 +167,12 @@ class WorkoutManager: NSObject, ObservableObject {
 
             // Navigation + voice only when a route is loaded
             if self.hasRoute {
+                // Deferred anchor: if route was loaded before location was available
+                if self.needsAnchor {
+                    self.needsAnchor = false
+                    self.navigation.anchorToLocation(location)
+                }
+
                 if let alert = self.navigation.update(location: location) {
                     self.handleTurnAlert(alert)
                 }
@@ -357,7 +366,8 @@ class WorkoutManager: NSObject, ObservableObject {
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
 
-        timerStart = Date()
+        workoutStartDate = Date()
+        timerStart = workoutStartDate
         timerAccumulated = 0
         startDisplayTimer()
 
@@ -375,7 +385,7 @@ class WorkoutManager: NSObject, ObservableObject {
             timerAccumulated += Date().timeIntervalSince(start)
         }
         timerStart = nil
-        stopDisplayTimer()
+        // Don't stop display timer — elapsed time should keep ticking while paused
         isPaused = true
     }
 
@@ -583,6 +593,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.clearTentativeBuffer()
             self.speed = 0
             self.totalDistance = 0
+            self.workoutStartDate = nil
             self.elapsedTime = 0
             self.movingTime = 0
             self.heartRate = 0
@@ -611,9 +622,13 @@ class WorkoutManager: NSObject, ObservableObject {
     private func startDisplayTimer() {
         displayTimer?.invalidate()
         displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self, let start = self.timerStart else { return }
+            guard let self = self else { return }
             DispatchQueue.main.async {
-                self.elapsedTime = self.timerAccumulated + Date().timeIntervalSince(start)
+                // Elapsed time always counts from workout start (wall-clock time)
+                if let startDate = self.workoutStartDate {
+                    self.elapsedTime = Date().timeIntervalSince(startDate)
+                }
+                // Moving time only ticks while not paused
                 if !self.isAutoPaused && !self.isPaused {
                     self.movingTime += 1
                 }
@@ -762,11 +777,16 @@ class WorkoutManager: NSObject, ObservableObject {
         // Anchor to current position so we don't start at segment 0
         if let loc = currentLocation {
             navigation.anchorToLocation(loc)
+            needsAnchor = false
+        } else {
+            // Defer anchoring until the first location update arrives
+            needsAnchor = true
         }
     }
 
     func clearRoute() {
         navigation.reset()
+        needsAnchor = false
         VoiceNavigator.shared.resetForRouteSwap()
     }
 

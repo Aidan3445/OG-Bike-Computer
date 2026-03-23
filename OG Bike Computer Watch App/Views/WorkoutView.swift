@@ -273,33 +273,41 @@ struct WorkoutView<ExtraTab: View>: View {
     }
 
     private var controlsOverlay: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             Text(workout.isPaused || workout.isAutoPaused ? "Paused" : "Riding")
                 .font(.headline)
                 .foregroundStyle(workout.isAutoPaused || workout.isPaused ? .yellow : .green)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
-                .padding(.top,16)
+                .padding(.top, 16)
+
+            HStack(spacing: 16) {
                 if workout.isPaused || workout.isAutoPaused {
                     Button {
                         cancelEndCountdown()
                         workout.resume()
                         withAnimation { page = 2 }
                     } label: {
-                        Label("Resume", systemImage: "play.fill")
-                            .frame(maxWidth: .infinity)
+                        Image(systemName: "play.fill")
+                            .font(.title2)
+                            .frame(width: 52, height: 52)
+                            .background(Color.green, in: Circle())
                     }
-                    .tint(.green)
+                    .buttonStyle(.plain)
                 } else {
                     Button {
                         cancelEndCountdown()
                         workout.pause()
                     } label: {
-                        Label("Pause", systemImage: "pause.fill")
-                            .frame(maxWidth: .infinity)
+                        Image(systemName: "pause.fill")
+                            .font(.title2)
+                            .frame(width: 52, height: 52)
+                            .background(Color.yellow, in: Circle())
+                            .foregroundStyle(.black)
                     }
-                    .tint(.yellow)
+                    .buttonStyle(.plain)
                 }
+
                 ZStack {
                     if endCountdown > 0 {
                         Button { cancelEndCountdown() } label: {
@@ -308,46 +316,50 @@ struct WorkoutView<ExtraTab: View>: View {
                                     .trim(from: 0, to: endCountdown / 3.0)
                                     .stroke(.red, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                                     .rotationEffect(.degrees(-90))
-                                    .frame(width: 36, height: 36)
+                                    .frame(width: 52, height: 52)
                                 Text(String(Int(ceil(3.0 - endCountdown))))
-                                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                                    .font(.system(size: 18, weight: .bold, design: .rounded))
                                     .monospacedDigit()
                                     .foregroundStyle(.red)
                             }
-                            .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.plain)
                     } else {
-                        Button(role: .destructive) { startEndCountdown() } label: {
-                            Label("End Ride", systemImage: "stop.fill")
-                                .frame(maxWidth: .infinity)
+                        Button { startEndCountdown() } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.title2)
+                                .frame(width: 52, height: 52)
+                                .background(Color.red, in: Circle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
-                .frame(height: 44)
+            }
+
+            Divider()
+
+            Toggle(isOn: $voiceEnabled) {
+                Label("Voice", systemImage: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                    .font(.caption)
+            }
+            .onChange(of: voiceEnabled) { _, newValue in
+                VoiceNavigator.shared.isEnabled = newValue
+            }
+
+            if workout.navigation.processedRoute?.hasWaypoints == true {
                 Divider()
-                Toggle(isOn: $voiceEnabled) {
-                    Label("Voice", systemImage: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                Picker(selection: Binding(
+                    get: { workout.navigation.turnMode },
+                    set: { workout.navigation.setTurnMode($0) }
+                )) {
+                    Text("Cues").tag(TurnMode.provided)
+                    Text("Calc").tag(TurnMode.calculated)
+                    Text("Both").tag(TurnMode.both)
+                } label: {
+                    Label("Turns", systemImage: "arrow.triangle.turn.up.right.diamond")
                         .font(.caption)
                 }
-                .onChange(of: voiceEnabled) { _, newValue in
-                    VoiceNavigator.shared.isEnabled = newValue
-                }
-
-                if workout.navigation.processedRoute?.hasWaypoints == true {
-                    Divider()
-                    Picker(selection: Binding(
-                        get: { workout.navigation.turnMode },
-                        set: { workout.navigation.setTurnMode($0) }
-                    )) {
-                        Label("Cues", systemImage: "mappin.circle").tag(TurnMode.provided)
-                        Label("Calc", systemImage: "point.topleft.down.to.point.bottomright.curvepath").tag(TurnMode.calculated)
-                        Label("Both", systemImage: "arrow.triangle.merge").tag(TurnMode.both)
-                    } label: {
-                        Label("Turns", systemImage: "arrow.triangle.turn.up.right.diamond")
-                            .font(.caption)
-                    }
-                }
+            }
 
         }
         .ignoresSafeArea(edges: .top)
