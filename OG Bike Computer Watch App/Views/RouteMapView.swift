@@ -586,7 +586,21 @@ private struct BreadcrumbCanvas: View {
                 context.stroke(aheadPath, with: .color(.white), style: style)
 
                 // Mile markers on breadcrumb view
-                let markers = computeMileMarkers(points: points)
+                struct MileMarkerCache {
+                    private static var lastCount: Int = -1
+                    private static var cachedMarkers: [MileMarker] = []
+
+                    static func markers(for points: [ProcessedPoint], compute: ([ProcessedPoint], Double) -> [MileMarker]) -> [MileMarker] {
+                        let count = points.count
+                        if count != lastCount {
+                            cachedMarkers = compute(points, 5)
+                            lastCount = count
+                        }
+                        return cachedMarkers
+                    }
+                }
+
+                let markers = MileMarkerCache.markers(for: points, compute: computeMileMarkers)
                 for marker in markers {
                     let pt = toScreen(marker.coordinate)
                     // Only draw if on screen
