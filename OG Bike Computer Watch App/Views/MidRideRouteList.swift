@@ -17,6 +17,7 @@ struct MidRideRouteList: View {
     @State private var showRemoveConfirm = false
 
     var body: some View {
+        let _ = unitState.preferences
         List {
             Section {
                 if workout.hasRoute {

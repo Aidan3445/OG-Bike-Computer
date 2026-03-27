@@ -12,6 +12,7 @@ struct OffRouteView: View {
     @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
+        let _ = unitState.preferences
         VStack(spacing: 6) {
             // Bearing arrow back to route
             Image(systemName: "arrow.up")

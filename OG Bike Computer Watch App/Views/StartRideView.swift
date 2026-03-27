@@ -15,6 +15,7 @@ struct StartRideView: View {
     @State private var isLoading = false
 
     var body: some View {
+        let _ = unitState.preferences
         ScrollView {
             VStack(spacing: 10) {
                 if isLoading {

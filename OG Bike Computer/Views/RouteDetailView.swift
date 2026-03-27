@@ -31,6 +31,7 @@ struct RouteDetailView: View {
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
 
     var body: some View {
+        let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
                 // Route polyline

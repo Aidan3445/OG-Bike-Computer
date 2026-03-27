@@ -16,6 +16,7 @@ struct RideRow: View {
     @State private var editedName = ""
 
     var body: some View {
+        let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top) {
                 Image(systemName: ride.activityType.icon)

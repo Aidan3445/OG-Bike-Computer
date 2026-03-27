@@ -21,6 +21,7 @@ struct RouteRow: View {
     @State private var editedName: String = ""
 
     var body: some View {
+        let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
             Text(route.name)
                 .font(.headline)

@@ -28,6 +28,7 @@ struct RideDetailView: View {
     @State private var mileMarkers: [MileMarker] = []
 
     var body: some View {
+        let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
                 ForEach(segments) { seg in

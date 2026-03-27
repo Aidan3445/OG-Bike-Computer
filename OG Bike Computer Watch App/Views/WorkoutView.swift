@@ -37,6 +37,7 @@ struct WorkoutView<ExtraTab: View>: View {
     }
 
     var body: some View {
+        let _ = unitState.preferences
         TabView(selection: $page) {
             controlsOverlay
                 .tag(1)

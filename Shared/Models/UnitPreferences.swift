@@ -59,7 +59,7 @@ enum ElevationUnit: String, Codable, CaseIterable {
     }
 }
 
-struct UnitPreferences: Codable, Equatable {
+struct UnitPreferences: Codable, Equatable, Hashable {
     var speed: SpeedUnit
     var distance: DistanceUnit
     var elevation: ElevationUnit
