@@ -178,7 +178,7 @@ class WorkoutManager: NSObject, ObservableObject {
                     self.navigation.anchorToLocation(location)
                 }
 
-                if let alert = self.navigation.update(location: location) {
+                if let alert = self.navigation.update(location: location, riderDistance: self.totalDistance) {
                     self.handleTurnAlert(alert)
                 }
                 VoiceNavigator.shared.update(
