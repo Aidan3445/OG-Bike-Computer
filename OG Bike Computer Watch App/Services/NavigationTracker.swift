@@ -386,13 +386,15 @@ class NavigationTracker: ObservableObject {
 
         // Phase 4: Section jump confirmation
         let isSameSection = abs(winner.routeDist - currentRouteDist) < clusterGap
+        let isForwardProgress = winner.routeDist > currentRouteDist
 
-        if isSameSection {
+        if isSameSection || isForwardProgress {
+            // Same section or moving forward along route — accept immediately
             jumpCandidate = nil
             return (winner.index, winner.gpsDist)
         }
 
-        // Different section — require confirmation
+        // Backward jump to different section — require confirmation
         if let existing = jumpCandidate {
             let existingRouteDist = route.points[existing.segmentIndex].distanceFromStart
             if abs(existingRouteDist - winner.routeDist) < clusterGap {
