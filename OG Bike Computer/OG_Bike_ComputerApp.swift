@@ -161,6 +161,10 @@ struct OG_Bike_ComputerApp: App {
             ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings)
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
+                    UnitState.shared.preferences = userSettings.settings.unitPreferences
+                }
+                .onChange(of: userSettings.settings.unitPreferences) { _, newValue in
+                    UnitState.shared.preferences = newValue
                 }
                 .onOpenURL { url in
                     handleIncomingFile(url)

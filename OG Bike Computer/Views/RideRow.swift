@@ -10,6 +10,7 @@ import SwiftUI
 struct RideRow: View {
     let ride: RideSummary
     let onRename: (String) -> Void
+    @ObservedObject private var unitState = UnitState.shared
 
     @State private var showRenameSheet = false
     @State private var editedName = ""

@@ -9,6 +9,7 @@ import SwiftUI
 
 struct OffRouteView: View {
     @ObservedObject var workout: WorkoutManager
+    @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
         VStack(spacing: 6) {

@@ -11,6 +11,7 @@ struct RouteList: View {
     @ObservedObject var store: RouteStore
     @ObservedObject var workout: WorkoutManager
     @ObservedObject var simulator: RideSimulator
+    @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
         NavigationStack {

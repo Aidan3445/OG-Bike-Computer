@@ -10,6 +10,7 @@ import SwiftUI
 struct WorkoutView<ExtraTab: View>: View {
     @ObservedObject var workout: WorkoutManager
     @ObservedObject var metricConfig: MetricConfigStore
+    @ObservedObject private var unitState = UnitState.shared
     var onStop: () -> Void
     var extraTab: ExtraTab?
 

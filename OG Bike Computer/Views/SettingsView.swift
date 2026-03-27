@@ -55,19 +55,15 @@ struct SettingsView: View {
                 Text("Used for power estimation and calorie calculations.")
             }
 
-            // MARK: - Units (placeholder)
+            // MARK: - Units
             Section {
                 NavigationLink {
-                    PlaceholderSettingView(
-                        title: "Units",
-                        icon: "ruler",
-                        description: "Configure display units for distance, elevation, speed, and temperature. Quick-set to imperial or metric, or mix and match individual units."
-                    )
+                    UnitsSettingsView(userSettings: userSettings)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Units")
-                            Text("Imperial")
+                            Text(userSettings.settings.unitPreferences.system?.label ?? "Custom")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

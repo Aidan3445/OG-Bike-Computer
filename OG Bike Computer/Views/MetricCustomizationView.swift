@@ -143,20 +143,14 @@ struct MetricCustomizationView: View {
             if selectedPage >= count + 1 { selectedPage = max(0, count) }
         }
         // NavigationLink destination triggered by context menu "Edit"
-        .background(
-            NavigationLink(
-                destination: Group {
-                    if let idx = editingPageIndex, metricConfig.config.pages.indices.contains(idx) {
-                        MetricPageEditor(metricConfig: metricConfig, pageIndex: idx)
-                    }
-                },
-                isActive: Binding(
-                    get: { editingPageIndex != nil },
-                    set: { if !$0 { editingPageIndex = nil } }
-                )
-            ) { EmptyView() }
-                .hidden()
-        )
+        .navigationDestination(isPresented: Binding(
+            get: { editingPageIndex != nil },
+            set: { if !$0 { editingPageIndex = nil } }
+        )) {
+            if let idx = editingPageIndex, metricConfig.config.pages.indices.contains(idx) {
+                MetricPageEditor(metricConfig: metricConfig, pageIndex: idx)
+            }
+        }
     }
 
     private func syncToWatch() {

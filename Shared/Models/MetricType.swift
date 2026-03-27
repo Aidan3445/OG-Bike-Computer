@@ -83,12 +83,12 @@ enum MetricType: String, Codable, CaseIterable, Identifiable {
 
     var unit: String {
         switch self {
-        case .speed, .averageSpeed, .maxSpeed: return "mph"
-        case .distance, .distanceRemaining: return "mi"
+        case .speed, .averageSpeed, .maxSpeed: return currentUnits.speed.label
+        case .distance, .distanceRemaining: return currentUnits.distance.label
         case .elapsedTime, .movingTime: return ""
         case .heartRate, .averageHeartRate, .maxHeartRate: return "bpm"
         case .calories: return "kcal"
-        case .currentElevation, .elevationGain, .elevationLoss, .highestElevation: return "ft"
+        case .currentElevation, .elevationGain, .elevationLoss, .highestElevation: return currentUnits.elevation.label
         case .grade: return "%"
         case .powerEstimate: return "W"
         case .nextTurnDistance: return ""
@@ -101,7 +101,7 @@ enum MetricType: String, Codable, CaseIterable, Identifiable {
     func displayUnit(for activity: ActivityType) -> String {
         switch self {
         case .speed, .averageSpeed, .maxSpeed:
-            return activity.usesPace ? "min/mi" : "mph"
+            return activity.usesPace ? currentUnits.speed.paceLabel : currentUnits.speed.label
         default:
             return unit
         }

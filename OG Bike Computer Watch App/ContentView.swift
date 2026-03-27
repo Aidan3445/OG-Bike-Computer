@@ -43,10 +43,21 @@ struct ContentView: View {
                 metricConfig.applyFromRemote(data)
             }
 
+            // Restore cached unit preferences on boot
+            if let cached = UserDefaults.standard.data(forKey: "unitPreferences"),
+               let prefs = try? JSONDecoder().decode(UnitPreferences.self, from: cached) {
+                UnitState.shared.preferences = prefs
+            }
+
             ConnectivityManager.shared.onUserSettingsReceived = { data in
                 guard let settings = try? JSONDecoder().decode(UserSettings.self, from: data) else { return }
                 workout.riderMass = settings.riderWeight
                 workout.bikeMass = settings.bikeWeight
+                UnitState.shared.preferences = settings.unitPreferences
+                // Cache for next boot
+                if let encoded = try? JSONEncoder().encode(settings.unitPreferences) {
+                    UserDefaults.standard.set(encoded, forKey: "unitPreferences")
+                }
             }
 
             workout.onRideCompleted = { summary in

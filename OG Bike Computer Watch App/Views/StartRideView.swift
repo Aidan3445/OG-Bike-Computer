@@ -10,6 +10,7 @@ import SwiftUI
 struct StartRideView: View {
     let route: Route?
     @ObservedObject var workout: WorkoutManager
+    @ObservedObject private var unitState = UnitState.shared
 
     @State private var isLoading = false
 

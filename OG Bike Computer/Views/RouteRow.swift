@@ -13,6 +13,7 @@ struct RouteRow: View {
     let isUploading: Bool
     let isUploadBlocked: Bool
     let onSend: () -> Void
+    @ObservedObject private var unitState = UnitState.shared
     let onRename: (String) -> Void
 
     @State private var showOverwriteAlert = false

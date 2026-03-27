@@ -10,6 +10,7 @@ import CoreLocation
 
 struct RouteMapView: View {
     @ObservedObject var workout: WorkoutManager
+    @ObservedObject private var unitState = UnitState.shared
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
     @State private var showFullRoute = false
@@ -55,7 +56,7 @@ struct RouteMapView: View {
                                     Text(formatSpeed(workout.speed, false))
                                         .font(.system(size: 14, weight: .bold, design: .rounded))
                                         .monospacedDigit()
-                                    Text("mph")
+                                    Text(currentUnits.speed.label)
                                         .font(.system(size: 7))
                                         .foregroundStyle(.secondary)
                                 }
@@ -83,7 +84,7 @@ struct RouteMapView: View {
                                     Text(formatSpeed(workout.speed, false))
                                         .font(.system(size: 14, weight: .bold, design: .rounded))
                                         .monospacedDigit()
-                                    Text("mph")
+                                    Text(currentUnits.speed.label)
                                         .font(.system(size: 7))
                                         .foregroundStyle(.secondary)
                                 }
@@ -198,8 +199,10 @@ struct RouteMapView: View {
 
 private struct FullRouteCanvas: View {
     @ObservedObject var workout: WorkoutManager
+    @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
+        let _ = unitState.preferences // register dependency for Canvas redraws
         Canvas { context, size in
             // Safe area insets for watch: top/bottom for rounded corners + UI overlays
             let insetTop: CGFloat = 36
@@ -374,12 +377,14 @@ private struct FullRouteCanvas: View {
 
 private struct BreadcrumbCanvas: View {
     @ObservedObject var workout: WorkoutManager
+    @ObservedObject private var unitState = UnitState.shared
     let viewDistance: Double
     var useCompassHeading: Bool = true
 
     private let routeLineWidth: CGFloat = 6
 
     var body: some View {
+        let _ = unitState.preferences // register dependency for Canvas redraws
         TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
             Canvas { context, size in
                 guard let location = workout.currentLocation else { return }
@@ -588,19 +593,22 @@ private struct BreadcrumbCanvas: View {
                 // Mile markers on breadcrumb view
                 struct MileMarkerCache {
                     private static var lastCount: Int = -1
+                    private static var lastUnit: DistanceUnit = .miles
                     private static var cachedMarkers: [MileMarker] = []
 
-                    static func markers(for points: [ProcessedPoint], compute: ([ProcessedPoint], Double) -> [MileMarker]) -> [MileMarker] {
+                    static func markers(for points: [ProcessedPoint]) -> [MileMarker] {
                         let count = points.count
-                        if count != lastCount {
-                            cachedMarkers = compute(points, 5)
+                        let unit = currentUnits.distance
+                        if count != lastCount || unit != lastUnit {
+                            cachedMarkers = computeMileMarkers(points: points)
                             lastCount = count
+                            lastUnit = unit
                         }
                         return cachedMarkers
                     }
                 }
 
-                let markers = MileMarkerCache.markers(for: points, compute: computeMileMarkers)
+                let markers = MileMarkerCache.markers(for: points)
                 for marker in markers {
                     let pt = toScreen(marker.coordinate)
                     // Only draw if on screen

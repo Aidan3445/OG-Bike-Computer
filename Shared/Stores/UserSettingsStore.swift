@@ -30,6 +30,7 @@ struct UserSettings: Codable, Equatable {
     var riderHeight: Double   // cm
     var bikes: [BikePreset]
     var activeBikeID: UUID?
+    var unitPreferences: UnitPreferences
 
     /// Active bike weight, or a manual fallback
     var bikeWeight: Double {
@@ -54,11 +55,29 @@ struct UserSettings: Codable, Equatable {
         bikes: [
             BikePreset(name: "My Bike", weight: 10)
         ],
-        activeBikeID: nil  // will use first bike
+        activeBikeID: nil,  // will use first bike
+        unitPreferences: .imperial
     )
 
     private enum CodingKeys: String, CodingKey {
-        case riderWeight, riderHeight, bikes, activeBikeID
+        case riderWeight, riderHeight, bikes, activeBikeID, unitPreferences
+    }
+
+    init(riderWeight: Double, riderHeight: Double, bikes: [BikePreset], activeBikeID: UUID?, unitPreferences: UnitPreferences = .imperial) {
+        self.riderWeight = riderWeight
+        self.riderHeight = riderHeight
+        self.bikes = bikes
+        self.activeBikeID = activeBikeID
+        self.unitPreferences = unitPreferences
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        riderWeight = try container.decode(Double.self, forKey: .riderWeight)
+        riderHeight = try container.decode(Double.self, forKey: .riderHeight)
+        bikes = try container.decode([BikePreset].self, forKey: .bikes)
+        activeBikeID = try container.decodeIfPresent(UUID.self, forKey: .activeBikeID)
+        unitPreferences = try container.decodeIfPresent(UnitPreferences.self, forKey: .unitPreferences) ?? .default
     }
 }
 

@@ -13,11 +13,21 @@ struct MileMarker {
     let coordinate: CLLocationCoordinate2D
 }
 
-/// Compute mile marker positions along a route at every `intervalMiles` miles.
-func computeMileMarkers(points: [ProcessedPoint], intervalMiles: Double = 5) -> [MileMarker] {
+/// Unit-aware interval in meters and divisor for label numbers.
+private var distanceInterval: (metersPerUnit: Double, defaultInterval: Double) {
+    switch currentUnits.distance {
+    case .miles: return (1609.34, 5)
+    case .kilometers: return (1000, 5)
+    }
+}
+
+/// Compute distance marker positions along a route.
+func computeMileMarkers(points: [ProcessedPoint], interval: Double? = nil) -> [MileMarker] {
     guard points.count >= 2 else { return [] }
 
-    let intervalMeters = intervalMiles * 1609.34
+    let (metersPerUnit, defaultInterval) = distanceInterval
+    let intervalUnits = interval ?? defaultInterval
+    let intervalMeters = intervalUnits * metersPerUnit
     var markers: [MileMarker] = []
     var nextThreshold = intervalMeters
 
@@ -26,7 +36,6 @@ func computeMileMarkers(points: [ProcessedPoint], intervalMiles: Double = 5) -> 
         let prevDist = points[i - 1].distanceFromStart
 
         while dist >= nextThreshold && prevDist < nextThreshold {
-            // Interpolate position at the threshold
             let segLen = dist - prevDist
             let ratio = segLen > 0 ? (nextThreshold - prevDist) / segLen : 0
 
@@ -35,9 +44,9 @@ func computeMileMarkers(points: [ProcessedPoint], intervalMiles: Double = 5) -> 
             let lon = points[i - 1].coordinate.longitude +
                 (points[i].coordinate.longitude - points[i - 1].coordinate.longitude) * ratio
 
-            let mileNumber = Int(round(nextThreshold / 1609.34))
+            let markerNumber = Int(round(nextThreshold / metersPerUnit))
             markers.append(MileMarker(
-                mile: mileNumber,
+                mile: markerNumber,
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
 
             nextThreshold += intervalMeters
@@ -47,11 +56,13 @@ func computeMileMarkers(points: [ProcessedPoint], intervalMiles: Double = 5) -> 
     return markers
 }
 
-/// Compute mile markers along a recorded ride track.
-func computeRideMileMarkers(locations: [CLLocation], intervalMiles: Double = 5) -> [MileMarker] {
+/// Compute distance markers along a recorded ride track.
+func computeRideMileMarkers(locations: [CLLocation], interval: Double? = nil) -> [MileMarker] {
     guard locations.count >= 2 else { return [] }
 
-    let intervalMeters = intervalMiles * 1609.34
+    let (metersPerUnit, defaultInterval) = distanceInterval
+    let intervalUnits = interval ?? defaultInterval
+    let intervalMeters = intervalUnits * metersPerUnit
     var markers: [MileMarker] = []
     var cumulativeDistance: Double = 0
     var nextThreshold = intervalMeters
@@ -69,9 +80,9 @@ func computeRideMileMarkers(locations: [CLLocation], intervalMiles: Double = 5) 
             let lon = locations[i - 1].coordinate.longitude +
                 (locations[i].coordinate.longitude - locations[i - 1].coordinate.longitude) * ratio
 
-            let mileNumber = Int(round(nextThreshold / 1609.34))
+            let markerNumber = Int(round(nextThreshold / metersPerUnit))
             markers.append(MileMarker(
-                mile: mileNumber,
+                mile: markerNumber,
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
 
             nextThreshold += intervalMeters
