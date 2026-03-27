@@ -29,7 +29,6 @@ class NavigationTracker: ObservableObject {
     @Published var nearestRouteDistance: Double = 0
     @Published var bearingToRoute: Double = 0
     @Published var rejoinCandidates: [RejoinCandidate] = []
-    @Published var showReversePrompt: Bool = false
     @Published var turnMode: TurnMode = .calculated
 
     /// The active turn list based on the current turn mode.
@@ -61,10 +60,9 @@ class NavigationTracker: ObservableObject {
     private var lastSearchIndex: Int = 0
     private var endpointLocation: CLLocation?
 
-    // Double-back detection: tracks a sustained alternate section match
-    private var alternateCandidate: (index: Int, sampleCount: Int)?
-    private let alternateDwellThreshold = 12 // consecutive samples before jumping
-    private var reversePromptDismissed = false
+    // Section jump confirmation: tracks sustained match to a different route section
+    private var jumpCandidate: (segmentIndex: Int, sampleCount: Int)?
+    private let jumpConfirmationThreshold = 4 // consecutive samples before jumping (~4s at 1Hz)
 
     func load(_ processedRoute: ProcessedRoute) {
         route = processedRoute
@@ -88,9 +86,7 @@ class NavigationTracker: ObservableObject {
         nearestRouteDistance = 0
         bearingToRoute = 0
         rejoinCandidates = []
-        showReversePrompt = false
-        alternateCandidate = nil
-        reversePromptDismissed = false
+        jumpCandidate = nil
 
         if let last = processedRoute.points.last {
             endpointLocation = CLLocation(
@@ -155,18 +151,15 @@ class NavigationTracker: ObservableObject {
         lastAlertedTurnIndex = nil
         lastAlertLevel = nil
         rejoinCandidates = []
-        showReversePrompt = false
-        alternateCandidate = nil
-        reversePromptDismissed = false
+        jumpCandidate = nil
     }
 
-    func update(location: CLLocation) -> TurnAlert? {
+    func update(location: CLLocation, riderDistance: Double = 0) -> TurnAlert? {
         guard let route = route, route.points.count >= 2 else { return nil }
 
         let (nearestIndex, nearestDistance) = findNearest(
             location: location,
-            in: route,
-            searchCenter: lastSearchIndex
+            in: route
         )
 
         isOffRoute = nearestDistance > offRouteThreshold
@@ -201,11 +194,6 @@ class NavigationTracker: ObservableObject {
             return nil
         } else {
             if !rejoinCandidates.isEmpty { rejoinCandidates = [] }
-        }
-
-        // Double-back detection: check for better alternate section
-        if hasJoinedRoute, location.course >= 0 {
-            evaluateAlternateSection(location: location, route: route, currentIndex: nearestIndex)
         }
 
         distanceAlongRoute = interpolateDistance(
@@ -252,12 +240,6 @@ class NavigationTracker: ObservableObject {
         isRouteComplete = false
     }
 
-    func dismissReversePrompt() {
-        showReversePrompt = false
-        reversePromptDismissed = true
-        alternateCandidate = nil
-    }
-
     /// Change the turn mode mid-ride and recompute the next turn.
     func setTurnMode(_ mode: TurnMode) {
         turnMode = mode
@@ -281,314 +263,168 @@ class NavigationTracker: ObservableObject {
         return gap <= threshold ? next : nil
     }
 
-    func reverseRemainingRoute() {
-        guard let route = route else { return }
-
-        showReversePrompt = false
-        alternateCandidate = nil
-
-        let startIdx = max(0, currentSegmentIndex - 1)
-        let remainingPoints = Array(route.points[startIdx...])
-        guard remainingPoints.count >= 2 else { return }
-
-        // Reverse the remaining points
-        let reversed = remainingPoints.reversed()
-        var newPoints: [ProcessedPoint] = []
-        var cumDist = distanceAlongRoute
-
-        let reversedArray = Array(reversed)
-        for i in 0..<reversedArray.count {
-            let pt = reversedArray[i]
-            if i > 0 {
-                let prevCoord = reversedArray[i - 1].coordinate
-                let prevLoc = CLLocation(latitude: prevCoord.latitude, longitude: prevCoord.longitude)
-                let curLoc = CLLocation(latitude: pt.coordinate.latitude, longitude: pt.coordinate.longitude)
-                cumDist += curLoc.distance(from: prevLoc)
-            }
-
-            let bearing: Double
-            if i < reversedArray.count - 1 {
-                bearing = RouteProcessor.bearing(from: pt.coordinate, to: reversedArray[i + 1].coordinate)
-            } else {
-                bearing = newPoints.last?.bearingToNext ?? 0
-            }
-
-            newPoints.append(ProcessedPoint(
-                coordinate: pt.coordinate,
-                elevation: pt.elevation,
-                distanceFromStart: cumDist,
-                bearingToNext: bearing))
-        }
-
-        // Build new complete route: keep completed portion + reversed remainder
-        let completedPoints = Array(route.points[0..<startIdx])
-        let allPoints = completedPoints + newPoints
-        let totalDist = allPoints.last?.distanceFromStart ?? 0
-
-        // Recompute turns for reversed section
-        var newTurns: [TurnPoint] = []
-        // Keep turns that are already behind us (from the active turn list)
-        for t in activeTurnPoints {
-            if t.distanceFromStart < distanceAlongRoute - turnConfirmationBuffer {
-                newTurns.append(t)
-            }
-        }
-
-        // Detect turns in the new portion
-        let newStart = completedPoints.count
-        for i in (newStart + 1)..<(allPoints.count - 1) {
-            let prevBearing = allPoints[i - 1].bearingToNext
-            let nextBearing = allPoints[i].bearingToNext
-            let angle = RouteProcessor.angleDelta(from: prevBearing, to: nextBearing)
-
-            if abs(angle) >= RouteProcessor.turnAngleThreshold {
-                let dist = allPoints[i].distanceFromStart
-                let lastTurnDist = newTurns.last?.distanceFromStart ?? -RouteProcessor.minTurnSpacing
-                if dist - lastTurnDist >= RouteProcessor.minTurnSpacing {
-                    let direction = RouteProcessor.classifyTurn(angle)
-                    newTurns.append(TurnPoint(
-                        index: i,
-                        angle: angle,
-                        direction: direction,
-                        distanceFromStart: dist,
-                        coordinate: allPoints[i].coordinate))
-                }
-            }
-        }
-
-        // Compute bounding box
-        let lats = allPoints.map { $0.coordinate.latitude }
-        let lons = allPoints.map { $0.coordinate.longitude }
-
-        let newRoute = ProcessedRoute(
-            name: route.name,
-            points: allPoints,
-            waypointTurnPoints: [],
-            calculatedTurnPoints: newTurns,
-            totalDistance: totalDist,
-            hasWaypoints: false,
-            minLat: lats.min()!, maxLat: lats.max()!,
-            minLon: lons.min()!, maxLon: lons.max()!)
-
-        // Reload with new route, preserving position
-        // Waypoints are invalidated by reversal — force calculated mode
-        self.route = newRoute
-        self.turnMode = .calculated
-        currentSegmentIndex = min(startIdx, allPoints.count - 1)
-        lastSearchIndex = currentSegmentIndex
-        distanceRemaining = totalDist - distanceAlongRoute
-        if let last = allPoints.last {
-            endpointLocation = CLLocation(latitude: last.coordinate.latitude, longitude: last.coordinate.longitude)
-        }
-
-        // Reset turn tracking for the new route
-        let newNextTurn = newTurns.first { $0.distanceFromStart > distanceAlongRoute - turnConfirmationBuffer }
-        nextTurn = newNextTurn
-        distanceToNextTurn = newNextTurn.map { max(0, $0.distanceFromStart - distanceAlongRoute) } ?? 0
-        lastPassedTurn = nil
-        lastAlertedTurnIndex = nil
-        lastAlertLevel = nil
-        reversePromptDismissed = true
-
-        VoiceNavigator.shared.resetForRouteSwap()
-
-        print("[Nav] Route reversed from segment \(startIdx). New total: \(Int(totalDist))m, \(newTurns.count) turns")
-    }
-
-    // Distance-based search window
-    private let searchWindowMeters: Double = 500
+    private let candidateRadius: Double = 200
+    private let clusterGap: Double = 200
 
     private func findNearest(
         location: CLLocation,
-        in route: ProcessedRoute,
-        searchCenter: Int
+        in route: ProcessedRoute
     ) -> (index: Int, distance: Double) {
-        let currentRouteDist = route.points[max(0, min(searchCenter, route.points.count - 1))].distanceFromStart
+        let riderCourse = location.course
+        let currentRouteDist = route.points[max(0, min(currentSegmentIndex, route.points.count - 1))].distanceFromStart
 
-        let minRouteDist = max(0, currentRouteDist - searchWindowMeters)
-        let maxRouteDist: Double
-        if hasJoinedRoute {
-            maxRouteDist = min(route.totalDistance, currentRouteDist + searchWindowMeters)
-        } else {
-            maxRouteDist = min(route.totalDistance, searchWindowMeters)
+        // Phase 1: Gather all route points within candidateRadius
+        struct Candidate {
+            let index: Int
+            let gpsDist: Double
         }
 
-        var bestIndex = max(0, min(searchCenter, route.points.count - 1))
-        var bestDistance = Double.greatestFiniteMagnitude
+        var candidates: [Candidate] = []
+        var globalBestIndex = 0
+        var globalBestDist = Double.greatestFiniteMagnitude
 
         for i in 0..<route.points.count {
-            let pointDist = route.points[i].distanceFromStart
-            guard pointDist >= minRouteDist && pointDist <= maxRouteDist else { continue }
-
             let point = route.points[i]
             let pointLoc = CLLocation(
                 latitude: point.coordinate.latitude,
                 longitude: point.coordinate.longitude)
             let dist = location.distance(from: pointLoc)
-            if dist < bestDistance {
-                bestDistance = dist
-                bestIndex = i
+
+            if dist < globalBestDist {
+                globalBestDist = dist
+                globalBestIndex = i
+            }
+
+            if dist <= candidateRadius {
+                candidates.append(Candidate(index: i, gpsDist: dist))
             }
         }
 
-        if bestDistance <= offRouteThreshold {
-            if !hasJoinedRoute { hasJoinedRoute = true }
-            return (bestIndex, bestDistance)
+        // No candidates within radius — return global nearest
+        if candidates.isEmpty {
+            if !hasJoinedRoute && globalBestDist <= offRouteThreshold {
+                hasJoinedRoute = true
+            }
+            jumpCandidate = nil
+            return (globalBestIndex, globalBestDist)
         }
 
-        if !hasJoinedRoute {
-            return (bestIndex, bestDistance)
+        // Phase 2: Cluster candidates by route distance
+        candidates.sort { route.points[$0.index].distanceFromStart < route.points[$1.index].distanceFromStart }
+
+        var clusters: [[Candidate]] = []
+        var currentCluster: [Candidate] = [candidates[0]]
+
+        for i in 1..<candidates.count {
+            let prevRouteDist = route.points[currentCluster.last!.index].distanceFromStart
+            let thisRouteDist = route.points[candidates[i].index].distanceFromStart
+            if thisRouteDist - prevRouteDist > clusterGap {
+                clusters.append(currentCluster)
+                currentCluster = [candidates[i]]
+            } else {
+                currentCluster.append(candidates[i])
+            }
+        }
+        clusters.append(currentCluster)
+
+        // Phase 3: Score each cluster's best representative
+        struct ScoredCluster {
+            let index: Int
+            let gpsDist: Double
+            let score: Double
+            let routeDist: Double
         }
 
-        // Off-route after joining: full scan with heading + forward bias
-        let riderCourse = location.course
-        var fullBestIndex = bestIndex
-        var fullBestScore = Double.greatestFiniteMagnitude
-        var fullBestDistance = bestDistance
+        var scored: [ScoredCluster] = []
 
-        for i in 0..<route.points.count {
-            let point = route.points[i]
-            let pointLoc = CLLocation(
-                latitude: point.coordinate.latitude,
-                longitude: point.coordinate.longitude)
-            let dist = location.distance(from: pointLoc)
+        for cluster in clusters {
+            let best = cluster.min(by: { $0.gpsDist < $1.gpsDist })!
+            let point = route.points[best.index]
 
-            var score = dist
+            var score = 0.0
 
+            // GPS proximity (0-100): dominant signal
+            score += (best.gpsDist / candidateRadius) * 100.0
+
+            // Heading alignment (0-50): disambiguates double-backs
             if riderCourse >= 0 {
                 let bearingDiff = abs(headingDelta(riderCourse, point.bearingToNext))
-                score += (bearingDiff / 180.0) * 50
+                score += (bearingDiff / 180.0) * 50.0
             }
 
+            // Route continuity (0-40): prevents oscillation
             let routeDistDelta = abs(point.distanceFromStart - currentRouteDist)
-            score += min(routeDistDelta * 0.05, 50)
+            score += min(routeDistDelta * 0.02, 40.0)
 
-            if score < fullBestScore {
-                fullBestScore = score
-                fullBestIndex = i
-                fullBestDistance = dist
-            }
-        }
-
-        return (fullBestIndex, fullBestDistance)
-    }
-
-    // Evaluate whether the rider is consistently matching a different route section
-    // (double-back detection / section skipping)
-    private func evaluateAlternateSection(location: CLLocation, route: ProcessedRoute, currentIndex: Int) {
-        let riderCourse = location.course
-        guard riderCourse >= 0 else {
-            alternateCandidate = nil
-            return
-        }
-
-        guard currentIndex >= 0, currentIndex < route.points.count else {
-            alternateCandidate = nil
-            return
-        }
-
-        let currentRouteDist = route.points[currentIndex].distanceFromStart
-        let currentBearingToNext = route.points[currentIndex].bearingToNext
-        let currentHeadingDiff = abs(headingDelta(riderCourse, currentBearingToNext))
-
-        // Only consider alternates when heading doesn't match current section well
-        guard currentHeadingDiff > 90 else {
-            alternateCandidate = nil
-            showReversePrompt = false
-            return
-        }
-
-        // Scan for geographically nearby points on distant route sections
-        var bestAltIndex: Int?
-        var bestAltScore = Double.greatestFiniteMagnitude
-
-        for i in 0..<route.points.count {
-            let point = route.points[i]
-            let routeDistGap = abs(point.distanceFromStart - currentRouteDist)
-
-            // Must be on a different section (>200m route-distance away)
-            guard routeDistGap > 200 else { continue }
-
-            let pointLoc = CLLocation(
-                latitude: point.coordinate.latitude,
-                longitude: point.coordinate.longitude)
-            let gpsDist = location.distance(from: pointLoc)
-
-            // Must be geographically close
-            guard gpsDist < offRouteThreshold else { continue }
-
-            let headingDiff = abs(headingDelta(riderCourse, point.bearingToNext))
-
-            // Score: GPS distance + heading mismatch penalty + backward penalty
-            var score = gpsDist
-            score += (headingDiff / 180.0) * 100
-
-            // Penalty for jumping backward (prefer forward progress)
-            if point.distanceFromStart < currentRouteDist {
-                score += 30
+            // Forward progress bias (0-20): mild penalty for large backward jumps
+            if hasJoinedRoute {
+                if point.distanceFromStart < currentRouteDist - 500 {
+                    score += 20.0
+                } else if point.distanceFromStart < currentRouteDist - 50 {
+                    score += 10.0
+                }
             }
 
-            if score < bestAltScore {
-                bestAltScore = score
-                bestAltIndex = i
-            }
+            scored.append(ScoredCluster(
+                index: best.index,
+                gpsDist: best.gpsDist,
+                score: score,
+                routeDist: point.distanceFromStart))
         }
 
-        guard let altIdx = bestAltIndex else {
-            // No good alternate found — if heading is still reversed, consider reverse prompt
-            if !reversePromptDismissed, currentHeadingDiff > 140 {
-                if let alt = alternateCandidate, alt.index == -1 {
-                    let newCount = alt.sampleCount + 1
-                    alternateCandidate = (index: -1, sampleCount: newCount)
-                    if newCount >= alternateDwellThreshold {
-                        showReversePrompt = true
-                    }
+        scored.sort { $0.score < $1.score }
+        let winner = scored[0]
+
+        // Pre-join: accept immediately
+        if !hasJoinedRoute {
+            if winner.gpsDist <= offRouteThreshold {
+                hasJoinedRoute = true
+            }
+            jumpCandidate = nil
+            return (winner.index, winner.gpsDist)
+        }
+
+        // Phase 4: Section jump confirmation
+        let isSameSection = abs(winner.routeDist - currentRouteDist) < clusterGap
+        let isForwardProgress = winner.routeDist > currentRouteDist
+
+        if isSameSection || isForwardProgress {
+            // Same section or moving forward along route — accept immediately
+            jumpCandidate = nil
+            return (winner.index, winner.gpsDist)
+        }
+
+        // Backward jump to different section — require confirmation
+        if let existing = jumpCandidate {
+            let existingRouteDist = route.points[existing.segmentIndex].distanceFromStart
+            if abs(existingRouteDist - winner.routeDist) < clusterGap {
+                // Same target section as previous sample
+                let newCount = existing.sampleCount + 1
+                if newCount >= jumpConfirmationThreshold {
+                    jumpCandidate = nil
+                    print("[Nav] Section jump to index \(winner.index) "
+                        + "(dist=\(Int(winner.routeDist))m) "
+                        + "confirmed after \(newCount) samples")
+                    return (winner.index, winner.gpsDist)
                 } else {
-                    alternateCandidate = (index: -1, sampleCount: 1)
+                    jumpCandidate = (segmentIndex: winner.index, sampleCount: newCount)
                 }
             } else {
-                alternateCandidate = nil
-            }
-            return
-        }
-
-        guard altIdx < route.points.count else {
-            alternateCandidate = nil
-            return
-        }
-
-        let altHeadingDiff = abs(headingDelta(riderCourse, route.points[altIdx].bearingToNext))
-
-        // The alternate must have significantly better heading alignment
-        guard altHeadingDiff < 60 && altHeadingDiff < currentHeadingDiff - 40 else {
-            alternateCandidate = nil
-            return
-        }
-
-        // Track sustained match
-        if let existing = alternateCandidate,
-           existing.index >= 0,
-           existing.index < route.points.count,
-           abs(route.points[existing.index].distanceFromStart - route.points[altIdx].distanceFromStart) < 200 {
-            // Same section — increment count
-            let newCount = existing.sampleCount + 1
-            alternateCandidate = (index: altIdx, sampleCount: newCount)
-
-            if newCount >= alternateDwellThreshold {
-                // Jump to alternate section
-                print("[Nav] Jumping to alternate section at index \(altIdx) "
-                    + "(dist=\(Int(route.points[altIdx].distanceFromStart))m) "
-                    + "after \(newCount) samples")
-                lastSearchIndex = altIdx
-                currentSegmentIndex = altIdx
-                distanceAlongRoute = route.points[altIdx].distanceFromStart
-                alternateCandidate = nil
-                showReversePrompt = false
+                // Different target — reset
+                jumpCandidate = (segmentIndex: winner.index, sampleCount: 1)
             }
         } else {
-            // New candidate section — start fresh
-            alternateCandidate = (index: altIdx, sampleCount: 1)
+            jumpCandidate = (segmentIndex: winner.index, sampleCount: 1)
         }
+
+        // While confirming, stay on current section if possible
+        if let fallback = scored.first(where: { abs($0.routeDist - currentRouteDist) < clusterGap }) {
+            return (fallback.index, fallback.gpsDist)
+        }
+
+        // No current-section cluster (drifted away) — accept jump immediately
+        jumpCandidate = nil
+        return (winner.index, winner.gpsDist)
     }
 
     // Compute clustered rejoin candidates when off-route
