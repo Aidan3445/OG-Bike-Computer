@@ -6,10 +6,12 @@
 //
 
 import SwiftUI
+import SafariServices
 
 struct SettingsView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
+    @State private var showSupportSafari = false
 
     var body: some View {
         List {
@@ -185,6 +187,39 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            // MARK: - Support the Developer
+            Section {
+                Button {
+                    showSupportSafari = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "heart")
+                                .foregroundStyle(.pink)
+                            Text("Support the Developer")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        }
+
+                        Text("This app is completely free. If you'd like, you can leave a voluntary tip to support the developer. Tipping is optional and does not unlock any features or affect how the app works.")
+                            .font(.footnote)
+                            .foregroundStyle(.white)
+
+                        HStack(spacing: 4) {
+                            Text("Buy me a coffee")
+                                .font(.subheadline.weight(.medium))
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                        }
+                        .foregroundStyle(.blue)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .sheet(isPresented: $showSupportSafari) {
+            SafariView(url: URL(string: "https://www.buymeacoffee.com/aidanweinberg")!)
         }
         .navigationTitle("Settings")
     }
@@ -373,6 +408,18 @@ struct RiderProfileView: View {
             }
         }
     }
+}
+
+// MARK: - Safari View
+
+struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        SFSafariViewController(url: url)
+    }
+
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
 // MARK: - Placeholder Setting
