@@ -21,15 +21,29 @@ class BatteryManager {
     func recommendedMode(
         distanceToNextTurn: Double,
         isOffRoute: Bool,
-        speed: Double
+        speed: Double,
+        floor: GPSAccuracyFloor = .best
     ) -> GPSMode {
-        if isOffRoute { return .full }
+        let dynamic: GPSMode
+        if isOffRoute {
+            dynamic = .full
+        } else if distanceToNextTurn < 300 {
+            dynamic = .full
+        } else if speed > 5 { // > ~11 mph
+            dynamic = .balanced
+        } else {
+            dynamic = .power
+        }
 
-        if distanceToNextTurn < 300 { return .full }
+        return applyFloor(dynamic, floor: floor)
+    }
 
-        if speed > 5 { return .balanced } // > ~11 mph
-
-        return .power
+    private func applyFloor(_ mode: GPSMode, floor: GPSAccuracyFloor) -> GPSMode {
+        switch floor {
+        case .best: return .full
+        case .balanced: return mode == .power ? .balanced : mode
+        case .powerSaver: return mode
+        }
     }
 
     func apply(mode: GPSMode, to manager: CLLocationManager) {

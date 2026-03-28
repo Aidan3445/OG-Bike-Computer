@@ -5,8 +5,8 @@
 //  Created by Aidan Weinberg on 3/22/26.
 //
 
-import SwiftUI
 import SafariServices
+import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var metricConfig: MetricConfigStore
@@ -23,6 +23,17 @@ struct SettingsView: View {
         return parts.joined(separator: " \u{2022} ")
     }
 
+    private var rideSettingsSummary: String {
+        let ride = userSettings.settings.ridePreferences
+        var parts: [String] = []
+        parts.append(
+            ride.autoPause.enabled ? "Auto-Pause On" : "Auto-Pause Off"
+        )
+        parts.append("GPS \(ride.gpsAccuracyFloor.label)")
+        parts.append(ride.mapRotation.label)
+        return parts.joined(separator: " \u{2022} ")
+    }
+
     var body: some View {
         List {
             // MARK: - Metric Pages
@@ -33,59 +44,60 @@ struct SettingsView: View {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Metric Pages")
-                            Text("\(metricConfig.config.pages.count) pages configured")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Text(
+                                "\(metricConfig.config.pages.count) pages configured"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                     } icon: {
                         Image(systemName: "gauge.with.dots.needle.33percent")
                             .foregroundStyle(.blue)
                     }
                 }
-            }
 
-            // MARK: - Rider Profile
-            Section {
-                NavigationLink {
-                    RiderProfileView(userSettings: userSettings)
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Rider Profile")
-                            Text("\(String(format: "%.0f", userSettings.settings.riderWeight * 2.20462)) lbs \u{2022} \(userSettings.settings.activeBikeName) (\(String(format: "%.0f", userSettings.settings.bikeWeight * 2.20462)) lbs)")
+                // MARK: - Rider Profile
+                Section {
+                    NavigationLink {
+                        RiderProfileView(userSettings: userSettings)
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Rider Profile")
+                                Text(
+                                    "\(String(format: "%.0f", userSettings.settings.riderWeight * 2.20462)) lbs \u{2022} \(userSettings.settings.activeBikeName) (\(String(format: "%.0f", userSettings.settings.bikeWeight * 2.20462)) lbs)"
+                                )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "figure.outdoor.cycle")
+                                .foregroundStyle(.green)
                         }
-                    } icon: {
-                        Image(systemName: "figure.outdoor.cycle")
-                            .foregroundStyle(.green)
                     }
                 }
-            } footer: {
-                Text("Used for power estimation and calorie calculations.")
-            }
 
-            // MARK: - Units
-            Section {
+                // MARK: - Units
                 NavigationLink {
                     UnitsSettingsView(userSettings: userSettings)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Units")
-                            Text(userSettings.settings.unitPreferences.system?.label ?? "Custom")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Text(
+                                userSettings.settings.unitPreferences.system?
+                                    .label ?? "Custom"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                     } icon: {
                         Image(systemName: "ruler")
                             .foregroundStyle(.orange)
                     }
                 }
-            }
 
-            // MARK: - Navigation Alerts
-            Section {
+                // MARK: - Navigation Alerts
                 NavigationLink {
                     NavigationAlertSettingsView(userSettings: userSettings)
                 } label: {
@@ -101,15 +113,33 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
                 }
+
+                // MARK: - Ride Settings
+                NavigationLink {
+                    RideSettingsView(userSettings: userSettings)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Ride Settings")
+                            Text(rideSettingsSummary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "bicycle")
+                            .foregroundStyle(.indigo)
+                    }
+                }
             }
 
-            // MARK: - Color Scheme (placeholder)
+            // MARK: - App Experience
             Section {
                 NavigationLink {
                     PlaceholderSettingView(
                         title: "Color Scheme",
                         icon: "paintpalette",
-                        description: "Customize primary, secondary, and accent colors. The background always stays black for visibility, but you can personalize the text, icons, and highlights throughout the app."
+                        description:
+                            "Customize primary, secondary, and accent colors. The background always stays black for visibility, but you can personalize the text, icons, and highlights throughout the app."
                     )
                 } label: {
                     Label {
@@ -124,38 +154,13 @@ struct SettingsView: View {
                             .foregroundStyle(.purple)
                     }
                 }
-            }
 
-            // MARK: - Auto-Pause (placeholder)
-            Section {
-                NavigationLink {
-                    PlaceholderSettingView(
-                        title: "Auto-Pause",
-                        icon: "pause.circle",
-                        description: "Configure auto-pause sensitivity, speed threshold, and delay before pausing. Adjust separately for different activity types."
-                    )
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Auto-Pause")
-                            Text("Enabled")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "pause.circle")
-                            .foregroundStyle(.yellow)
-                    }
-                }
-            }
-
-            // MARK: - Map Style (placeholder)
-            Section {
                 NavigationLink {
                     PlaceholderSettingView(
                         title: "Map Style",
                         icon: "map",
-                        description: "Choose between standard, satellite, and hybrid map styles. Configure the default zoom level, whether to show traffic, and route line color preferences."
+                        description:
+                            "Choose between standard, satellite, and hybrid map styles. Configure the default zoom level, whether to show traffic, and route line color preferences."
                     )
                 } label: {
                     Label {
@@ -170,15 +175,13 @@ struct SettingsView: View {
                             .foregroundStyle(.teal)
                     }
                 }
-            }
 
-            // MARK: - Data & Privacy (placeholder)
-            Section {
                 NavigationLink {
                     PlaceholderSettingView(
                         title: "Data & Privacy",
                         icon: "lock.shield",
-                        description: "Manage ride data storage, export all rides, clear history, and configure what health data is recorded during workouts."
+                        description:
+                            "Manage ride data storage, export all rides, clear history, and configure what health data is recorded during workouts."
                     )
                 } label: {
                     Label {
@@ -188,6 +191,63 @@ struct SettingsView: View {
                             .foregroundStyle(.gray)
                     }
                 }
+            } header: {
+                Text("App Experience")
+            }
+
+            // MARK: - Battery Tips
+            Section {
+                DisclosureGroup {
+                    batteryTipRow(
+                        title: "GPS Accuracy",
+                        value: userSettings.settings.ridePreferences
+                            .gpsAccuracyFloor.label,
+                        impact: userSettings.settings.ridePreferences
+                            .gpsAccuracyFloor.batteryImpact,
+                        instruction: "Change in Ride Settings above."
+                    )
+                    batteryTipRow(
+                        title: "Screen Brightness",
+                        value: nil,
+                        impact: "Varies",
+                        instruction:
+                            "Adjust on Watch via Settings \u{2192} Display & Brightness."
+                    )
+                    batteryTipRow(
+                        title: "Screen Timeout",
+                        value: nil,
+                        impact: "Varies",
+                        instruction:
+                            "Adjust on Watch via Settings \u{2192} Display & Brightness."
+                    )
+                    batteryTipRow(
+                        title: "Always-On Display",
+                        value: nil,
+                        impact: "Moderate",
+                        instruction:
+                            "Adjust on Watch via Settings \u{2192} Display & Brightness."
+                    )
+                    if userSettings.settings.phoneAlerts.mode != .off {
+                        batteryTipRow(
+                            title: "Phone Alerts",
+                            value: userSettings.settings.phoneAlerts.mode.label,
+                            impact: "High",
+                            instruction:
+                                "Change in Ride Settings \u{2192} Phone Alerts."
+                        )
+                    }
+                } label: {
+                    Label {
+                        Text("Battery Tips")
+                    } icon: {
+                        Image(systemName: "battery.100.bolt")
+                            .foregroundStyle(.green)
+                    }
+                }
+            } footer: {
+                Text(
+                    "Use Balanced GPS and lower screen brightness on long rides to extend battery life."
+                )
             }
 
             // MARK: - Support the Developer
@@ -204,9 +264,11 @@ struct SettingsView: View {
                                 .foregroundStyle(.primary)
                         }
 
-                        Text("This app is completely free. If you'd like, you can leave a voluntary tip to support the developer. Tipping is optional and does not unlock any features or affect how the app works.")
-                            .font(.footnote)
-                            .foregroundStyle(.white)
+                        Text(
+                            "This app is completely free. If you'd like, you can leave a voluntary tip to support the developer. Tipping is optional and does not unlock any features or affect how the app works."
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.white)
 
                         HStack(spacing: 4) {
                             Text("Buy me a coffee")
@@ -221,9 +283,53 @@ struct SettingsView: View {
             }
         }
         .sheet(isPresented: $showSupportSafari) {
-            SafariView(url: URL(string: "https://www.buymeacoffee.com/aidanweinberg")!)
+            SafariView(
+                url: URL(string: "https://www.buymeacoffee.com/aidanweinberg")!
+            )
         }
         .navigationTitle("Settings")
+    }
+
+    private func batteryTipRow(
+        title: String,
+        value: String?,
+        impact: String,
+        instruction: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.subheadline)
+                Spacer()
+                if let value {
+                    Text(value)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                Text(impact)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(impactColor(impact))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(impactColor(impact).opacity(0.15))
+                    .clipShape(Capsule())
+                Text(instruction)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func impactColor(_ impact: String) -> Color {
+        switch impact {
+        case "Most demanding", "High": return .red
+        case "Moderate": return .orange
+        case "Least demanding": return .green
+        default: return .secondary
+        }
     }
 }
 
@@ -233,7 +339,7 @@ struct RiderProfileView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @State private var showAddBike = false
     @State private var newBikeName = ""
-    @State private var newBikeWeight = "22" // lbs
+    @State private var newBikeWeight = "22"  // lbs
 
     // Imperial bindings (stored as kg/cm, displayed as lbs/in)
     private var riderWeightLbs: Binding<Double> {
@@ -271,27 +377,37 @@ struct RiderProfileView: View {
                 HStack {
                     Label("Weight", systemImage: "scalemass")
                     Spacer()
-                    TextField("lbs", value: riderWeightLbs, format: .number.precision(.fractionLength(0)))
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
+                    TextField(
+                        "lbs",
+                        value: riderWeightLbs,
+                        format: .number.precision(.fractionLength(0))
+                    )
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
                     Text("lbs")
                         .foregroundStyle(.secondary)
                 }
                 HStack {
                     Label("Height", systemImage: "ruler")
                     Spacer()
-                    TextField("in", value: riderHeightIn, format: .number.precision(.fractionLength(0)))
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
+                    TextField(
+                        "in",
+                        value: riderHeightIn,
+                        format: .number.precision(.fractionLength(0))
+                    )
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
                     Text("in")
                         .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Rider")
             } footer: {
-                Text("\(String(format: "%.0f", userSettings.settings.riderWeight * 2.20462)) lbs \u{2022} \(heightString)")
+                Text(
+                    "\(String(format: "%.0f", userSettings.settings.riderWeight * 2.20462)) lbs \u{2022} \(heightString)"
+                )
             }
 
             // MARK: Bikes
@@ -302,17 +418,22 @@ struct RiderProfileView: View {
                         userSettings.settings.activeBikeID = bike.id
                     } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(isActive ? .green : .secondary)
-                                .font(.title3)
+                            Image(
+                                systemName: isActive
+                                    ? "checkmark.circle.fill" : "circle"
+                            )
+                            .foregroundStyle(isActive ? .green : .secondary)
+                            .font(.title3)
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(bike.name)
                                     .font(.body)
                                     .foregroundStyle(.primary)
-                                Text("\(String(format: "%.1f", bike.weight * 2.20462)) lbs")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                Text(
+                                    "\(String(format: "%.1f", bike.weight * 2.20462)) lbs"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             }
 
                             Spacer()
@@ -330,9 +451,13 @@ struct RiderProfileView: View {
                     }
                 }
                 .onDelete { indices in
-                    let wasActive = indices.contains(where: { userSettings.settings.bikes[$0].id == userSettings.settings.activeBikeID })
+                    let wasActive = indices.contains(where: {
+                        userSettings.settings.bikes[$0].id
+                            == userSettings.settings.activeBikeID
+                    })
                     userSettings.settings.bikes.remove(atOffsets: indices)
-                    if wasActive, let first = userSettings.settings.bikes.first {
+                    if wasActive, let first = userSettings.settings.bikes.first
+                    {
                         userSettings.settings.activeBikeID = first.id
                     }
                 }
@@ -348,30 +473,43 @@ struct RiderProfileView: View {
                     }
                 }
             } footer: {
-                Text("Tap to select the active bike. Its weight is used for power estimation. Swipe to delete.")
+                Text(
+                    "Tap to select the active bike. Its weight is used for power estimation. Swipe to delete."
+                )
             }
 
             // MARK: Bike Editor (inline for active bike)
-            if let activeIdx = userSettings.settings.bikes.firstIndex(where: { $0.id == userSettings.settings.activeBikeID }) {
+            if let activeIdx = userSettings.settings.bikes.firstIndex(where: {
+                $0.id == userSettings.settings.activeBikeID
+            }) {
                 Section {
                     HStack {
                         Label("Name", systemImage: "pencil")
                         Spacer()
-                        TextField("Bike name", text: $userSettings.settings.bikes[activeIdx].name)
-                            .multilineTextAlignment(.trailing)
+                        TextField(
+                            "Bike name",
+                            text: $userSettings.settings.bikes[activeIdx].name
+                        )
+                        .multilineTextAlignment(.trailing)
                     }
                     HStack {
                         Label("Weight", systemImage: "scalemass")
                         Spacer()
-                        TextField("lbs", value: bikeWeightLbs(at: activeIdx), format: .number.precision(.fractionLength(1)))
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 80)
+                        TextField(
+                            "lbs",
+                            value: bikeWeightLbs(at: activeIdx),
+                            format: .number.precision(.fractionLength(1))
+                        )
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
                         Text("lbs")
                             .foregroundStyle(.secondary)
                     }
                 } header: {
-                    Text("Edit \"\(userSettings.settings.bikes[activeIdx].name)\"")
+                    Text(
+                        "Edit \"\(userSettings.settings.bikes[activeIdx].name)\""
+                    )
                 }
             }
 
@@ -381,11 +519,15 @@ struct RiderProfileView: View {
                     Text("Total Weight")
                         .fontWeight(.medium)
                     Spacer()
-                    Text("\(String(format: "%.0f", userSettings.settings.totalMass * 2.20462)) lbs")
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "\(String(format: "%.0f", userSettings.settings.totalMass * 2.20462)) lbs"
+                    )
+                    .foregroundStyle(.secondary)
                 }
             } footer: {
-                Text("Power estimation uses total rider + bike weight. Heavier setups require more watts at the same speed and grade. Changes sync to the watch live.")
+                Text(
+                    "Power estimation uses total rider + bike weight. Heavier setups require more watts at the same speed and grade. Changes sync to the watch live."
+                )
             }
         }
         .navigationTitle("Rider Profile")
@@ -394,9 +536,12 @@ struct RiderProfileView: View {
             TextField("Weight in lbs", text: $newBikeWeight)
                 .keyboardType(.decimalPad)
             Button("Add") {
-                let name = newBikeName.isEmpty ? "Bike \(userSettings.settings.bikes.count + 1)" : newBikeName
+                let name =
+                    newBikeName.isEmpty
+                    ? "Bike \(userSettings.settings.bikes.count + 1)"
+                    : newBikeName
                 let lbs = Double(newBikeWeight) ?? 22
-                let bike = BikePreset(name: name, weight: lbs / 2.20462) // store as kg
+                let bike = BikePreset(name: name, weight: lbs / 2.20462)  // store as kg
                 userSettings.settings.bikes.append(bike)
                 if userSettings.settings.bikes.count == 1 {
                     userSettings.settings.activeBikeID = bike.id
@@ -421,7 +566,10 @@ struct SafariView: UIViewControllerRepresentable {
         SFSafariViewController(url: url)
     }
 
-    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
+    func updateUIViewController(
+        _ uiViewController: SFSafariViewController,
+        context: Context
+    ) {}
 }
 
 // MARK: - Placeholder Setting

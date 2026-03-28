@@ -32,6 +32,8 @@ struct UserSettings: Codable, Equatable {
     var activeBikeID: UUID?
     var unitPreferences: UnitPreferences
     var navigationAlerts: NavigationAlertPreferences
+    var ridePreferences: RidePreferences
+    var phoneAlerts: PhoneAlertPreferences
 
     /// Active bike weight, or a manual fallback
     var bikeWeight: Double {
@@ -58,20 +60,24 @@ struct UserSettings: Codable, Equatable {
         ],
         activeBikeID: nil,  // will use first bike
         unitPreferences: .imperial,
-        navigationAlerts: .default
+        navigationAlerts: .default,
+        ridePreferences: .default,
+        phoneAlerts: .default
     )
 
     private enum CodingKeys: String, CodingKey {
-        case riderWeight, riderHeight, bikes, activeBikeID, unitPreferences, navigationAlerts
+        case riderWeight, riderHeight, bikes, activeBikeID, unitPreferences, navigationAlerts, ridePreferences, phoneAlerts
     }
 
-    init(riderWeight: Double, riderHeight: Double, bikes: [BikePreset], activeBikeID: UUID?, unitPreferences: UnitPreferences = .imperial, navigationAlerts: NavigationAlertPreferences = .default) {
+    init(riderWeight: Double, riderHeight: Double, bikes: [BikePreset], activeBikeID: UUID?, unitPreferences: UnitPreferences = .imperial, navigationAlerts: NavigationAlertPreferences = .default, ridePreferences: RidePreferences = .default, phoneAlerts: PhoneAlertPreferences = .default) {
         self.riderWeight = riderWeight
         self.riderHeight = riderHeight
         self.bikes = bikes
         self.activeBikeID = activeBikeID
         self.unitPreferences = unitPreferences
         self.navigationAlerts = navigationAlerts
+        self.ridePreferences = ridePreferences
+        self.phoneAlerts = phoneAlerts
     }
 
     init(from decoder: Decoder) throws {
@@ -82,6 +88,8 @@ struct UserSettings: Codable, Equatable {
         activeBikeID = try container.decodeIfPresent(UUID.self, forKey: .activeBikeID)
         unitPreferences = try container.decodeIfPresent(UnitPreferences.self, forKey: .unitPreferences) ?? .default
         navigationAlerts = try container.decodeIfPresent(NavigationAlertPreferences.self, forKey: .navigationAlerts) ?? .default
+        ridePreferences = try container.decodeIfPresent(RidePreferences.self, forKey: .ridePreferences) ?? .default
+        phoneAlerts = try container.decodeIfPresent(PhoneAlertPreferences.self, forKey: .phoneAlerts) ?? .default
     }
 }
 

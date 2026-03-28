@@ -28,7 +28,7 @@ struct RouteMapView: View {
                     BreadcrumbCanvas(
                         workout: workout,
                         viewDistance: zoomLevels[zoomIndex],
-                        useCompassHeading: !isLuminanceReduced)
+                        useCompassHeading: workout.ridePreferences.mapRotation == .headingUp && !isLuminanceReduced)
                 }
             }
             .ignoresSafeArea()

@@ -8,6 +8,7 @@
 import AVFoundation
 import CoreLocation
 import Combine
+import UserNotifications
 
 class VoiceNavigator: NSObject, ObservableObject {
     static let shared = VoiceNavigator()
@@ -355,6 +356,10 @@ class VoiceNavigator: NSObject, ObservableObject {
             onHaptic?(mode)
         }
 
+        if workoutManager?.ridePreferences.wakeOnAlert == true {
+            scheduleWakeNotification(body: text)
+        }
+
         guard mode.includesVoice else { return }
 
         if let wm = workoutManager {
@@ -367,6 +372,17 @@ class VoiceNavigator: NSObject, ObservableObject {
         } else {
             speakLocally(text)
         }
+    }
+
+    private func scheduleWakeNotification(body: String) {
+        let content = UNMutableNotificationContent()
+        content.body = body
+        content.interruptionLevel = .timeSensitive
+        let request = UNNotificationRequest(
+            identifier: "nav-wake-alert",
+            content: content,
+            trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     private func speakLocally(_ text: String) {
