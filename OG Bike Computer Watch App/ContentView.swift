@@ -48,15 +48,26 @@ struct ContentView: View {
                let prefs = try? JSONDecoder().decode(UnitPreferences.self, from: cached) {
                 UnitState.shared.preferences = prefs
             }
+            // Restore cached navigation alert preferences on boot
+            if let cached = UserDefaults.standard.data(forKey: "navigationAlerts"),
+               let navPrefs = try? JSONDecoder().decode(NavigationAlertPreferences.self, from: cached) {
+                VoiceNavigator.shared.preferences = navPrefs
+                workout.navigation.offRouteThreshold = navPrefs.navigationEvents.offRouteThreshold
+            }
 
             ConnectivityManager.shared.onUserSettingsReceived = { data in
                 guard let settings = try? JSONDecoder().decode(UserSettings.self, from: data) else { return }
                 workout.riderMass = settings.riderWeight
                 workout.bikeMass = settings.bikeWeight
                 UnitState.shared.preferences = settings.unitPreferences
+                VoiceNavigator.shared.preferences = settings.navigationAlerts
+                workout.navigation.offRouteThreshold = settings.navigationAlerts.navigationEvents.offRouteThreshold
                 // Cache for next boot
                 if let encoded = try? JSONEncoder().encode(settings.unitPreferences) {
                     UserDefaults.standard.set(encoded, forKey: "unitPreferences")
+                }
+                if let encoded = try? JSONEncoder().encode(settings.navigationAlerts) {
+                    UserDefaults.standard.set(encoded, forKey: "navigationAlerts")
                 }
             }
 

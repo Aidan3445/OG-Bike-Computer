@@ -42,7 +42,7 @@ class NavigationTracker: ObservableObject {
     private var offRouteLocation: CLLocation?
     let missedTurnProximity: Double = 150
 
-    let offRouteThreshold: Double = 100
+    var offRouteThreshold: Double = 100
     let rejoinThreshold: Double = 30
 
     let turnWarningDistance: Double = 500

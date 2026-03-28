@@ -14,11 +14,11 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     @Published var isEnabled = true
 
-    private let alertDistances: [Double] = [
-        402.336,  // ¼ mile
-        60.96,    // 200 feet
-        0         // at the turn
-    ]
+    var preferences: NavigationAlertPreferences = .default
+
+    private var alertDistances: [Double] {
+        preferences.turnAlerts.alertDistances
+    }
     private let groupTurnThreshold: Double = 150 // meters between turns to group them
 
     private let atTurnThreshold: Double = 20
@@ -105,16 +105,18 @@ class VoiceNavigator: NSObject, ObservableObject {
         isStopped = false
     }
 
-    func update(nav: NavigationTracker, speed: Double, isActivelyMoving: Bool = true) {
+    func update(nav: NavigationTracker, speed: Double, heading: Double = 0, isActivelyMoving: Bool = true) {
         guard isEnabled, !isStopped else { return }
         guard let route = nav.processedRoute else { return }
 
         self.isActivelyMoving = isActivelyMoving
 
+        let navEvents = preferences.navigationEvents
+
         if nav.isRouteComplete {
             if !announcedArrival {
                 announcedArrival = true
-                speak("You have arrived. Route complete.")
+                speak("You have arrived. Route complete.", mode: navEvents.arrivalAlert)
             }
             return
         }
@@ -122,10 +124,11 @@ class VoiceNavigator: NSObject, ObservableObject {
         if nav.isOffRoute {
             if !announcedOffRoute {
                 announcedOffRoute = true
+                let rejoinDirection = voiceDirectionToTarget(heading: heading, bearingToTarget: nav.bearingToRoute)
                 if let missed = nav.missedTurn {
-                    speak("Off route. Missed \(missed.direction.voiceLabel2).")
+                    speak("Off route. Missed \(missed.direction.voiceLabel2). \(rejoinDirection.capitalized) to rejoin.", mode: navEvents.offRouteAlert)
                 } else {
-                    speak("Off route.")
+                    speak("Off route. \(rejoinDirection.capitalized) to rejoin.", mode: navEvents.offRouteAlert)
                 }
             }
             wasOffRoute = true
@@ -133,13 +136,14 @@ class VoiceNavigator: NSObject, ObservableObject {
         } else if wasOffRoute {
             wasOffRoute = false
             announcedOffRoute = false
-            speak("Back on route.")
+            speak("Back on route.", mode: navEvents.backOnRouteAlert)
             if let turn = nav.nextTurn {
                 let dist = nav.distanceToNextTurn
                 let turnText = voiceText(for: turn)
+                let turnMode = preferences.turnAlerts.resolvedPrimaryApproachMode()
                 let item = DispatchWorkItem { [weak self] in
                     guard let self, !self.isStopped else { return }
-                    self.speak("in \(self.formatVoiceDistance(dist)), \(turnText).")
+                    self.speak("in \(formatVoiceDistance(dist)), \(turnText).", mode: turnMode)
                 }
                 pendingWorkItem?.cancel()
                 pendingWorkItem = item
@@ -191,9 +195,9 @@ class VoiceNavigator: NSObject, ObservableObject {
                     if let ft = followingTurn {
                         // "In 200 feet, turn right onto Main St then left."
                         self.groupedApproachTurnIndices.insert(ft.index)
-                        return "in \(self.formatVoiceDistance(d)), \(self.voiceText(for: turn)) then \(ft.direction.voiceLabel)."
+                        return "in \(formatVoiceDistance(d)), \(self.voiceText(for: turn)) then \(ft.direction.voiceLabel)."
                     }
-                    return "in \(self.formatVoiceDistance(d)), \(self.voiceText(for: turn))."
+                    return "in \(formatVoiceDistance(d)), \(self.voiceText(for: turn))."
                 }
             ) { return }
 
@@ -229,7 +233,8 @@ class VoiceNavigator: NSObject, ObservableObject {
                 speed: speed,
                 fired: &firedFinishAlerts,
                 atZeroText: "You have arrived. Route complete.",
-                approachText: { d in "Finish \(self.formatVoiceDistance(d))." }
+                approachText: { d in "Finish \(formatVoiceDistance(d))." },
+                isTurnAlert: false
             ) { return }
         }
 
@@ -238,7 +243,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             if nav.distanceAlongRoute >= half {
                 announcedHalfway = true
                 if isActivelyMoving, canSpeak {
-                    speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) to go.")
+                    speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) to go.", mode: navEvents.halfwayAlert)
                 }
                 return
             }
@@ -274,14 +279,26 @@ class VoiceNavigator: NSObject, ObservableObject {
         fired: inout Set<Int>,
         suppressApproach: Bool = false,
         atZeroText: String,
-        approachText: (Double) -> String
+        approachText: (Double) -> String,
+        isTurnAlert: Bool = true
     ) -> Bool {
-        for (i, alertDist) in alertDistances.enumerated() {
+        let distances = alertDistances
+        for (i, alertDist) in distances.enumerated() {
             guard !fired.contains(i) else { continue }
 
             let isAtTurn = alertDist == 0
             let threshold = isAtTurn ? atTurnThreshold : alertDist
             guard distance <= threshold else { continue }
+
+            let mode: AlertMode = isTurnAlert
+                ? preferences.turnAlerts.mode(forAlertIndex: i, totalCount: distances.count)
+                : .voiceAndHaptic
+
+            // Skip if mode is none
+            if mode == .none {
+                fired.insert(i)
+                continue
+            }
 
             // Suppress approach prompts when not actively moving
             if !isAtTurn && !isActivelyMoving {
@@ -307,7 +324,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             }
 
             fired.insert(i)
-            speak(isAtTurn ? atZeroText : approachText(distance))
+            speak(isAtTurn ? atZeroText : approachText(distance), mode: mode)
             return true
         }
         return false
@@ -326,10 +343,19 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
     }
 
-    private func speak(_ text: String) {
+    /// Callback for haptic feedback — set by WorkoutManager
+    var onHaptic: ((AlertMode) -> Void)?
+
+    private func speak(_ text: String, mode: AlertMode = .voiceAndHaptic) {
         guard !isStopped else { return }
 
         lastAnnouncementTime = Date()
+
+        if mode.includesHaptic {
+            onHaptic?(mode)
+        }
+
+        guard mode.includesVoice else { return }
 
         if let wm = workoutManager {
             wm.sendSpeechToPhone(text) { [weak self] spoken in
@@ -361,32 +387,6 @@ class VoiceNavigator: NSObject, ObservableObject {
         synthesizer.speak(utterance)
     }
 
-    private func formatVoiceDistance(_ meters: Double) -> String {
-        let feet = meters * 3.28084
-        let miles = meters / 1609.344
-
-        if feet < 150 {
-            let rounded = max(50, Int((feet / 50).rounded()) * 50)
-            return "\(rounded) feet"
-        }
-        if feet < 300 {
-            let hundreds = Int((feet / 100).rounded())
-            return "\(hundreds) hundred feet"
-        }
-        if miles < 0.2 {
-            let rounded = Int((feet / 100).rounded()) * 100
-            return "\(rounded) feet"
-        }
-        if miles < 0.3 { return "a quarter mile" }
-        if miles < 0.6 { return "half a mile" }
-        if miles < 0.85 { return "three quarters of a mile" }
-        if miles < 1.1 { return "1 mile" }
-        if miles < 1.3 { return "about a mile" }
-        if miles < 1.7 { return "a mile and a half" }
-        if miles < 2.2 { return "2 miles" }
-        let rounded = Int(miles.rounded())
-        return "\(rounded) miles"
-    }
 }
 
 extension TurnDirection {

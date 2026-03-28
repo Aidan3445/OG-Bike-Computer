@@ -142,6 +142,74 @@ func formatHeading(_ degrees: Double) -> String {
     return "\(displayDegrees)° \(dir)"
 }
 
+func formatVoiceDistance(_ meters: Double) -> String {
+    switch currentUnits.distance {
+    case .miles:
+        let feet = meters * 3.28084
+        let miles = meters / 1609.344
+
+        if feet < 150 {
+            let rounded = max(50, Int((feet / 50).rounded()) * 50)
+            return "\(rounded) feet"
+        }
+        if feet < 300 {
+            let hundreds = Int((feet / 100).rounded())
+            return "\(hundreds) hundred feet"
+        }
+        if miles < 0.2 {
+            let rounded = Int((feet / 100).rounded()) * 100
+            return "\(rounded) feet"
+        }
+        if miles < 0.3 { return "a quarter mile" }
+        if miles < 0.6 { return "half a mile" }
+        if miles < 0.85 { return "three quarters of a mile" }
+        if miles < 1.1 { return "1 mile" }
+        if miles < 1.3 { return "about a mile" }
+        if miles < 1.7 { return "a mile and a half" }
+        if miles < 2.2 { return "2 miles" }
+        let rounded = Int(miles.rounded())
+        return "\(rounded) miles"
+
+    case .kilometers:
+        if meters < 100 {
+            let rounded = max(25, Int((meters / 25).rounded()) * 25)
+            return "\(rounded) meters"
+        }
+        if meters < 250 {
+            let rounded = Int((meters / 50).rounded()) * 50
+            return "\(rounded) meters"
+        }
+        let km = meters / 1000
+        if km < 0.4 { return "250 meters" }
+        if km < 0.6 { return "half a kilometer" }
+        if km < 0.85 { return "three quarters of a kilometer" }
+        if km < 1.1 { return "1 kilometer" }
+        if km < 1.3 { return "about a kilometer" }
+        if km < 1.7 { return "a kilometer and a half" }
+        if km < 2.2 { return "2 kilometers" }
+        let rounded = Int(km.rounded())
+        return "\(rounded) kilometers"
+    }
+}
+
+/// Returns a voice-friendly direction (e.g. "turn left", "turn around") from a rider's
+/// heading to a target bearing.
+func voiceDirectionToTarget(heading: Double, bearingToTarget: Double) -> String {
+    // Relative angle: positive = target is to the right
+    var relative = bearingToTarget - heading
+    // Normalize to [-180, 180]
+    while relative > 180 { relative -= 360 }
+    while relative < -180 { relative += 360 }
+
+    let abs = Swift.abs(relative)
+    if abs < 20 { return "continue straight" }
+    if abs > 160 { return "turn around" }
+    let direction = relative > 0 ? "right" : "left"
+    if abs < 50 { return "bear \(direction)" }
+    if abs < 130 { return "turn \(direction)" }
+    return "sharp \(direction)"
+}
+
 extension Array {
     func chunked(into size: Int) -> [[Element]] {
         stride(from: 0, to: count, by: size).map {

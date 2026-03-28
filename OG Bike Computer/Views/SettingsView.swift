@@ -13,6 +13,16 @@ struct SettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @State private var showSupportSafari = false
 
+    private var navigationAlertsSummary: String {
+        let alerts = userSettings.settings.navigationAlerts
+        let mode = alerts.turnAlerts.defaultMode
+        var parts: [String] = [mode.label]
+        if alerts.splitAlerts.enabled { parts.append("Splits") }
+        if alerts.descentAlerts.enabled { parts.append("Descent") }
+        if alerts.climbAlerts.enabled { parts.append("Climb") }
+        return parts.joined(separator: " \u{2022} ")
+    }
+
     var body: some View {
         List {
             // MARK: - Metric Pages
@@ -74,19 +84,15 @@ struct SettingsView: View {
                 }
             }
 
-            // MARK: - Navigation Alerts (placeholder)
+            // MARK: - Navigation Alerts
             Section {
                 NavigationLink {
-                    PlaceholderSettingView(
-                        title: "Navigation Alerts",
-                        icon: "bell.badge",
-                        description: "Configure turn alert distances, off-route threshold, voice announcement settings, and haptic feedback intensity."
-                    )
+                    NavigationAlertSettingsView(userSettings: userSettings)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Navigation Alerts")
-                            Text("Default distances")
+                            Text(navigationAlertsSummary)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

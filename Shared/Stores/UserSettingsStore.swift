@@ -31,6 +31,7 @@ struct UserSettings: Codable, Equatable {
     var bikes: [BikePreset]
     var activeBikeID: UUID?
     var unitPreferences: UnitPreferences
+    var navigationAlerts: NavigationAlertPreferences
 
     /// Active bike weight, or a manual fallback
     var bikeWeight: Double {
@@ -56,19 +57,21 @@ struct UserSettings: Codable, Equatable {
             BikePreset(name: "My Bike", weight: 10)
         ],
         activeBikeID: nil,  // will use first bike
-        unitPreferences: .imperial
+        unitPreferences: .imperial,
+        navigationAlerts: .default
     )
 
     private enum CodingKeys: String, CodingKey {
-        case riderWeight, riderHeight, bikes, activeBikeID, unitPreferences
+        case riderWeight, riderHeight, bikes, activeBikeID, unitPreferences, navigationAlerts
     }
 
-    init(riderWeight: Double, riderHeight: Double, bikes: [BikePreset], activeBikeID: UUID?, unitPreferences: UnitPreferences = .imperial) {
+    init(riderWeight: Double, riderHeight: Double, bikes: [BikePreset], activeBikeID: UUID?, unitPreferences: UnitPreferences = .imperial, navigationAlerts: NavigationAlertPreferences = .default) {
         self.riderWeight = riderWeight
         self.riderHeight = riderHeight
         self.bikes = bikes
         self.activeBikeID = activeBikeID
         self.unitPreferences = unitPreferences
+        self.navigationAlerts = navigationAlerts
     }
 
     init(from decoder: Decoder) throws {
@@ -78,6 +81,7 @@ struct UserSettings: Codable, Equatable {
         bikes = try container.decode([BikePreset].self, forKey: .bikes)
         activeBikeID = try container.decodeIfPresent(UUID.self, forKey: .activeBikeID)
         unitPreferences = try container.decodeIfPresent(UnitPreferences.self, forKey: .unitPreferences) ?? .default
+        navigationAlerts = try container.decodeIfPresent(NavigationAlertPreferences.self, forKey: .navigationAlerts) ?? .default
     }
 }
 

@@ -184,6 +184,7 @@ class WorkoutManager: NSObject, ObservableObject {
                 VoiceNavigator.shared.update(
                     nav: self.navigation,
                     speed: self.speed,
+                    heading: self.heading,
                     isActivelyMoving: self.autoPauseState == .moving)
             }
 
@@ -806,19 +807,40 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func handleTurnAlert(_ alert: NavigationTracker.TurnAlert) {
+        let prefs = VoiceNavigator.shared.preferences
+        let intensity = prefs.haptics.intensity
+
         switch alert {
         case .warning(_):
-            WKInterfaceDevice.current().play(.click)
+            let mode = prefs.turnAlerts.resolvedPrimaryApproachMode()
+            guard mode.includesHaptic else { return }
+            playHaptic(.click, intensity: intensity)
         case .imminent(let turn):
-            switch turn.direction {
-            case .left, .slightLeft, .sharpLeft:
-                WKInterfaceDevice.current().play(.directionDown)
-            case .right, .slightRight, .sharpRight:
-                WKInterfaceDevice.current().play(.directionUp)
-            case .uTurn:
-                WKInterfaceDevice.current().play(.failure)
-            case .straight:
-                WKInterfaceDevice.current().play(.success)
+            let mode = prefs.turnAlerts.resolvedAtTurnMode()
+            guard mode.includesHaptic else { return }
+            let haptic: WKHapticType = {
+                switch turn.direction {
+                case .left, .slightLeft, .sharpLeft: return .directionDown
+                case .right, .slightRight, .sharpRight: return .directionUp
+                case .uTurn: return .failure
+                case .straight: return .success
+                }
+            }()
+            playHaptic(haptic, intensity: intensity)
+        }
+    }
+
+    private func playHaptic(_ type: WKHapticType, intensity: HapticIntensity) {
+        let device = WKInterfaceDevice.current()
+        switch intensity {
+        case .light:
+            device.play(.click)
+        case .medium:
+            device.play(type)
+        case .strong:
+            device.play(type)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                device.play(type)
             }
         }
     }
