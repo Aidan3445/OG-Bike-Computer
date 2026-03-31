@@ -66,6 +66,7 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
     var atTurnMode: AlertMode?           // nil = use defaultMode
     var primaryApproachMode: AlertMode?  // nil = use defaultMode
     var secondaryApproachMode: AlertMode? // nil = use defaultMode
+    var minimumAlertGap: Double          // seconds between alerts for same turn (default 10)
 
     static let `default` = TurnAlertPreferences(
         defaultMode: .voiceAndHaptic,
@@ -74,7 +75,8 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
         secondaryApproachDistance: 804.672, // 0.5mi
         atTurnMode: nil,
         primaryApproachMode: nil,
-        secondaryApproachMode: nil
+        secondaryApproachMode: nil,
+        minimumAlertGap: 10
     )
 
     func resolvedAtTurnMode() -> AlertMode {
@@ -121,7 +123,8 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
         secondaryApproachDistance: Double = 804.672,
         atTurnMode: AlertMode? = nil,
         primaryApproachMode: AlertMode? = nil,
-        secondaryApproachMode: AlertMode? = nil
+        secondaryApproachMode: AlertMode? = nil,
+        minimumAlertGap: Double = 10
     ) {
         self.defaultMode = defaultMode
         self.primaryApproachDistance = primaryApproachDistance
@@ -130,6 +133,7 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
         self.atTurnMode = atTurnMode
         self.primaryApproachMode = primaryApproachMode
         self.secondaryApproachMode = secondaryApproachMode
+        self.minimumAlertGap = minimumAlertGap
     }
 
     init(from decoder: Decoder) throws {
@@ -141,6 +145,7 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
         atTurnMode = try c.decodeIfPresent(AlertMode.self, forKey: .atTurnMode)
         primaryApproachMode = try c.decodeIfPresent(AlertMode.self, forKey: .primaryApproachMode)
         secondaryApproachMode = try c.decodeIfPresent(AlertMode.self, forKey: .secondaryApproachMode)
+        minimumAlertGap = try c.decodeIfPresent(Double.self, forKey: .minimumAlertGap) ?? 10
     }
 }
 
@@ -185,30 +190,63 @@ struct NavigationEventPreferences: Codable, Equatable, Hashable {
     }
 }
 
+// MARK: - Split Stats (passed from WorkoutManager to VoiceNavigator)
+
+struct SplitStats {
+    let movingTime: TimeInterval
+    let distance: Double        // meters
+    let averageSpeed: Double    // m/s
+    let maxSpeed: Double        // m/s
+    let averageHeartRate: Double // bpm, 0 if no data
+}
+
 // MARK: - Split Alert Preferences
+
+enum StatScope: String, Codable, CaseIterable, Hashable {
+    case split   // just this split/lap
+    case ride    // whole ride total
+    case both    // read split value then ride value
+
+    var label: String {
+        switch self {
+        case .split: return "Split"
+        case .ride:  return "Ride"
+        case .both:  return "Both"
+        }
+    }
+}
+
+struct SplitMetricConfig: Codable, Equatable, Hashable {
+    var metric: MetricType
+    var scope: StatScope
+}
 
 struct SplitAlertPreferences: Codable, Equatable, Hashable {
     var enabled: Bool
     var splitDistance: Double // meters
-    var selectedMetrics: [MetricType]
+    var metrics: [SplitMetricConfig]
     var mode: AlertMode
 
     static let `default` = SplitAlertPreferences(
         enabled: false,
         splitDistance: 1609.34, // 1 mile
-        selectedMetrics: [.movingTime, .averageSpeed, .maxSpeed],
+        metrics: [
+            SplitMetricConfig(metric: .movingTime, scope: .split),
+            SplitMetricConfig(metric: .averageSpeed, scope: .split),
+            SplitMetricConfig(metric: .distance, scope: .ride)
+        ],
         mode: .voiceOnly
     )
 
     init(
         enabled: Bool = false,
         splitDistance: Double = 1609.34,
-        selectedMetrics: [MetricType] = [.movingTime, .averageSpeed, .maxSpeed],
+        metrics: [SplitMetricConfig]? = nil,
         mode: AlertMode = .voiceOnly
     ) {
         self.enabled = enabled
         self.splitDistance = splitDistance
-        self.selectedMetrics = selectedMetrics
+        self.metrics = metrics ?? Self.default.metrics
         self.mode = mode
     }
 
@@ -216,7 +254,14 @@ struct SplitAlertPreferences: Codable, Equatable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         splitDistance = try c.decodeIfPresent(Double.self, forKey: .splitDistance) ?? 1609.34
-        selectedMetrics = try c.decodeIfPresent([MetricType].self, forKey: .selectedMetrics) ?? [.movingTime, .averageSpeed, .maxSpeed]
+        // Backward compat: migrate old selectedMetrics to new metrics format
+        if let newMetrics = try c.decodeIfPresent([SplitMetricConfig].self, forKey: .metrics) {
+            metrics = newMetrics
+        } else if let oldMetrics = try? c.decodeIfPresent([MetricType].self, forKey: .metrics) {
+            metrics = oldMetrics.map { SplitMetricConfig(metric: $0, scope: .split) }
+        } else {
+            metrics = Self.default.metrics
+        }
         mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceOnly
     }
 }
