@@ -8,17 +8,18 @@
 import AVFoundation
 import CoreLocation
 import Combine
+import UserNotifications
 
 class VoiceNavigator: NSObject, ObservableObject {
     static let shared = VoiceNavigator()
 
     @Published var isEnabled = true
 
-    private let alertDistances: [Double] = [
-        402.336,  // ¼ mile
-        60.96,    // 200 feet
-        0         // at the turn
-    ]
+    var preferences: NavigationAlertPreferences = .default
+
+    private var alertDistances: [Double] {
+        preferences.turnAlerts.alertDistances
+    }
     private let groupTurnThreshold: Double = 150 // meters between turns to group them
 
     private let atTurnThreshold: Double = 20
@@ -35,10 +36,12 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var firedFinishAlerts: Set<Int> = []
 
     private var announcedHalfway = false
+    private var pendingHalfway = false  // deferred when canSpeak is false
     private var announcedArrival = false
     private var announcedOffRoute = false
     private var wasOffRoute = false
     private var lastAnnouncementTime: Date = .distantPast
+    private var lastTurnAlertTime: Date = .distantPast  // for minimum gap enforcement
 
     // Prevents any speech after stop
     private var isStopped = false
@@ -66,10 +69,12 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
+        pendingHalfway = false
         announcedArrival = false
         announcedOffRoute = false
         wasOffRoute = false
         lastAnnouncementTime = .distantPast
+        lastTurnAlertTime = .distantPast
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
@@ -85,10 +90,12 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
+        pendingHalfway = false
         announcedArrival = false
         announcedOffRoute = false
         wasOffRoute = false
         lastAnnouncementTime = .distantPast
+        lastTurnAlertTime = .distantPast
     }
 
     func configureAudioSession() {
@@ -105,16 +112,18 @@ class VoiceNavigator: NSObject, ObservableObject {
         isStopped = false
     }
 
-    func update(nav: NavigationTracker, speed: Double, isActivelyMoving: Bool = true) {
+    func update(nav: NavigationTracker, speed: Double, heading: Double = 0, isActivelyMoving: Bool = true) {
         guard isEnabled, !isStopped else { return }
         guard let route = nav.processedRoute else { return }
 
         self.isActivelyMoving = isActivelyMoving
 
+        let navEvents = preferences.navigationEvents
+
         if nav.isRouteComplete {
             if !announcedArrival {
                 announcedArrival = true
-                speak("You have arrived. Route complete.")
+                speak("You have arrived. Route complete.", mode: navEvents.arrivalAlert, category: "arrival")
             }
             return
         }
@@ -123,9 +132,9 @@ class VoiceNavigator: NSObject, ObservableObject {
             if !announcedOffRoute {
                 announcedOffRoute = true
                 if let missed = nav.missedTurn {
-                    speak("Off route. Missed \(missed.direction.voiceLabel2).")
+                    speak("Off route. Missed \(missed.direction.voiceLabel2).", mode: navEvents.offRouteAlert, category: "offRoute")
                 } else {
-                    speak("Off route.")
+                    speak("Off route.", mode: navEvents.offRouteAlert, category: "offRoute")
                 }
             }
             wasOffRoute = true
@@ -133,18 +142,10 @@ class VoiceNavigator: NSObject, ObservableObject {
         } else if wasOffRoute {
             wasOffRoute = false
             announcedOffRoute = false
-            speak("Back on route.")
-            if let turn = nav.nextTurn {
-                let dist = nav.distanceToNextTurn
-                let turnText = voiceText(for: turn)
-                let item = DispatchWorkItem { [weak self] in
-                    guard let self, !self.isStopped else { return }
-                    self.speak("in \(self.formatVoiceDistance(dist)), \(turnText).")
-                }
-                pendingWorkItem?.cancel()
-                pendingWorkItem = item
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: item)
-            }
+            // Calculate direction to continue along route after rejoining
+            let routeBearing = nav.currentBearing
+            let continueDirection = voiceDirectionToTarget(heading: heading, bearingToTarget: routeBearing)
+            speak("Back on route. \(continueDirection.capitalized) to continue.", mode: navEvents.backOnRouteAlert, category: "backOnRoute")
             return
         }
 
@@ -167,6 +168,8 @@ class VoiceNavigator: NSObject, ObservableObject {
                     } else {
                         speak("in \(formatVoiceDistance(dist)), \(voiceText(for: turn)).")
                     }
+                    // Record time of this "next turn" announcement for gap enforcement
+                    lastTurnAlertTime = Date()
                     markPassedThresholds(distance: dist, into: &firedTurnAlerts)
                 }
                 return
@@ -191,9 +194,9 @@ class VoiceNavigator: NSObject, ObservableObject {
                     if let ft = followingTurn {
                         // "In 200 feet, turn right onto Main St then left."
                         self.groupedApproachTurnIndices.insert(ft.index)
-                        return "in \(self.formatVoiceDistance(d)), \(self.voiceText(for: turn)) then \(ft.direction.voiceLabel)."
+                        return "in \(formatVoiceDistance(d)), \(self.voiceText(for: turn)) then \(ft.direction.voiceLabel)."
                     }
-                    return "in \(self.formatVoiceDistance(d)), \(self.voiceText(for: turn))."
+                    return "in \(formatVoiceDistance(d)), \(self.voiceText(for: turn))."
                 }
             ) { return }
 
@@ -229,8 +232,16 @@ class VoiceNavigator: NSObject, ObservableObject {
                 speed: speed,
                 fired: &firedFinishAlerts,
                 atZeroText: "You have arrived. Route complete.",
-                approachText: { d in "Finish \(self.formatVoiceDistance(d))." }
+                approachText: { d in "Finish \(formatVoiceDistance(d))." },
+                isTurnAlert: false
             ) { return }
+        }
+
+        // Check for pending halfway announcement (deferred from earlier when canSpeak was false)
+        if pendingHalfway, canSpeak, isActivelyMoving {
+            pendingHalfway = false
+            speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) to go.", mode: navEvents.halfwayAlert, category: "halfway")
+            return
         }
 
         if !announcedHalfway {
@@ -238,7 +249,10 @@ class VoiceNavigator: NSObject, ObservableObject {
             if nav.distanceAlongRoute >= half {
                 announcedHalfway = true
                 if isActivelyMoving, canSpeak {
-                    speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) to go.")
+                    speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) to go.", mode: navEvents.halfwayAlert, category: "halfway")
+                } else if isActivelyMoving {
+                    // Cooldown active — defer to next update cycle
+                    pendingHalfway = true
                 }
                 return
             }
@@ -274,14 +288,26 @@ class VoiceNavigator: NSObject, ObservableObject {
         fired: inout Set<Int>,
         suppressApproach: Bool = false,
         atZeroText: String,
-        approachText: (Double) -> String
+        approachText: (Double) -> String,
+        isTurnAlert: Bool = true
     ) -> Bool {
-        for (i, alertDist) in alertDistances.enumerated() {
+        let distances = alertDistances
+        for (i, alertDist) in distances.enumerated() {
             guard !fired.contains(i) else { continue }
 
             let isAtTurn = alertDist == 0
             let threshold = isAtTurn ? atTurnThreshold : alertDist
             guard distance <= threshold else { continue }
+
+            let mode: AlertMode = isTurnAlert
+                ? preferences.turnAlerts.mode(forAlertIndex: i, totalCount: distances.count)
+                : .voiceAndHaptic
+
+            // Skip if mode is none
+            if mode == .none {
+                fired.insert(i)
+                continue
+            }
 
             // Suppress approach prompts when not actively moving
             if !isAtTurn && !isActivelyMoving {
@@ -296,6 +322,16 @@ class VoiceNavigator: NSObject, ObservableObject {
                 continue
             }
 
+            // Minimum time gap: skip approach alerts if too soon after the
+            // auto "next turn" announcement. Never skip at-turn alerts.
+            if !isAtTurn && isTurnAlert {
+                let gap = Date().timeIntervalSince(lastTurnAlertTime)
+                if gap < preferences.turnAlerts.minimumAlertGap {
+                    fired.insert(i)
+                    continue
+                }
+            }
+
             if !isAtTurn && !canSpeak { continue }
 
             if !isAtTurn, speed > 0.5 {
@@ -307,7 +343,9 @@ class VoiceNavigator: NSObject, ObservableObject {
             }
 
             fired.insert(i)
-            speak(isAtTurn ? atZeroText : approachText(distance))
+            let cat = isTurnAlert ? (isAtTurn ? "atTurn" : "turnApproach") : nil
+            speak(isAtTurn ? atZeroText : approachText(distance), mode: mode, category: cat)
+            if isTurnAlert { lastTurnAlertTime = Date() }
             return true
         }
         return false
@@ -326,13 +364,92 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
     }
 
-    private func speak(_ text: String) {
+    /// Callback for haptic feedback — set by WorkoutManager
+    var onHaptic: ((AlertMode) -> Void)?
+
+    // MARK: - Split Alerts
+
+    func announceSplit(number: Int, splitStats: SplitStats, rideStats: SplitStats, metrics: [SplitMetricConfig], mode: AlertMode) {
+        var splitParts: [String] = []
+        var rideParts: [String] = []
+
+        for config in metrics {
+            let splitVal = statText(for: config.metric, from: splitStats, label: "")
+            let rideVal = statText(for: config.metric, from: rideStats, label: "")
+
+            switch config.scope {
+            case .split:
+                if let sv = splitVal { splitParts.append(sv) }
+            case .ride:
+                if let rv = rideVal { rideParts.append(rv) }
+            case .both:
+                if let sv = splitVal { splitParts.append(sv) }
+                if let rv = rideVal { rideParts.append("ride \(rv)") }
+            }
+        }
+
+        var text = "Split \(number)."
+        if !splitParts.isEmpty { text += " " + splitParts.joined(separator: ". ") + "." }
+        if !rideParts.isEmpty { text += " " + rideParts.joined(separator: ". ") + "." }
+
+        speak(text, mode: mode, category: "lap")
+    }
+
+    private func statText(for metric: MetricType, from stats: SplitStats, label: String) -> String? {
+        switch metric {
+        case .movingTime:
+            return "\(label)time \(formatVoiceDuration(stats.movingTime))"
+        case .averageSpeed:
+            return "\(label)average speed \(formatVoiceSpeed(stats.averageSpeed))"
+        case .maxSpeed:
+            guard stats.maxSpeed > 0 else { return nil }
+            return "\(label)max speed \(formatVoiceSpeed(stats.maxSpeed))"
+        case .distance:
+            return "\(label)distance \(formatVoiceDistance(stats.distance))"
+        case .heartRate:
+            guard stats.averageHeartRate > 0 else { return nil }
+            return "\(label)average heart rate \(Int(stats.averageHeartRate))"
+        default:
+            return nil
+        }
+    }
+
+    private func formatVoiceDuration(_ seconds: TimeInterval) -> String {
+        let mins = Int(seconds) / 60
+        let secs = Int(seconds) % 60
+        if mins == 0 {
+            return "\(secs) seconds"
+        } else if secs == 0 {
+            return "\(mins) minute\(mins == 1 ? "" : "s")"
+        }
+        return "\(mins) minute\(mins == 1 ? "" : "s") \(secs) seconds"
+    }
+
+    private func formatVoiceSpeed(_ mps: Double) -> String {
+        if currentUnits.speed == .mph {
+            return String(format: "%.1f miles per hour", mps * 2.23694)
+        } else {
+            return String(format: "%.1f kilometers per hour", mps * 3.6)
+        }
+    }
+
+    private func speak(_ text: String, mode: AlertMode = .voiceAndHaptic, category: String? = nil) {
         guard !isStopped else { return }
 
         lastAnnouncementTime = Date()
 
+        if mode.includesHaptic {
+            onHaptic?(mode)
+        }
+
+        if workoutManager?.ridePreferences.wakeOnAlert == true {
+            scheduleWakeNotification(body: text)
+        }
+
+        guard mode.includesVoice else { return }
+
         if let wm = workoutManager {
-            wm.sendSpeechToPhone(text) { [weak self] spoken in
+            wm.sendSpeechToPhone(text, category: category) { [weak self] spoken in
                 guard let self, !self.isStopped else { return }
                 if !spoken {
                     self.speakLocally(text)
@@ -341,6 +458,17 @@ class VoiceNavigator: NSObject, ObservableObject {
         } else {
             speakLocally(text)
         }
+    }
+
+    private func scheduleWakeNotification(body: String) {
+        let content = UNMutableNotificationContent()
+        content.body = body
+        content.interruptionLevel = .timeSensitive
+        let request = UNNotificationRequest(
+            identifier: "nav-wake-alert",
+            content: content,
+            trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     private func speakLocally(_ text: String) {
@@ -361,32 +489,6 @@ class VoiceNavigator: NSObject, ObservableObject {
         synthesizer.speak(utterance)
     }
 
-    private func formatVoiceDistance(_ meters: Double) -> String {
-        let feet = meters * 3.28084
-        let miles = meters / 1609.344
-
-        if feet < 150 {
-            let rounded = max(50, Int((feet / 50).rounded()) * 50)
-            return "\(rounded) feet"
-        }
-        if feet < 300 {
-            let hundreds = Int((feet / 100).rounded())
-            return "\(hundreds) hundred feet"
-        }
-        if miles < 0.2 {
-            let rounded = Int((feet / 100).rounded()) * 100
-            return "\(rounded) feet"
-        }
-        if miles < 0.3 { return "a quarter mile" }
-        if miles < 0.6 { return "half a mile" }
-        if miles < 0.85 { return "three quarters of a mile" }
-        if miles < 1.1 { return "1 mile" }
-        if miles < 1.3 { return "about a mile" }
-        if miles < 1.7 { return "a mile and a half" }
-        if miles < 2.2 { return "2 miles" }
-        let rounded = Int(miles.rounded())
-        return "\(rounded) miles"
-    }
 }
 
 extension TurnDirection {

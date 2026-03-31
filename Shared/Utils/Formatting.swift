@@ -8,36 +8,74 @@
 import Foundation
 import SwiftUI
 
+/// Global unit preferences — set from UserSettingsStore on app launch and on changes.
+var currentUnits: UnitPreferences = .default
+
 func formatDistance(_ meters: Double, _ units: Bool = true) -> String {
-    let miles = meters / 1609.34
-    return String(format: "%.1f%@", miles, units ? " mi" : "")
+    switch currentUnits.distance {
+    case .miles:
+        let miles = meters / 1609.34
+        return String(format: "%.1f%@", miles, units ? " mi" : "")
+    case .kilometers:
+        let km = meters / 1000
+        return String(format: "%.1f%@", km, units ? " km" : "")
+    }
 }
 
 func formatTurnDistance(_ meters: Double) -> String {
-    if meters >= 1609 {
-        return String(format: "%.1f", meters / 1609.34)
-    } else {
-        let feet = Int(meters * 3.28084)
-        return "\((feet / 50) * 50) ft"
+    switch currentUnits.distance {
+    case .miles:
+        if meters >= 1609 {
+            return String(format: "%.1f", meters / 1609.34)
+        } else {
+            let feet = Int(meters * 3.28084)
+            return "\((feet / 50) * 50) ft"
+        }
+    case .kilometers:
+        if meters >= 1000 {
+            return String(format: "%.1f", meters / 1000)
+        } else {
+            let m = Int(meters)
+            return "\((m / 50) * 50) m"
+        }
     }
 }
 
 func formatElevation(_ meters: Double) -> String {
-   let feet = meters * 3.28084
-   return String(format: "%.0f ft", feet)
+    switch currentUnits.elevation {
+    case .feet:
+        let feet = meters * 3.28084
+        return String(format: "%.0f ft", feet)
+    case .meters:
+        return String(format: "%.0f m", meters)
+    }
 }
 
 func formatSpeed(_ metersPerSecond: Double, _ units: Bool = true) -> String {
-    let mph = metersPerSecond * 2.23694
-    return String(format: "%.1f%@", mph, units ? " mph" : "")
+    switch currentUnits.speed {
+    case .mph:
+        let mph = metersPerSecond * 2.23694
+        return String(format: "%.1f%@", mph, units ? " mph" : "")
+    case .kmh:
+        let kmh = metersPerSecond * 3.6
+        return String(format: "%.1f%@", kmh, units ? " km/h" : "")
+    }
 }
 
 func formatPace(_ mps: Double) -> String {
     guard mps > 0.2 else { return "--" }
-    let minPerMile = 26.8224 / mps
-    let mins = Int(minPerMile)
-    let secs = Int((minPerMile - Double(mins)) * 60)
-    return String(format: "%d:%02d", mins, secs)
+    switch currentUnits.speed {
+    case .mph:
+        let minPerMile = 26.8224 / mps
+        let mins = Int(minPerMile)
+        let secs = Int((minPerMile - Double(mins)) * 60)
+        return String(format: "%d:%02d", mins, secs)
+    case .kmh:
+        let minPerKm = 16.6667 / mps
+        let mins = Int(minPerKm)
+        let secs = Int((minPerKm - Double(mins)) * 60)
+        return String(format: "%d:%02d", mins, secs)
+    }
 }
 
 func formatTime(_ interval: TimeInterval) -> String {
@@ -80,8 +118,13 @@ func formatHeartRate(_ bpm: Double) -> String {
 }
 
 func formatElevationValue(_ meters: Double) -> String {
-    let feet = meters * 3.28084
-    return String(format: "%.0f", feet)
+    switch currentUnits.elevation {
+    case .feet:
+        let feet = meters * 3.28084
+        return String(format: "%.0f", feet)
+    case .meters:
+        return String(format: "%.0f", meters)
+    }
 }
 
 func formatHeading(_ degrees: Double) -> String {
@@ -97,6 +140,74 @@ func formatHeading(_ degrees: Double) -> String {
     let displayDegrees = Int((normalizedDegrees.rounded()).truncatingRemainder(dividingBy: 360))
 
     return "\(displayDegrees)° \(dir)"
+}
+
+func formatVoiceDistance(_ meters: Double) -> String {
+    switch currentUnits.distance {
+    case .miles:
+        let feet = meters * 3.28084
+        let miles = meters / 1609.344
+
+        if feet < 150 {
+            let rounded = max(50, Int((feet / 50).rounded()) * 50)
+            return "\(rounded) feet"
+        }
+        if feet < 300 {
+            let hundreds = Int((feet / 100).rounded())
+            return "\(hundreds) hundred feet"
+        }
+        if miles < 0.2 {
+            let rounded = Int((feet / 100).rounded()) * 100
+            return "\(rounded) feet"
+        }
+        if miles < 0.3 { return "a quarter mile" }
+        if miles < 0.6 { return "half a mile" }
+        if miles < 0.85 { return "three quarters of a mile" }
+        if miles < 1.1 { return "1 mile" }
+        if miles < 1.3 { return "about a mile" }
+        if miles < 1.7 { return "a mile and a half" }
+        if miles < 2.2 { return "2 miles" }
+        let rounded = Int(miles.rounded())
+        return "\(rounded) miles"
+
+    case .kilometers:
+        if meters < 100 {
+            let rounded = max(25, Int((meters / 25).rounded()) * 25)
+            return "\(rounded) meters"
+        }
+        if meters < 250 {
+            let rounded = Int((meters / 50).rounded()) * 50
+            return "\(rounded) meters"
+        }
+        let km = meters / 1000
+        if km < 0.4 { return "250 meters" }
+        if km < 0.6 { return "half a kilometer" }
+        if km < 0.85 { return "three quarters of a kilometer" }
+        if km < 1.1 { return "1 kilometer" }
+        if km < 1.3 { return "about a kilometer" }
+        if km < 1.7 { return "a kilometer and a half" }
+        if km < 2.2 { return "2 kilometers" }
+        let rounded = Int(km.rounded())
+        return "\(rounded) kilometers"
+    }
+}
+
+/// Returns a voice-friendly direction (e.g. "turn left", "turn around") from a rider's
+/// heading to a target bearing.
+func voiceDirectionToTarget(heading: Double, bearingToTarget: Double) -> String {
+    // Relative angle: positive = target is to the right
+    var relative = bearingToTarget - heading
+    // Normalize to [-180, 180]
+    while relative > 180 { relative -= 360 }
+    while relative < -180 { relative += 360 }
+
+    let abs = Swift.abs(relative)
+    if abs < 20 { return "continue straight" }
+    if abs > 160 { return "turn around" }
+    let direction = relative > 0 ? "right" : "left"
+    if abs < 50 { return "bear \(direction)" }
+    if abs < 130 { return "turn \(direction)" }
+    return "sharp \(direction)"
 }
 
 extension Array {

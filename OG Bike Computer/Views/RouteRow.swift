@@ -13,6 +13,7 @@ struct RouteRow: View {
     let isUploading: Bool
     let isUploadBlocked: Bool
     let onSend: () -> Void
+    @ObservedObject private var unitState = UnitState.shared
     let onRename: (String) -> Void
 
     @State private var showOverwriteAlert = false
@@ -20,6 +21,7 @@ struct RouteRow: View {
     @State private var editedName: String = ""
 
     var body: some View {
+        let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
             Text(route.name)
                 .font(.headline)

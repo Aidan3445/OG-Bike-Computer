@@ -6,7 +6,9 @@
 //
 
 import AVFoundation
+#if os(iOS)
 import UIKit
+#endif
 import os
 
 private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "PhoneSpeechPlayer")
@@ -16,7 +18,9 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
 
     private var synthesizer: AVSpeechSynthesizer
     private var isSessionConfigured = false
+    #if os(iOS)
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    #endif
 
     private override init() {
         synthesizer = AVSpeechSynthesizer()
@@ -83,6 +87,7 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     }
 
     private func beginBackgroundTask() {
+        #if os(iOS)
         endBackgroundTask()
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "SpeechPlayback") { [weak self] in
             logger.warning("[PhoneSpeechPlayer] Background task expiring")
@@ -90,12 +95,15 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             self?.endBackgroundTask()
         }
+        #endif
     }
 
     private func endBackgroundTask() {
+        #if os(iOS)
         guard backgroundTaskID != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTaskID)
         backgroundTaskID = .invalid
+        #endif
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {

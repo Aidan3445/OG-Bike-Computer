@@ -10,11 +10,13 @@ import SwiftUI
 struct RideRow: View {
     let ride: RideSummary
     let onRename: (String) -> Void
+    @ObservedObject private var unitState = UnitState.shared
 
     @State private var showRenameSheet = false
     @State private var editedName = ""
 
     var body: some View {
+        let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top) {
                 Image(systemName: ride.activityType.icon)

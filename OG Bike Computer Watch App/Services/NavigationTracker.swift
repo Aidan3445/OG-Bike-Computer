@@ -42,8 +42,12 @@ class NavigationTracker: ObservableObject {
     private var offRouteLocation: CLLocation?
     let missedTurnProximity: Double = 150
 
-    let offRouteThreshold: Double = 100
+    var offRouteThreshold: Double = 100
     let rejoinThreshold: Double = 30
+
+    // Grace period: require consecutive off-route samples before firing
+    private var offRouteSampleCount: Int = 0
+    var offRouteGraceSamples: Int = 3
 
     let turnWarningDistance: Double = 500
     let turnAlertDistance: Double = 50
@@ -87,6 +91,7 @@ class NavigationTracker: ObservableObject {
         bearingToRoute = 0
         rejoinCandidates = []
         jumpCandidate = nil
+        offRouteSampleCount = 0
 
         if let last = processedRoute.points.last {
             endpointLocation = CLLocation(
@@ -152,6 +157,7 @@ class NavigationTracker: ObservableObject {
         lastAlertLevel = nil
         rejoinCandidates = []
         jumpCandidate = nil
+        offRouteSampleCount = 0
     }
 
     func update(location: CLLocation, riderDistance: Double = 0) -> TurnAlert? {
@@ -162,8 +168,16 @@ class NavigationTracker: ObservableObject {
             in: route
         )
 
-        isOffRoute = nearestDistance > offRouteThreshold
         nearestRouteDistance = nearestDistance
+
+        // Grace period: require consecutive off-route samples before triggering
+        if nearestDistance > offRouteThreshold {
+            offRouteSampleCount += 1
+            isOffRoute = offRouteSampleCount >= offRouteGraceSamples
+        } else {
+            offRouteSampleCount = 0
+            isOffRoute = false
+        }
 
         // Hysteresis: once off-route, must come much closer to rejoin
         if wasOffRoute && nearestDistance > rejoinThreshold {

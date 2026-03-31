@@ -25,6 +25,7 @@ class GPXParser: NSObject, XMLParserDelegate {
     private var inWpt: Bool = false
     private var currentWptName: String?
     private var currentWptDesc: String?
+    private var currentWptType: String?
 
     func parse(data: Data) -> [Route] {
         routes = []
@@ -55,6 +56,7 @@ class GPXParser: NSObject, XMLParserDelegate {
             currentLon = Double(attributes["lon"] ?? "")
             currentWptName = nil
             currentWptDesc = nil
+            currentWptType = nil
         default:
             break
         }
@@ -89,6 +91,10 @@ class GPXParser: NSObject, XMLParserDelegate {
             if inWpt && currentWptDesc == nil && !text.isEmpty {
                 currentWptDesc = text
             }
+        case "type":
+            if inWpt && !text.isEmpty {
+                currentWptType = text
+            }
         case "trkpt", "rtept":
             if let lat = currentLat, let lon = currentLon {
                 let point = TrackPoint(
@@ -99,12 +105,21 @@ class GPXParser: NSObject, XMLParserDelegate {
             }
         case "wpt":
             if let lat = currentLat, let lon = currentLon, let name = currentWptName, !name.isEmpty {
-                waypoints.append(Waypoint(
-                    lat: lat,
-                    lon: lon,
-                    name: name,
-                    description: currentWptDesc
-                ))
+                // Skip non-turn waypoints (POIs, start/end markers, etc.)
+                let wptType = currentWptType?.lowercased() ?? ""
+                let isGeneric = wptType == "generic" || wptType == "poi"
+                let nameLower = name.lowercased()
+                let isNonTurnName = nameLower == "start" || nameLower == "end" || nameLower == "finish"
+                let hasTurnKeyword = TurnDirection.hasTurnKeyword(nameLower)
+
+                if (!isGeneric && !isNonTurnName) || hasTurnKeyword {
+                    waypoints.append(Waypoint(
+                        lat: lat,
+                        lon: lon,
+                        name: name,
+                        description: currentWptDesc.map { RoadNameExpander.expand($0) }
+                    ))
+                }
             }
             inWpt = false
         case "trk", "rte":

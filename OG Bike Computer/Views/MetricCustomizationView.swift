@@ -11,6 +11,7 @@ import SwiftUI
 
 struct MetricCustomizationView: View {
     @ObservedObject var metricConfig: MetricConfigStore
+    var profileName: String = ""
     @State private var selectedPage: Int = 0
     @State private var showAddPage = false
     @State private var newPageName = ""
@@ -119,7 +120,7 @@ struct MetricCustomizationView: View {
             .padding(.top, 8)
             .padding(.bottom, 16)
         }
-        .navigationTitle("Customize Metrics")
+        .settingsPageTitle("Customize Metrics", profile: profileName)
         .alert("New Page", isPresented: $showAddPage) {
             TextField("Page Name", text: $newPageName)
             Button("Add") {
@@ -143,20 +144,14 @@ struct MetricCustomizationView: View {
             if selectedPage >= count + 1 { selectedPage = max(0, count) }
         }
         // NavigationLink destination triggered by context menu "Edit"
-        .background(
-            NavigationLink(
-                destination: Group {
-                    if let idx = editingPageIndex, metricConfig.config.pages.indices.contains(idx) {
-                        MetricPageEditor(metricConfig: metricConfig, pageIndex: idx)
-                    }
-                },
-                isActive: Binding(
-                    get: { editingPageIndex != nil },
-                    set: { if !$0 { editingPageIndex = nil } }
-                )
-            ) { EmptyView() }
-                .hidden()
-        )
+        .navigationDestination(isPresented: Binding(
+            get: { editingPageIndex != nil },
+            set: { if !$0 { editingPageIndex = nil } }
+        )) {
+            if let idx = editingPageIndex, metricConfig.config.pages.indices.contains(idx) {
+                MetricPageEditor(metricConfig: metricConfig, pageIndex: idx)
+            }
+        }
     }
 
     private func syncToWatch() {

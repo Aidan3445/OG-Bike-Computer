@@ -20,7 +20,11 @@ struct ContentView: View {
     var body: some View {
         Group {
             if workout.isActive {
-                if workout.isSimulating {
+                if let summary = workout.completedRideSummary {
+                    RideSummaryView(summary: summary, onDismiss: {
+                        workout.dismissSummary()
+                    })
+                } else if workout.isSimulating {
                     SimPlaybackOverlay(simulator: simulator, workout: workout)
                 } else {
                     WorkoutView(workout: workout, metricConfig: metricConfig, onStop: handleStop) {
@@ -43,10 +47,45 @@ struct ContentView: View {
                 metricConfig.applyFromRemote(data)
             }
 
+            // Restore cached unit preferences on boot
+            if let cached = UserDefaults.standard.data(forKey: "unitPreferences"),
+               let prefs = try? JSONDecoder().decode(UnitPreferences.self, from: cached) {
+                UnitState.shared.preferences = prefs
+            }
+            // Restore cached navigation alert preferences on boot
+            if let cached = UserDefaults.standard.data(forKey: "navigationAlerts"),
+               let navPrefs = try? JSONDecoder().decode(NavigationAlertPreferences.self, from: cached) {
+                VoiceNavigator.shared.preferences = navPrefs
+                workout.navigationAlerts = navPrefs
+                workout.navigation.offRouteThreshold = navPrefs.navigationEvents.offRouteThreshold
+            }
+            // Restore cached ride preferences on boot
+            if let cached = UserDefaults.standard.data(forKey: "ridePreferences"),
+               let ridePrefs = try? JSONDecoder().decode(RidePreferences.self, from: cached) {
+                workout.ridePreferences = ridePrefs
+                workout.navigation.offRouteGraceSamples = ridePrefs.offRouteGraceSamples
+            }
+
             ConnectivityManager.shared.onUserSettingsReceived = { data in
                 guard let settings = try? JSONDecoder().decode(UserSettings.self, from: data) else { return }
                 workout.riderMass = settings.riderWeight
                 workout.bikeMass = settings.bikeWeight
+                UnitState.shared.preferences = settings.unitPreferences
+                VoiceNavigator.shared.preferences = settings.navigationAlerts
+                workout.navigationAlerts = settings.navigationAlerts
+                workout.navigation.offRouteThreshold = settings.navigationAlerts.navigationEvents.offRouteThreshold
+                workout.ridePreferences = settings.ridePreferences
+                workout.navigation.offRouteGraceSamples = settings.ridePreferences.offRouteGraceSamples
+                // Cache for next boot
+                if let encoded = try? JSONEncoder().encode(settings.unitPreferences) {
+                    UserDefaults.standard.set(encoded, forKey: "unitPreferences")
+                }
+                if let encoded = try? JSONEncoder().encode(settings.navigationAlerts) {
+                    UserDefaults.standard.set(encoded, forKey: "navigationAlerts")
+                }
+                if let encoded = try? JSONEncoder().encode(settings.ridePreferences) {
+                    UserDefaults.standard.set(encoded, forKey: "ridePreferences")
+                }
             }
 
             workout.onRideCompleted = { summary in

@@ -11,6 +11,10 @@ import MapKit
 import HealthKit
 import os
 import AVFAudio
+import UserNotifications
+#if canImport(ActivityKit)
+import ActivityKit
+#endif
 
 private let mirrorLogger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "Mirroring")
 
@@ -18,6 +22,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private let locationManager = CLLocationManager()
     private let healthStore = HKHealthStore()
     private var mirroredSession: HKWorkoutSession?
+    private var lastPhoneAlertMode: PhoneAlertMode = .off
+    private var phoneAlertObserver: NSObjectProtocol?
 
     func application(
         _ application: UIApplication,
@@ -65,10 +71,54 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             // AVSpeechSynthesizer is not thread-safe — reset on main
             DispatchQueue.main.async {
                 PhoneSpeechPlayer.shared.resetSession()
+                self?.startPhoneAlerts()
             }
         }
 
+        // Observe phone alert preference changes so we can restart/stop
+        // Live Activity mid-ride when user toggles the setting
+        phoneAlertObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handlePhoneAlertModeChange()
+        }
+
         return true
+    }
+
+    private func handlePhoneAlertModeChange() {
+        // Only act when a ride is active
+        guard mirroredSession != nil else { return }
+
+        let prefs = loadPhoneAlertPreferences()
+        let newMode = prefs.mode
+        guard newMode != lastPhoneAlertMode else { return }
+
+        let oldMode = lastPhoneAlertMode
+        lastPhoneAlertMode = newMode
+        print("[AppDelegate] Phone alert mode changed: \(oldMode) → \(newMode)")
+
+        // Stop whatever was running
+        if oldMode == .liveActivity {
+            #if canImport(ActivityKit)
+            LiveActivityManager.shared.endActivity()
+            #endif
+        } else if oldMode == .turnNotifications {
+            TurnNotificationManager.shared.clearAll()
+        }
+
+        // Start the new mode
+        if newMode == .liveActivity {
+            #if canImport(ActivityKit)
+            let unitPrefs = loadUnitPreferences()
+            let isImperial = unitPrefs.distance == .miles
+            LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial)
+            #endif
+        } else if newMode == .turnNotifications {
+            TurnNotificationManager.shared.requestPermission()
+        }
     }
 }
 
@@ -93,6 +143,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
         if toState == .ended || toState == .stopped {
             DispatchQueue.main.async {
                 PhoneSpeechPlayer.shared.stopImmediately()
+                self.stopPhoneAlerts()
             }
             mirroredSession = nil
         }
@@ -123,8 +174,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
 
         for item in data {
             guard let payload = try? JSONDecoder().decode([String: String].self, from: item),
-                  payload["type"] == "speech",
-                  let text = payload["text"] else {
+                  let type = payload["type"] else {
                 continue
             }
 
@@ -133,16 +183,99 @@ extension AppDelegate: HKWorkoutSessionDelegate {
             if let tsString = payload["ts"], let ts = Double(tsString) {
                 let age = now - ts
                 if age > 10 {
-                    mirrorLogger.info("[Mirroring] Discarding stale speech (\(Int(age))s old): \(text)")
+                    mirrorLogger.info("[Mirroring] Discarding stale message (\(Int(age))s old)")
                     continue
                 }
             }
 
-            mirrorLogger.info("[Mirroring] Speaking: \(text)")
-            DispatchQueue.main.async {
-                PhoneSpeechPlayer.shared.speak(text)
+            switch type {
+            case "speech":
+                guard let text = payload["text"] else { continue }
+                mirrorLogger.info("[Mirroring] Speaking: \(text)")
+                DispatchQueue.main.async {
+                    PhoneSpeechPlayer.shared.speak(text)
+                }
+
+                // Post turn notification if enabled
+                let phonePrefs = self.loadPhoneAlertPreferences()
+                if phonePrefs.mode == .turnNotifications, let cat = payload["cat"] {
+                    DispatchQueue.main.async {
+                        switch cat {
+                        case "offRoute":
+                            TurnNotificationManager.shared.postOffRoute(message: text)
+                        case "atTurn", "turnApproach", "backOnRoute":
+                            TurnNotificationManager.shared.post(text: text)
+                        default:
+                            break // lap, halfway, arrival — not navigation turn alerts
+                        }
+                    }
+                }
+
+            case "telemetry":
+                #if canImport(ActivityKit)
+                DispatchQueue.main.async {
+                    LiveActivityManager.shared.update(from: payload)
+                }
+                #endif
+
+            case "ping":
+                // Connection health check from Watch — no action needed.
+                // Success/failure of the send on Watch side is what matters.
+                break
+
+            default:
+                break
             }
         }
+    }
+
+    // MARK: - Phone Alert Helpers
+
+    private func startPhoneAlerts() {
+        let phonePrefs = loadPhoneAlertPreferences()
+        lastPhoneAlertMode = phonePrefs.mode
+        print("[AppDelegate] startPhoneAlerts called: mode=\(phonePrefs.mode)")
+
+        #if canImport(ActivityKit)
+        if phonePrefs.mode == .liveActivity {
+            let unitPrefs = loadUnitPreferences()
+            let isImperial = unitPrefs.distance == .miles
+            print("[AppDelegate] Starting Live Activity (imperial=\(isImperial))")
+            // Route name not available here — telemetry will provide context
+            LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial)
+        }
+        #else
+        print("[AppDelegate] ActivityKit not available on this build")
+        #endif
+
+        if phonePrefs.mode == .turnNotifications {
+            print("[AppDelegate] Starting Turn Notifications")
+            TurnNotificationManager.shared.requestPermission()
+        }
+    }
+
+    private func stopPhoneAlerts() {
+        lastPhoneAlertMode = .off
+        #if canImport(ActivityKit)
+        LiveActivityManager.shared.endActivity()
+        #endif
+        TurnNotificationManager.shared.clearAll()
+    }
+
+    private func loadPhoneAlertPreferences() -> PhoneAlertPreferences {
+        guard let data = UserDefaults.standard.data(forKey: "phoneAlerts"),
+              let prefs = try? JSONDecoder().decode(PhoneAlertPreferences.self, from: data) else {
+            return .default
+        }
+        return prefs
+    }
+
+    private func loadUnitPreferences() -> UnitPreferences {
+        guard let data = UserDefaults.standard.data(forKey: "unitPreferences"),
+              let prefs = try? JSONDecoder().decode(UnitPreferences.self, from: data) else {
+            return .default
+        }
+        return prefs
     }
 }
 
@@ -161,10 +294,31 @@ struct OG_Bike_ComputerApp: App {
             ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings)
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
+                    UnitState.shared.preferences = userSettings.settings.unitPreferences
+                    userSettings.attachMetricStore(metricConfig)
+                    cachePreferencesForAppDelegate()
+                }
+                .onChange(of: userSettings.settings.unitPreferences) { _, newValue in
+                    UnitState.shared.preferences = newValue
+                    cachePreferencesForAppDelegate()
+                }
+                .onChange(of: userSettings.settings.phoneAlerts) { _, _ in
+                    cachePreferencesForAppDelegate()
                 }
                 .onOpenURL { url in
                     handleIncomingFile(url)
                 }
+        }
+    }
+
+    /// Cache phone alert + unit preferences to UserDefaults so the AppDelegate
+    /// can access them outside the SwiftUI lifecycle (e.g. during HK mirroring callbacks).
+    private func cachePreferencesForAppDelegate() {
+        if let data = try? JSONEncoder().encode(userSettings.settings.phoneAlerts) {
+            UserDefaults.standard.set(data, forKey: "phoneAlerts")
+        }
+        if let data = try? JSONEncoder().encode(userSettings.settings.unitPreferences) {
+            UserDefaults.standard.set(data, forKey: "unitPreferences")
         }
     }
 

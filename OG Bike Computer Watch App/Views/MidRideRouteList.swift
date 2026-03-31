@@ -10,12 +10,14 @@ import SwiftUI
 struct MidRideRouteList: View {
     @ObservedObject var store: RouteStore
     @ObservedObject var workout: WorkoutManager
+    @ObservedObject private var unitState = UnitState.shared
 
     @State private var swapping: Route?
     @State private var showConfirm = false
     @State private var showRemoveConfirm = false
 
     var body: some View {
+        let _ = unitState.preferences
         List {
             Section {
                 if workout.hasRoute {

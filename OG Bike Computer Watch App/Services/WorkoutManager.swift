@@ -11,6 +11,7 @@ import CoreLocation
 import Combine
 
 import WatchKit
+import UserNotifications
 
 enum AutoPauseState {
     case moving
@@ -48,24 +49,44 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Grade + power computation state
     private var gradeWindowLocations: [CLLocation] = []
-    private let gradeWindowDistance: Double = 50 // meters of horizontal travel for grade calc
+    private var gradeWindowDistance: Double { ridePreferences.elevationSmoothing.gradeWindowDistance }
     private var heartRateSum: Double = 0
     private var heartRateSampleCount: Int = 0
     private var powerSum: Double = 0
     private var powerSampleCount: Int = 0
     private var liveElevRefAltitude: Double?
-    private let liveElevMinDelta: Double = 2.0
+    private var liveElevMinDelta: Double { ridePreferences.elevationSmoothing.elevMinDelta }
 
     // User-configurable mass for power estimate (synced from phone)
     var riderMass: Double = 75  // kg
     var bikeMass: Double = 10   // kg
     var totalMass: Double { riderMass + bikeMass }
 
+    var ridePreferences: RidePreferences = .default
+
+    // Route name captured at ride start (survives mid-ride route swaps)
+    private var initialRouteName: String?
+
+    // Split tracking
+    private var lastSplitDistance: Double = 0
+    @Published var currentSplitNumber: Int = 0
+    private var splitStartMovingTime: TimeInterval = 0
+    private var splitStartDistance: Double = 0
+    private var splitMaxSpeed: Double = 0
+    private var splitHRSum: Double = 0
+    private var splitHRCount: Int = 0
+    var navigationAlerts: NavigationAlertPreferences = .default
+
+    /// Set after ride ends, cleared when user dismisses summary screen
+    @Published var completedRideSummary: WatchRideSummary?
+
     var onRideCompleted: ((RideSummary) -> Void)?
 
     private var routeInsertionTimer: Timer?
     private var pendingRouteLocations: [CLLocation] = []
     @Published var recordedLocations: [CLLocation] = []
+    private var recordedHeartRates: [Double?] = []
+    private var recordedPowers: [Double?] = []
 
     private let healthStore = HKHealthStore()
     private(set) var session: HKWorkoutSession?
@@ -103,6 +124,12 @@ class WorkoutManager: NSObject, ObservableObject {
     private var skipNextDistanceGap = false
     
     @Published var movingTime: TimeInterval = 0
+
+    // Telemetry for phone Live Activity
+    private var telemetryTimer: Timer?
+
+    // Periodic voice alert connection check (proactive ping)
+    private var connectionCheckTimer: Timer?
 
     // Mirroring: set true after delay post-mirroring, false on error/disconnect.
     // Re-arms via DispatchWorkItem after 10s to detect phone reconnection.
@@ -161,6 +188,16 @@ class WorkoutManager: NSObject, ObservableObject {
         slowSampleCount = 0
         lastCommittedLocation = nil
         skipNextDistanceGap = false
+        lastSplitDistance = 0
+        currentSplitNumber = 0
+        splitStartMovingTime = 0
+        splitStartDistance = 0
+        splitMaxSpeed = 0
+        splitHRSum = 0
+        splitHRCount = 0
+        initialRouteName = navigation.processedRoute?.name
+        startTelemetryTimer()
+        startConnectionCheckTimer()
     }
 
     func processLocation(_ location: CLLocation) {
@@ -184,6 +221,7 @@ class WorkoutManager: NSObject, ObservableObject {
                 VoiceNavigator.shared.update(
                     nav: self.navigation,
                     speed: self.speed,
+                    heading: self.heading,
                     isActivelyMoving: self.autoPauseState == .moving)
             }
 
@@ -194,7 +232,9 @@ class WorkoutManager: NSObject, ObservableObject {
                 let mode = self.battery.recommendedMode(
                     distanceToNextTurn: self.navigation.distanceToNextTurn,
                     isOffRoute: self.navigation.isOffRoute,
-                    speed: self.speed)
+                    speed: self.speed,
+                    floor: self.ridePreferences.gpsAccuracyFloor,
+                    dynamicOptimization: self.ridePreferences.dynamicGPSOptimization)
                 self.battery.apply(mode: mode, to: self.locationManager)
             }
 
@@ -204,7 +244,10 @@ class WorkoutManager: NSObject, ObservableObject {
             switch self.autoPauseState {
             case .moving:
                 self.accumulateDistance(location)
+                self.checkSplit()
                 self.recordedLocations.append(location)
+                self.recordedHeartRates.append(self.heartRate > 0 ? self.heartRate : nil)
+                self.recordedPowers.append(self.estimatedPower > 0 ? self.estimatedPower : nil)
                 self.pendingRouteLocations.append(location)
 
             case .paused:
@@ -223,7 +266,8 @@ class WorkoutManager: NSObject, ObservableObject {
             let mode = self.battery.recommendedMode(
                 distanceToNextTurn: self.navigation.distanceToNextTurn,
                 isOffRoute: self.navigation.isOffRoute,
-                speed: self.speed)
+                speed: self.speed,
+                dynamicOptimization: self.ridePreferences.dynamicGPSOptimization)
             self.battery.apply(mode: mode, to: self.locationManager)
 
             self.updateAutoPause()
@@ -256,6 +300,8 @@ class WorkoutManager: NSObject, ObservableObject {
         }
 
         locationManager.requestWhenInUseAuthorization()
+
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     private func flushRouteLocations() {
@@ -283,12 +329,64 @@ class WorkoutManager: NSObject, ObservableObject {
         lastCommittedLocation = location
     }
 
+    private func checkSplit() {
+        let splitPrefs = navigationAlerts.splitAlerts
+        guard splitPrefs.enabled else { return }
+        let splitDist = splitPrefs.splitDistance
+        guard totalDistance - lastSplitDistance >= splitDist else { return }
+
+        currentSplitNumber += 1
+        lastSplitDistance += splitDist
+
+        // Compute split-specific stats
+        let splitMovingTime = movingTime - splitStartMovingTime
+        let splitDistance = totalDistance - splitStartDistance
+        let splitAvgSpeed = splitMovingTime > 0 ? splitDistance / splitMovingTime : 0
+        let splitAvgHR = splitHRCount > 0 ? splitHRSum / Double(splitHRCount) : 0
+
+        let splitStats = SplitStats(
+            movingTime: splitMovingTime,
+            distance: splitDistance,
+            averageSpeed: splitAvgSpeed,
+            maxSpeed: splitMaxSpeed,
+            averageHeartRate: splitAvgHR
+        )
+
+        let rideStats = SplitStats(
+            movingTime: movingTime,
+            distance: totalDistance,
+            averageSpeed: movingTime > 0 ? totalDistance / movingTime : 0,
+            maxSpeed: maxSpeed,
+            averageHeartRate: heartRateSampleCount > 0 ? averageHeartRate : 0
+        )
+
+        VoiceNavigator.shared.announceSplit(
+            number: currentSplitNumber,
+            splitStats: splitStats,
+            rideStats: rideStats,
+            metrics: splitPrefs.metrics,
+            mode: splitPrefs.mode
+        )
+
+        // Reset split accumulators for next split
+        splitStartMovingTime = movingTime
+        splitStartDistance = totalDistance
+        splitMaxSpeed = 0
+        splitHRSum = 0
+        splitHRCount = 0
+    }
+
     private func commitTentativeBuffer() {
         // Add only the internal distance of the buffer (no gap bridging)
         totalDistance += tentativeDistance
 
         // Move staged locations into the real recording
         recordedLocations.append(contentsOf: tentativeLocations)
+        // Backfill HR/power for tentative locations (use current values)
+        for _ in tentativeLocations {
+            recordedHeartRates.append(heartRate > 0 ? heartRate : nil)
+            recordedPowers.append(estimatedPower > 0 ? estimatedPower : nil)
+        }
         pendingRouteLocations.append(contentsOf: tentativeLocations)
 
         // Retroactively credit the tentative period as moving time
@@ -382,6 +480,16 @@ class WorkoutManager: NSObject, ObservableObject {
         slowSampleCount = 0
         lastCommittedLocation = nil
         skipNextDistanceGap = false
+        lastSplitDistance = 0
+        currentSplitNumber = 0
+        splitStartMovingTime = 0
+        splitStartDistance = 0
+        splitMaxSpeed = 0
+        splitHRSum = 0
+        splitHRCount = 0
+        initialRouteName = navigation.processedRoute?.name
+        startTelemetryTimer()
+        startConnectionCheckTimer()
     }
 
     func pauseSession() {
@@ -430,9 +538,20 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func updateAutoPause() {
+        guard ridePreferences.autoPause.enabled else {
+            if autoPauseState == .paused || autoPauseState == .tentativeResume {
+                if autoPauseState == .tentativeResume {
+                    commitTentativeBuffer()
+                }
+                resumeSession()
+                autoPauseState = .moving
+            }
+            return
+        }
+
         let speedMPH = speed * 2.23694
-        let pauseThreshold = 1.0
-        let resumeThreshold = 2.0
+        let pauseThreshold = ridePreferences.autoPause.speedThreshold * 2.23694
+        let resumeThreshold = pauseThreshold + 1.0
 
         switch autoPauseState {
         case .moving:
@@ -502,6 +621,8 @@ class WorkoutManager: NSObject, ObservableObject {
         }
         timerStart = nil
         stopDisplayTimer()
+        stopTelemetryTimer()
+        stopConnectionCheckTimer()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
         
@@ -522,6 +643,24 @@ class WorkoutManager: NSObject, ObservableObject {
             locationManager.stopUpdatingLocation()
             locationManager.stopUpdatingHeading()
             session?.end()
+        }
+
+        // Capture summary immediately so the UI can show it while async processing runs
+        if save {
+            let avgSpd = movingTime > 0 ? totalDistance / movingTime : 0
+            completedRideSummary = WatchRideSummary(
+                distance: totalDistance,
+                movingTime: movingTime,
+                elapsedTime: elapsedTime,
+                avgSpeed: avgSpd,
+                maxSpeed: maxSpeed,
+                elevationGain: liveElevationGain,
+                calories: activeCalories,
+                avgHeartRate: heartRateSampleCount > 0 ? averageHeartRate : 0,
+                maxHeartRate: maxHeartRate > 0 ? maxHeartRate : 0,
+                avgPower: powerSampleCount > 0 ? averagePower : 0,
+                maxPower: maxPower > 0 ? maxPower : 0
+            )
         }
 
         if save && !isSimulating {
@@ -583,13 +722,25 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    /// Dismiss the post-ride summary and return to route list
+    func dismissSummary() {
+        completedRideSummary = nil
+        isActive = false
+    }
+
     private func cleanup() {
         DispatchQueue.main.async {
-            self.isActive = false
+            // Don't set isActive = false here — summary screen handles that via dismissSummary()
+            // If no summary (discard), set isActive = false directly
+            if self.completedRideSummary == nil {
+                self.isActive = false
+            }
             self.isPaused = false
             self.isSimulating = false
             self.isMirroringReady = false
             self.recordedLocations = []
+            self.recordedHeartRates = []
+            self.recordedPowers = []
             self.pendingRouteLocations = []
             self.autoPauseState = .moving
             self.slowSampleCount = 0
@@ -659,6 +810,7 @@ class WorkoutManager: NSObject, ObservableObject {
         // Max speed
         let spd = max(location.speed, 0)
         if spd > maxSpeed { maxSpeed = spd }
+        if spd > splitMaxSpeed { splitMaxSpeed = spd }
 
         // Elevation (only if valid vertical accuracy)
         if location.verticalAccuracy >= 0 {
@@ -686,7 +838,7 @@ class WorkoutManager: NSObject, ObservableObject {
         let routeGrade = computeRouteGrade()
         if let rg = routeGrade {
             // Smooth toward route-derived grade to avoid jumps
-            let alpha = 0.3
+            let alpha = ridePreferences.elevationSmoothing.routeGradeAlpha
             currentGrade = currentGrade * (1 - alpha) + rg * alpha
         } else {
             // Fall back to GPS altitude sliding window
@@ -714,7 +866,7 @@ class WorkoutManager: NSObject, ObservableObject {
                     let rawGrade = (elevChange / horizDist) * 100
                     // Smooth and clamp: steepest paved road is ~35%
                     let clampedGrade = max(-45, min(45, rawGrade))
-                    let alpha = 0.4
+                    let alpha = ridePreferences.elevationSmoothing.gpsGradeAlpha
                     currentGrade = currentGrade * (1 - alpha) + clampedGrade * alpha
                 }
             }
@@ -806,39 +958,58 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func handleTurnAlert(_ alert: NavigationTracker.TurnAlert) {
+        let prefs = VoiceNavigator.shared.preferences
+        let intensity = prefs.haptics.intensity
+
         switch alert {
         case .warning(_):
-            WKInterfaceDevice.current().play(.click)
+            let mode = prefs.turnAlerts.resolvedPrimaryApproachMode()
+            guard mode.includesHaptic else { return }
+            playHaptic(.click, intensity: intensity)
         case .imminent(let turn):
-            switch turn.direction {
-            case .left, .slightLeft, .sharpLeft:
-                WKInterfaceDevice.current().play(.directionDown)
-            case .right, .slightRight, .sharpRight:
-                WKInterfaceDevice.current().play(.directionUp)
-            case .uTurn:
-                WKInterfaceDevice.current().play(.failure)
-            case .straight:
-                WKInterfaceDevice.current().play(.success)
+            let mode = prefs.turnAlerts.resolvedAtTurnMode()
+            guard mode.includesHaptic else { return }
+            let haptic: WKHapticType = {
+                switch turn.direction {
+                case .left, .slightLeft, .sharpLeft: return .directionDown
+                case .right, .slightRight, .sharpRight: return .directionUp
+                case .uTurn: return .failure
+                case .straight: return .success
+                }
+            }()
+            playHaptic(haptic, intensity: intensity)
+        }
+    }
+
+    private func playHaptic(_ type: WKHapticType, intensity: HapticIntensity) {
+        let device = WKInterfaceDevice.current()
+        switch intensity {
+        case .light:
+            device.play(.click)
+        case .medium:
+            device.play(type)
+        case .strong:
+            device.play(type)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                device.play(type)
             }
         }
     }
 
     private func exportAndTransferRide() {
-        let hour = Calendar.current.component(.hour, from: Date())
-        let timeOfDay: String
-        switch hour {
-        case 5..<12: timeOfDay = "Morning Ride"
-        case 12..<17: timeOfDay = "Afternoon Ride"
-        case 17..<21: timeOfDay = "Evening Ride"
-        default: timeOfDay = "Night Ride"
-        }
-        
         let rideName: String
-        if let routeName = navigation.processedRoute?.name {
-            rideName = "\(routeName) - \(timeOfDay)"
+        if let routeName = initialRouteName {
+            rideName = routeName
         } else {
-            rideName = timeOfDay
-        }   
+            // Free ride — use time-of-day
+            let hour = Calendar.current.component(.hour, from: Date())
+            switch hour {
+            case 5..<12:  rideName = "Morning Ride"
+            case 12..<17: rideName = "Afternoon Ride"
+            case 17..<21: rideName = "Evening Ride"
+            default:      rideName = "Night Ride"
+            }
+        }
 
         let activity = currentActivity
 
@@ -876,7 +1047,18 @@ class WorkoutManager: NSObject, ObservableObject {
             }
         }
 
-        let trackData = TrackEncoder.encode(recordedLocations)
+        var locationsToSave = recordedLocations
+        var hrsToSave = recordedHeartRates
+        var powersToSave = recordedPowers
+        if ridePreferences.ridePrivacy == .trimStartEnd {
+            let trimDist = ridePreferences.ridePrivacy.trimDistance
+            let (trimmed, startTrim, endTrim) = trimStartEndWithCounts(locationsToSave, trimDistance: trimDist)
+            locationsToSave = trimmed
+            hrsToSave = Array(hrsToSave.dropFirst(startTrim).dropLast(endTrim))
+            powersToSave = Array(powersToSave.dropFirst(startTrim).dropLast(endTrim))
+        }
+
+        let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
         let trackFilename = "\(UUID().uuidString).track"
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(trackFilename)
@@ -900,7 +1082,7 @@ class WorkoutManager: NSObject, ObservableObject {
             elevationGain: elevGain,
             elevationLoss: elevLoss,
             avgSpeed: avgSpeed,
-            pointCount: recordedLocations.count,
+            pointCount: locationsToSave.count,
             trackFilename: trackFilename,
             maxSpeed: maxSpeed > 0 ? maxSpeed : nil,
             avgPower: powerSampleCount > 0 ? averagePower : nil,
@@ -916,9 +1098,165 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Ride Privacy
+
+    private func trimStartEnd(_ locations: [CLLocation], trimDistance: Double) -> [CLLocation] {
+        guard locations.count > 2 else { return locations }
+
+        // Find start trim index
+        var startIdx = 0
+        var dist: Double = 0
+        for i in 1..<locations.count {
+            dist += locations[i].distance(from: locations[i - 1])
+            if dist >= trimDistance {
+                startIdx = i
+                break
+            }
+        }
+
+        // Find end trim index
+        var endIdx = locations.count - 1
+        dist = 0
+        for i in stride(from: locations.count - 1, through: 1, by: -1) {
+            dist += locations[i].distance(from: locations[i - 1])
+            if dist >= trimDistance {
+                endIdx = i
+                break
+            }
+        }
+
+        guard startIdx < endIdx else { return [] }
+        return Array(locations[startIdx...endIdx])
+    }
+
+    /// Trim variant that returns the number of points removed from each end
+    private func trimStartEndWithCounts(_ locations: [CLLocation], trimDistance: Double) -> ([CLLocation], Int, Int) {
+        guard locations.count > 2 else { return (locations, 0, 0) }
+
+        var startIdx = 0
+        var dist: Double = 0
+        for i in 1..<locations.count {
+            dist += locations[i].distance(from: locations[i - 1])
+            if dist >= trimDistance { startIdx = i; break }
+        }
+
+        var endIdx = locations.count - 1
+        dist = 0
+        for i in stride(from: locations.count - 1, through: 1, by: -1) {
+            dist += locations[i].distance(from: locations[i - 1])
+            if dist >= trimDistance { endIdx = i; break }
+        }
+
+        guard startIdx < endIdx else { return ([], locations.count, 0) }
+        let endTrim = locations.count - 1 - endIdx
+        return (Array(locations[startIdx...endIdx]), startIdx, endTrim)
+    }
+
+    // MARK: - Telemetry (Phone Live Activity)
+
+    private func startTelemetryTimer() {
+        telemetryTimer?.invalidate()
+        telemetryTimer = Timer.scheduledTimer(withTimeInterval: ridePreferences.telemetryRate.interval, repeats: true) { [weak self] _ in
+            self?.sendTelemetry()
+        }
+    }
+
+    private func stopTelemetryTimer() {
+        telemetryTimer?.invalidate()
+        telemetryTimer = nil
+    }
+
+    // MARK: - Connection Check (Proactive Ping)
+
+    private func startConnectionCheckTimer() {
+        connectionCheckTimer?.invalidate()
+        guard ridePreferences.voiceAlertConnectionCheck else { return }
+        connectionCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            self?.sendConnectionPing()
+        }
+    }
+
+    private func stopConnectionCheckTimer() {
+        connectionCheckTimer?.invalidate()
+        connectionCheckTimer = nil
+    }
+
+    private func sendConnectionPing() {
+        guard isMirroringReady, let workoutSession = session else { return }
+
+        let payload: [String: String] = [
+            "type": "ping",
+            "ts": String(Date().timeIntervalSince1970)
+        ]
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+
+        workoutSession.sendToRemoteWorkoutSession(data: data) { [weak self] success, error in
+            if let error = error {
+                print("[ConnectionCheck] Ping failed: \(error)")
+                self?.markMirroringFailed()
+            } else if success {
+                print("[ConnectionCheck] Ping OK")
+            }
+        }
+    }
+
+    private func sendTelemetry() {
+        guard isMirroringReady, let workoutSession = session else { return }
+
+        let avgSpeed = movingTime > 0 ? totalDistance / movingTime : 0
+
+        var payload: [String: String] = [
+            "type": "telemetry",
+            "ts": String(Date().timeIntervalSince1970),
+            "elapsedTime": String(elapsedTime),
+            "movingTime": String(movingTime),
+            "distance": String(totalDistance),
+            "avgSpeed": String(avgSpeed),
+            "speed": String(speed),
+        ]
+
+        if heartRate > 0 {
+            payload["heartRate"] = String(heartRate)
+        }
+
+        if let loc = currentLocation {
+            payload["lat"] = String(loc.coordinate.latitude)
+            payload["lon"] = String(loc.coordinate.longitude)
+        }
+
+        // Navigation data (when a route is loaded)
+        if hasRoute {
+            payload["distToTurn"] = String(navigation.distanceToNextTurn)
+            payload["routeRemaining"] = String(navigation.distanceRemaining)
+            payload["isOffRoute"] = String(navigation.isOffRoute)
+
+            if let turn = navigation.nextTurn {
+                payload["turnDir"] = turn.direction.label
+                payload["turnIcon"] = turn.direction.icon
+                if let desc = turn.description {
+                    payload["turnCue"] = desc
+                }
+            }
+
+            if navigation.isOffRoute {
+                let distMiles = totalDistance / 1609.34
+                payload["offRouteMsg"] = String(format: "Off route near mile %.1f", distMiles)
+            }
+        }
+
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+
+        workoutSession.sendToRemoteWorkoutSession(data: data) { [weak self] success, error in
+            if let error = error {
+                print("[Telemetry] send error: \(error)")
+                self?.markMirroringFailed()
+            }
+        }
+    }
+
     // Speech routing to phone
 
-    func sendSpeechToPhone(_ text: String, completion: @escaping (Bool) -> Void) {
+    func sendSpeechToPhone(_ text: String, category: String? = nil, completion: @escaping (Bool) -> Void) {
         guard let workoutSession = self.session else {
             completion(false)
             return
@@ -929,11 +1267,14 @@ class WorkoutManager: NSObject, ObservableObject {
             return
         }
 
-        let payload: [String: String] = [
+        var payload: [String: String] = [
             "type": "speech",
             "text": text,
             "ts": String(Date().timeIntervalSince1970)
         ]
+        if let category {
+            payload["cat"] = category
+        }
         guard let data = try? JSONEncoder().encode(payload) else {
             completion(false)
             return
@@ -1039,6 +1380,9 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
                         self.heartRateSampleCount += 1
                         self.averageHeartRate = self.heartRateSum / Double(self.heartRateSampleCount)
                         if hr > self.maxHeartRate { self.maxHeartRate = hr }
+                        // Per-split HR accumulation
+                        self.splitHRSum += hr
+                        self.splitHRCount += 1
                     }
                 case HKQuantityType(.activeEnergyBurned):
                     let unit = HKUnit.kilocalorie()

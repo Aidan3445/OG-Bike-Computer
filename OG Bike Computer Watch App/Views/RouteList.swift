@@ -11,8 +11,10 @@ struct RouteList: View {
     @ObservedObject var store: RouteStore
     @ObservedObject var workout: WorkoutManager
     @ObservedObject var simulator: RideSimulator
+    @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
+        let _ = unitState.preferences // register dependency so list re-renders on unit change
         NavigationStack {
             Group {
                 if store.routes.isEmpty {
@@ -78,6 +80,7 @@ struct RouteList: View {
                             .padding(.all, 0)
                             .frame(maxWidth: .infinity, alignment: .center)
                     }
+                    .id(unitState.preferences)
                     .navigationTitle("Routes")
                     .navigationDestination(for: Route.self) { route in
                         StartRideView(route: route, workout: workout)

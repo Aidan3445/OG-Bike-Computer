@@ -12,10 +12,14 @@ import CoreLocation
 struct RideDetailView: View {
     let ride: RideSummary
     let rideStore: RideStore
+    @ObservedObject private var unitState = UnitState.shared
+
+    enum PanelState {
+        case collapsed, compact, expanded
+    }
 
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var expanded = true
-    @State private var showAllStats = false
+    @State private var panelState: PanelState = .compact
     @State private var showShareSheet = false
     @State private var segments: [SpeedPolyline] = []
     @State private var startCoord: CLLocationCoordinate2D?
@@ -24,6 +28,7 @@ struct RideDetailView: View {
     @State private var mileMarkers: [MileMarker] = []
 
     var body: some View {
+        let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
                 ForEach(segments) { seg in
@@ -90,7 +95,7 @@ struct RideDetailView: View {
                 ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
                     Annotation("", coordinate: marker.coordinate) {
                         VStack(spacing: 1) {
-                            Text("\(marker.mile) mi")
+                            Text("\(marker.mile) \(currentUnits.distance.label)")
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 4)
@@ -110,20 +115,20 @@ struct RideDetailView: View {
                 MapScaleView()
             }
 
-            // Stats overlay — panel collapses into the button
+            // Stats overlay — 3 states: collapsed (button) → compact (core stats) → expanded (all stats)
             VStack(spacing: 0) {
                 Spacer()
 
                 VStack(spacing: 12) {
-                    if expanded {
-                        // Drag handle
+                    if panelState != .collapsed {
+                        // Drag handle — tap to collapse
                         Capsule()
                             .fill(Color.white.opacity(0.3))
                             .frame(width: 36, height: 4)
                             .padding(.top, 8)
                             .onTapGesture {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                    expanded = false
+                                    panelState = .collapsed
                                 }
                             }
 
@@ -131,82 +136,30 @@ struct RideDetailView: View {
                             GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
                         ]
 
-                        LazyVGrid(columns: columns, spacing: 10) {
-                            StatItem(label: "Distance", value: formatDistance(ride.distance))
-                            StatItem(label: "Moving Time", value: formatTime(ride.movingTime))
-                            StatItem(label: "Avg Speed", value: formatSpeed(ride.avgSpeed))
-                        }
-
-                        if ride.elevationGain > 0 || ride.elevationLoss > 0 {
-                            Divider().overlay(Color.white.opacity(0.15))
+                        let stats = rideStats(compact: panelState == .compact)
+                        let rows = stats.chunked(into: 3)
+                        ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
+                            if rowIdx > 0 {
+                                Divider().overlay(Color.white.opacity(0.15))
+                            }
                             LazyVGrid(columns: columns, spacing: 10) {
-                                StatItem(label: "Elev Gain", value: formatElevation(ride.elevationGain))
-                                StatItem(label: "Elev Loss", value: formatElevation(ride.elevationLoss))
-                                StatItem(label: "Elapsed", value: formatTime(ride.elapsedTime))
-                            }
-                        }
-
-                        if showAllStats {
-                            if ride.calories > 0 {
-                                Divider().overlay(Color.white.opacity(0.15))
-                                LazyVGrid(columns: columns, spacing: 10) {
-                                    StatItem(label: "Calories", value: String(format: "%.0f kcal", ride.calories))
-                                    StatItem(label: "Points", value: "\(ride.pointCount)")
-                                    StatItem(label: "Activity", value: ride.activityType.rawValue.capitalized)
-                                }
-                            }
-
-                            if hasExtendedStats {
-                                Divider().overlay(Color.white.opacity(0.15))
-                                LazyVGrid(columns: columns, spacing: 10) {
-                                    if let maxSpd = ride.maxSpeed {
-                                        StatItem(label: "Max Speed", value: formatSpeed(maxSpd))
-                                    }
-                                    if let avgPwr = ride.avgPower {
-                                        StatItem(label: "Avg Power", value: "\(Int(avgPwr.rounded())) W")
-                                    }
-                                    if let maxPwr = ride.maxPower {
-                                        StatItem(label: "Max Power", value: "\(Int(maxPwr.rounded())) W")
-                                    }
-                                }
-
-                                if ride.avgHeartRate != nil || ride.highestElevation != nil {
-                                    Divider().overlay(Color.white.opacity(0.15))
-                                    LazyVGrid(columns: columns, spacing: 10) {
-                                        if let avgHR = ride.avgHeartRate {
-                                            StatItem(label: "Avg HR", value: "\(Int(avgHR.rounded())) bpm")
-                                        }
-                                        if let maxHR = ride.maxHeartRate {
-                                            StatItem(label: "Max HR", value: "\(Int(maxHR.rounded())) bpm")
-                                        }
-                                        if let high = ride.highestElevation {
-                                            StatItem(label: "High Elev", value: formatElevation(high))
-                                        }
-                                    }
-                                }
-
-                                if ride.lowestElevation != nil {
-                                    Divider().overlay(Color.white.opacity(0.15))
-                                    LazyVGrid(columns: columns, spacing: 10) {
-                                        if let low = ride.lowestElevation {
-                                            StatItem(label: "Low Elev", value: formatElevation(low))
-                                        }
-                                    }
+                                ForEach(row, id: \.label) { stat in
+                                    StatItem(label: stat.label, value: stat.value)
                                 }
                             }
                         }
 
-                        // Show More / Show Less toggle
-                        if hasExtendedStats || ride.calories > 0 {
+                        // More / Less toggle — only show if there are extended stats
+                        if hasExtendedStats {
                             Button {
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                                    showAllStats.toggle()
+                                    panelState = panelState == .expanded ? .compact : .expanded
                                 }
                             } label: {
                                 HStack(spacing: 4) {
-                                    Text(showAllStats ? "Less" : "More")
+                                    Text(panelState == .expanded ? "Less" : "More")
                                         .font(.caption2.weight(.medium))
-                                    Image(systemName: showAllStats ? "chevron.up" : "chevron.down")
+                                    Image(systemName: panelState == .expanded ? "chevron.up" : "chevron.down")
                                         .font(.caption2)
                                 }
                                 .foregroundStyle(.secondary)
@@ -214,36 +167,51 @@ struct RideDetailView: View {
                             .buttonStyle(.plain)
                         }
                     } else {
+                        // Collapsed — single round button
                         Image(systemName: "chart.bar.xaxis")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(.top, 8)
                     }
                 }
-                .padding(.horizontal, expanded ? 16 : 0)
-                .padding(.bottom, expanded ? 16 : 8)
+                .padding(.horizontal, panelState != .collapsed ? 16 : 0)
+                .padding(.bottom, panelState != .collapsed ? 16 : 8)
                 .frame(
-                    maxWidth: expanded ? .infinity : nil,
-                    alignment: expanded ? .center : .trailing
+                    maxWidth: panelState != .collapsed ? .infinity : nil,
+                    alignment: panelState != .collapsed ? .center : .trailing
                 )
-                .frame(width: expanded ? nil : 48, height: expanded ? nil : 48)
+                .frame(width: panelState != .collapsed ? nil : 48, height: panelState != .collapsed ? nil : 48)
                 .background(
-                    RoundedRectangle(cornerRadius: expanded ? 16 : 24)
+                    RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
                         .fill(Color.black.opacity(0.7))
                         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
                 )
-                .padding(.horizontal, expanded ? 12 : 0)
-                .padding(.bottom, expanded ? 12 : 24)
-                .padding(.trailing, expanded ? 0 : 16)
-                .frame(maxWidth: .infinity, alignment: expanded ? .center : .trailing)
+                .padding(.horizontal, panelState != .collapsed ? 12 : 0)
+                .padding(.bottom, panelState != .collapsed ? 12 : 24)
+                .padding(.trailing, panelState != .collapsed ? 0 : 16)
+                .frame(maxWidth: .infinity, alignment: panelState != .collapsed ? .center : .trailing)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if !expanded {
+                    if panelState == .collapsed {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            expanded = true
+                            panelState = .compact
                         }
                     }
                 }
+                .gesture(
+                    DragGesture(minimumDistance: 30)
+                        .onEnded { value in
+                            guard value.translation.height > 30,
+                                  abs(value.translation.height) > abs(value.translation.width) else { return }
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                switch panelState {
+                                case .expanded: panelState = .compact
+                                case .compact: panelState = .collapsed
+                                case .collapsed: break
+                                }
+                            }
+                        }
+                )
             }
         }
         .navigationTitle(ride.name)
@@ -268,7 +236,43 @@ struct RideDetailView: View {
     private var hasExtendedStats: Bool {
         ride.maxSpeed != nil || ride.avgPower != nil || ride.maxPower != nil ||
         ride.avgHeartRate != nil || ride.maxHeartRate != nil ||
-        ride.highestElevation != nil || ride.lowestElevation != nil
+        ride.highestElevation != nil || ride.lowestElevation != nil ||
+        ride.calories > 0
+    }
+
+    private func rideStats(compact: Bool) -> [(label: String, value: String)] {
+        var stats: [(label: String, value: String)] = []
+
+        // Core stats — always shown
+        stats.append(("Distance", formatDistance(ride.distance)))
+        stats.append(("Moving Time", formatTime(ride.movingTime)))
+        stats.append(("Avg Speed", formatSpeed(ride.avgSpeed)))
+        stats.append(("Elapsed", formatTime(ride.elapsedTime)))
+        if let maxSpd = ride.maxSpeed {
+            stats.append(("Max Speed", formatSpeed(maxSpd)))
+        }
+
+        // Elevation
+        if ride.elevationGain > 0 { stats.append(("Elev Gain", formatElevation(ride.elevationGain))) }
+        if ride.elevationLoss > 0 { stats.append(("Elev Loss", formatElevation(ride.elevationLoss))) }
+        if let high = ride.highestElevation { stats.append(("High Elev", formatElevation(high))) }
+        if let low = ride.lowestElevation { stats.append(("Low Elev", formatElevation(low))) }
+
+        guard !compact else { return stats }
+
+        // Heart rate
+        if let avgHR = ride.avgHeartRate { stats.append(("Avg HR", "\(Int(avgHR.rounded())) bpm")) }
+        if let maxHR = ride.maxHeartRate { stats.append(("Max HR", "\(Int(maxHR.rounded())) bpm")) }
+
+        // Power
+        if let avgPwr = ride.avgPower { stats.append(("Avg Power", "\(Int(avgPwr.rounded())) W")) }
+        if let maxPwr = ride.maxPower { stats.append(("Max Power", "\(Int(maxPwr.rounded())) W")) }
+
+        // Other
+        if ride.calories > 0 { stats.append(("Calories", String(format: "%.0f kcal", ride.calories))) }
+        stats.append(("Activity", ride.activityType.rawValue.capitalized))
+
+        return stats
     }
 
     private func loadTrack() {

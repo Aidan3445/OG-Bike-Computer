@@ -15,9 +15,14 @@ struct RouteDetailView: View {
     let isUploading: Bool
     let isUploadBlocked: Bool
     let onSend: () -> Void
+    @ObservedObject private var unitState = UnitState.shared
+
+    enum PanelState {
+        case collapsed, compact, expanded
+    }
 
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var expanded = true
+    @State private var panelState: PanelState = .compact
     @State private var showOverwriteAlert = false
 
     // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
@@ -26,6 +31,7 @@ struct RouteDetailView: View {
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
 
     var body: some View {
+        let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
                 // Route polyline
@@ -94,7 +100,7 @@ struct RouteDetailView: View {
                 ForEach(Array(cachedMileMarkers.enumerated()), id: \.offset) { _, marker in
                     Annotation("", coordinate: marker.coordinate) {
                         VStack(spacing: 1) {
-                            Text("\(marker.mile) mi")
+                            Text("\(marker.mile) \(currentUnits.distance.label)")
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 4)
@@ -118,16 +124,21 @@ struct RouteDetailView: View {
                 MapScaleView()
             }
 
-            // Stats overlay — panel collapses into the button
+            // Stats overlay — collapsed (button) ↔ compact (stats)
             VStack(spacing: 0) {
                 Spacer()
 
                 VStack(spacing: 12) {
-                    if expanded {
+                    if panelState != .collapsed {
                         Capsule()
                             .fill(Color.white.opacity(0.3))
                             .frame(width: 36, height: 4)
                             .padding(.top, 8)
+                            .onTapGesture {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                    panelState = .collapsed
+                                }
+                            }
 
                         LazyVGrid(columns: [
                             GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
@@ -147,28 +158,44 @@ struct RouteDetailView: View {
                             .padding(.top, 8)
                     }
                 }
-                .padding(.horizontal, expanded ? 16 : 0)
-                .padding(.bottom, expanded ? 16 : 8)
+                .padding(.horizontal, panelState != .collapsed ? 16 : 0)
+                .padding(.bottom, panelState != .collapsed ? 16 : 8)
                 .frame(
-                    maxWidth: expanded ? .infinity : nil,
-                    alignment: expanded ? .center : .trailing
+                    maxWidth: panelState != .collapsed ? .infinity : nil,
+                    alignment: panelState != .collapsed ? .center : .trailing
                 )
-                .frame(width: expanded ? nil : 48, height: expanded ? nil : 48)
+                .frame(width: panelState != .collapsed ? nil : 48, height: panelState != .collapsed ? nil : 48)
                 .background(
-                    RoundedRectangle(cornerRadius: expanded ? 16 : 24)
+                    RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
                         .fill(Color.black.opacity(0.7))
                         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
                 )
-                .padding(.horizontal, expanded ? 12 : 0)
-                .padding(.bottom, expanded ? 12 : 24)
-                .padding(.trailing, expanded ? 0 : 16)
-                .frame(maxWidth: .infinity, alignment: expanded ? .center : .trailing)
+                .padding(.horizontal, panelState != .collapsed ? 12 : 0)
+                .padding(.bottom, panelState != .collapsed ? 12 : 24)
+                .padding(.trailing, panelState != .collapsed ? 0 : 16)
+                .frame(maxWidth: .infinity, alignment: panelState != .collapsed ? .center : .trailing)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                        expanded.toggle()
+                    if panelState == .collapsed {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            panelState = .compact
+                        }
                     }
                 }
+                .gesture(
+                    DragGesture(minimumDistance: 30)
+                        .onEnded { value in
+                            guard value.translation.height > 30,
+                                  abs(value.translation.height) > abs(value.translation.width) else { return }
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                switch panelState {
+                                case .expanded: panelState = .compact
+                                case .compact: panelState = .collapsed
+                                case .collapsed: break
+                                }
+                            }
+                        }
+                )
             }
         }
         .navigationTitle(route.name)
