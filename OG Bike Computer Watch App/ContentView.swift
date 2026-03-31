@@ -20,7 +20,11 @@ struct ContentView: View {
     var body: some View {
         Group {
             if workout.isActive {
-                if workout.isSimulating {
+                if let summary = workout.completedRideSummary {
+                    RideSummaryView(summary: summary, onDismiss: {
+                        workout.dismissSummary()
+                    })
+                } else if workout.isSimulating {
                     SimPlaybackOverlay(simulator: simulator, workout: workout)
                 } else {
                     WorkoutView(workout: workout, metricConfig: metricConfig, onStop: handleStop) {
@@ -52,12 +56,14 @@ struct ContentView: View {
             if let cached = UserDefaults.standard.data(forKey: "navigationAlerts"),
                let navPrefs = try? JSONDecoder().decode(NavigationAlertPreferences.self, from: cached) {
                 VoiceNavigator.shared.preferences = navPrefs
+                workout.navigationAlerts = navPrefs
                 workout.navigation.offRouteThreshold = navPrefs.navigationEvents.offRouteThreshold
             }
             // Restore cached ride preferences on boot
             if let cached = UserDefaults.standard.data(forKey: "ridePreferences"),
                let ridePrefs = try? JSONDecoder().decode(RidePreferences.self, from: cached) {
                 workout.ridePreferences = ridePrefs
+                workout.navigation.offRouteGraceSamples = ridePrefs.offRouteGraceSamples
             }
 
             ConnectivityManager.shared.onUserSettingsReceived = { data in
@@ -66,8 +72,10 @@ struct ContentView: View {
                 workout.bikeMass = settings.bikeWeight
                 UnitState.shared.preferences = settings.unitPreferences
                 VoiceNavigator.shared.preferences = settings.navigationAlerts
+                workout.navigationAlerts = settings.navigationAlerts
                 workout.navigation.offRouteThreshold = settings.navigationAlerts.navigationEvents.offRouteThreshold
                 workout.ridePreferences = settings.ridePreferences
+                workout.navigation.offRouteGraceSamples = settings.ridePreferences.offRouteGraceSamples
                 // Cache for next boot
                 if let encoded = try? JSONEncoder().encode(settings.unitPreferences) {
                     UserDefaults.standard.set(encoded, forKey: "unitPreferences")
