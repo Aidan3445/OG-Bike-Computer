@@ -22,8 +22,18 @@ class BatteryManager {
         distanceToNextTurn: Double,
         isOffRoute: Bool,
         speed: Double,
-        floor: GPSAccuracyFloor = .best
+        floor: GPSAccuracyFloor = .best,
+        dynamicOptimization: Bool = true
     ) -> GPSMode {
+        // When dynamic optimization is off, always use the floor setting
+        guard dynamicOptimization else {
+            switch floor {
+            case .best: return .full
+            case .balanced: return .balanced
+            case .powerSaver: return .power
+            }
+        }
+
         let dynamic: GPSMode
         if isOffRoute {
             dynamic = .full

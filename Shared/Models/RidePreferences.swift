@@ -165,6 +165,38 @@ struct AutoLapPreferences: Codable, Equatable, Hashable {
     }
 }
 
+// MARK: - Telemetry Rate
+
+enum TelemetryRate: String, Codable, CaseIterable, Hashable {
+    case fast       // 1 second — most responsive Live Activity
+    case standard   // 3 seconds — balanced (default)
+    case battery    // 5 seconds — maximum battery savings
+
+    var interval: TimeInterval {
+        switch self {
+        case .fast: return 1.0
+        case .standard: return 3.0
+        case .battery: return 5.0
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .fast: return "Fast (1s)"
+        case .standard: return "Standard (3s)"
+        case .battery: return "Battery Saver (5s)"
+        }
+    }
+
+    var batteryImpact: String {
+        switch self {
+        case .fast: return "Most demanding"
+        case .standard: return "Moderate"
+        case .battery: return "Least demanding"
+        }
+    }
+}
+
 // MARK: - Top-Level Ride Preferences
 
 struct RidePreferences: Codable, Equatable, Hashable {
@@ -175,6 +207,10 @@ struct RidePreferences: Codable, Equatable, Hashable {
     var mapRotation: MapRotation
     var wakeOnAlert: Bool
     var ridePrivacy: RidePrivacy
+    var voiceAlertConnectionCheck: Bool
+    var dynamicGPSOptimization: Bool
+    var telemetryRate: TelemetryRate
+    var offRouteGraceSamples: Int
 
     static let `default` = RidePreferences(
         autoPause: .default,
@@ -183,7 +219,11 @@ struct RidePreferences: Codable, Equatable, Hashable {
         elevationSmoothing: .moderate,
         mapRotation: .headingUp,
         wakeOnAlert: true,
-        ridePrivacy: .off
+        ridePrivacy: .off,
+        voiceAlertConnectionCheck: true,
+        dynamicGPSOptimization: true,
+        telemetryRate: .standard,
+        offRouteGraceSamples: 3
     )
 
     init(
@@ -193,7 +233,11 @@ struct RidePreferences: Codable, Equatable, Hashable {
         elevationSmoothing: ElevationSmoothing = .moderate,
         mapRotation: MapRotation = .headingUp,
         wakeOnAlert: Bool = true,
-        ridePrivacy: RidePrivacy = .off
+        ridePrivacy: RidePrivacy = .off,
+        voiceAlertConnectionCheck: Bool = true,
+        dynamicGPSOptimization: Bool = true,
+        telemetryRate: TelemetryRate = .standard,
+        offRouteGraceSamples: Int = 3
     ) {
         self.autoPause = autoPause
         self.autoLap = autoLap
@@ -202,6 +246,10 @@ struct RidePreferences: Codable, Equatable, Hashable {
         self.mapRotation = mapRotation
         self.wakeOnAlert = wakeOnAlert
         self.ridePrivacy = ridePrivacy
+        self.voiceAlertConnectionCheck = voiceAlertConnectionCheck
+        self.dynamicGPSOptimization = dynamicGPSOptimization
+        self.telemetryRate = telemetryRate
+        self.offRouteGraceSamples = offRouteGraceSamples
     }
 
     init(from decoder: Decoder) throws {
@@ -213,5 +261,9 @@ struct RidePreferences: Codable, Equatable, Hashable {
         mapRotation = try c.decodeIfPresent(MapRotation.self, forKey: .mapRotation) ?? .headingUp
         wakeOnAlert = try c.decodeIfPresent(Bool.self, forKey: .wakeOnAlert) ?? true
         ridePrivacy = try c.decodeIfPresent(RidePrivacy.self, forKey: .ridePrivacy) ?? .off
+        voiceAlertConnectionCheck = try c.decodeIfPresent(Bool.self, forKey: .voiceAlertConnectionCheck) ?? true
+        dynamicGPSOptimization = try c.decodeIfPresent(Bool.self, forKey: .dynamicGPSOptimization) ?? true
+        telemetryRate = try c.decodeIfPresent(TelemetryRate.self, forKey: .telemetryRate) ?? .standard
+        offRouteGraceSamples = try c.decodeIfPresent(Int.self, forKey: .offRouteGraceSamples) ?? 3
     }
 }
