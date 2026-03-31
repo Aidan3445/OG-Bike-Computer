@@ -18,14 +18,21 @@ struct RideSettingsView: View {
     var body: some View {
         Form {
             autoPauseSection
-            autoLapSection
             gpsSensorsSection
             displaySection
             alertsSection
             privacySection
             phoneAlertsSection
+
+            if userSettings.settings.ridePreferences != .default {
+                Section {
+                    Button("Reset Ride Settings to Defaults", role: .destructive) {
+                        userSettings.settings.ridePreferences = .default
+                    }
+                }
+            }
         }
-        .navigationTitle("Ride Settings")
+        .settingsPageTitle("Ride Settings", profile: userSettings.activeProfileName)
     }
 
     // MARK: - Auto-Pause
@@ -42,25 +49,6 @@ struct RideSettingsView: View {
             Label("Auto-Pause", systemImage: "pause.circle")
         } footer: {
             Text("Automatically pause the ride when speed drops below the threshold.")
-        }
-    }
-
-    // MARK: - Auto-Lap
-
-    @ViewBuilder
-    private var autoLapSection: some View {
-        Section {
-            Toggle("Auto-Lap", isOn: prefs.autoLap.enabled)
-
-            if userSettings.settings.ridePreferences.autoLap.enabled {
-                SplitDistancePicker(meters: prefs.autoLap.lapDistance)
-
-                AlertModePicker(label: "Lap Alert", mode: prefs.autoLap.mode)
-            }
-        } header: {
-            Label("Auto-Lap", systemImage: "stopwatch")
-        } footer: {
-            Text("Announce lap splits at regular distance intervals.")
         }
     }
 

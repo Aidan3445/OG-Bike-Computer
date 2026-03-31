@@ -40,12 +40,19 @@ struct PhoneAlertSettingsView: View {
                 case .off:
                     Text("No alerts will be sent to your iPhone during rides.")
                 case .liveActivity:
-                    Text("Shows ride stats, turn directions, and optional map preview on your iPhone Lock Screen and Dynamic Island.")
+                    Text("Shows ride stats on your iPhone Lock Screen and Dynamic Island. When a route is loaded, also shows upcoming turn details and an optional map preview.")
                 case .turnNotifications:
-                    Text("Sends a single notification for each upcoming turn that updates in-place. Tapping opens the route map.")
+                    Text("Sends a single updating notification for each upcoming turn. Requires a loaded route — not available during free rides.")
+                }
+            }
+            if userSettings.settings.phoneAlerts != .default {
+                Section {
+                    Button("Reset Phone Alerts to Defaults", role: .destructive) {
+                        userSettings.settings.phoneAlerts = .default
+                    }
                 }
             }
         }
-        .navigationTitle("Phone Alerts")
+        .settingsPageTitle("Phone Alerts", profile: userSettings.activeProfileName)
     }
 }

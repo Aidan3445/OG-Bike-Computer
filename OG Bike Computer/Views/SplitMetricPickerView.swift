@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct SplitMetricPickerView: View {
-    @Binding var selectedMetrics: [MetricType]
+    @Binding var metrics: [SplitMetricConfig]
 
     private let maxSelection = 5
 
@@ -31,16 +31,49 @@ struct SplitMetricPickerView: View {
 
     var body: some View {
         List {
+            // Selected metrics with scope pickers
+            if !metrics.isEmpty {
+                Section {
+                    ForEach(metrics.indices, id: \.self) { idx in
+                        HStack(spacing: 12) {
+                            Image(systemName: metrics[idx].metric.icon)
+                                .frame(width: 24)
+                                .foregroundStyle(.blue)
+
+                            Text(metrics[idx].metric.label)
+
+                            Spacer()
+
+                            Picker("", selection: $metrics[idx].scope) {
+                                ForEach(StatScope.allCases, id: \.self) { scope in
+                                    Text(scope.label).tag(scope)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .frame(width: 80)
+                        }
+                    }
+                    .onDelete { indices in
+                        metrics.remove(atOffsets: indices)
+                    }
+                } header: {
+                    Text("Selected Stats")
+                } footer: {
+                    Text("Scope controls whether the stat reads for the split, the whole ride, or both. Split stats are read first, then ride stats.")
+                }
+            }
+
+            // Available metrics to add
             Section {
                 ForEach(availableMetrics) { metric in
-                    let isSelected = selectedMetrics.contains(metric)
-                    let atMax = selectedMetrics.count >= maxSelection && !isSelected
+                    let isSelected = metrics.contains { $0.metric == metric }
+                    let atMax = metrics.count >= maxSelection && !isSelected
 
                     Button {
                         if isSelected {
-                            selectedMetrics.removeAll { $0 == metric }
+                            metrics.removeAll { $0.metric == metric }
                         } else if !atMax {
-                            selectedMetrics.append(metric)
+                            metrics.append(SplitMetricConfig(metric: metric, scope: .split))
                         }
                     } label: {
                         HStack(spacing: 12) {
@@ -63,9 +96,7 @@ struct SplitMetricPickerView: View {
                     .disabled(atMax)
                 }
             } header: {
-                Text("Select up to \(maxSelection) stats")
-            } footer: {
-                Text("These stats will be read aloud at each split. Drag to reorder priority.")
+                Text("Add Stats (up to \(maxSelection))")
             }
         }
         .navigationTitle("Split Stats")

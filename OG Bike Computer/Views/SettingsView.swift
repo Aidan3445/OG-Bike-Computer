@@ -39,7 +39,7 @@ struct SettingsView: View {
             // MARK: - Metric Pages
             Section {
                 NavigationLink {
-                    MetricCustomizationView(metricConfig: metricConfig)
+                    MetricCustomizationView(metricConfig: metricConfig, profileName: userSettings.activeProfileName)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
@@ -130,124 +130,23 @@ struct SettingsView: View {
                             .foregroundStyle(.indigo)
                     }
                 }
-            }
-
-            // MARK: - App Experience
-            Section {
+                
+                // MARK: - Battery & Efficiency
                 NavigationLink {
-                    PlaceholderSettingView(
-                        title: "Color Scheme",
-                        icon: "paintpalette",
-                        description:
-                            "Customize primary, secondary, and accent colors. The background always stays black for visibility, but you can personalize the text, icons, and highlights throughout the app."
-                    )
+                    BatterySettingsView(userSettings: userSettings)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Color Scheme")
-                            Text("Default")
+                            Text("Battery & Efficiency")
+                            Text("Optimize for daily riding or touring")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    } icon: {
-                        Image(systemName: "paintpalette")
-                            .foregroundStyle(.purple)
-                    }
-                }
-
-                NavigationLink {
-                    PlaceholderSettingView(
-                        title: "Map Style",
-                        icon: "map",
-                        description:
-                            "Choose between standard, satellite, and hybrid map styles. Configure the default zoom level, whether to show traffic, and route line color preferences."
-                    )
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Map Style")
-                            Text("Standard")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "map")
-                            .foregroundStyle(.teal)
-                    }
-                }
-
-                NavigationLink {
-                    PlaceholderSettingView(
-                        title: "Data & Privacy",
-                        icon: "lock.shield",
-                        description:
-                            "Manage ride data storage, export all rides, clear history, and configure what health data is recorded during workouts."
-                    )
-                } label: {
-                    Label {
-                        Text("Data & Privacy")
-                    } icon: {
-                        Image(systemName: "lock.shield")
-                            .foregroundStyle(.gray)
-                    }
-                }
-            } header: {
-                Text("App Experience")
-            }
-
-            // MARK: - Battery Tips
-            Section {
-                DisclosureGroup {
-                    batteryTipRow(
-                        title: "GPS Accuracy",
-                        value: userSettings.settings.ridePreferences
-                            .gpsAccuracyFloor.label,
-                        impact: userSettings.settings.ridePreferences
-                            .gpsAccuracyFloor.batteryImpact,
-                        instruction: "Change in Ride Settings above."
-                    )
-                    batteryTipRow(
-                        title: "Screen Brightness",
-                        value: nil,
-                        impact: "Varies",
-                        instruction:
-                            "Adjust on Watch via Settings \u{2192} Display & Brightness."
-                    )
-                    batteryTipRow(
-                        title: "Screen Timeout",
-                        value: nil,
-                        impact: "Varies",
-                        instruction:
-                            "Adjust on Watch via Settings \u{2192} Display & Brightness."
-                    )
-                    batteryTipRow(
-                        title: "Always-On Display",
-                        value: nil,
-                        impact: "Moderate",
-                        instruction:
-                            "Adjust on Watch via Settings \u{2192} Display & Brightness."
-                    )
-                    if userSettings.settings.phoneAlerts.mode != .off {
-                        batteryTipRow(
-                            title: "Phone Alerts",
-                            value: userSettings.settings.phoneAlerts.mode.label,
-                            impact: "High",
-                            instruction:
-                                "Change in Ride Settings \u{2192} Phone Alerts."
-                        )
-                    }
-                } label: {
-                    Label {
-                        Text("Battery Tips")
                     } icon: {
                         Image(systemName: "battery.100.bolt")
                             .foregroundStyle(.green)
                     }
                 }
-            } footer: {
-                Text(
-                    "Use Balanced GPS and lower screen brightness on long rides to extend battery life."
-                )
             }
 
             // MARK: - Support the Developer
@@ -287,50 +186,18 @@ struct SettingsView: View {
                 url: URL(string: "https://www.buymeacoffee.com/aidanweinberg")!
             )
         }
-        .navigationTitle("Settings")
-    }
-
-    private func batteryTipRow(
-        title: String,
-        value: String?,
-        impact: String,
-        instruction: String
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title)
-                    .font(.subheadline)
-                Spacer()
-                if let value {
-                    Text(value)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+        .settingsPageTitle("Settings", profile: userSettings.activeProfileName)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
                 }
             }
-            HStack {
-                Text(impact)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(impactColor(impact))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(impactColor(impact).opacity(0.15))
-                    .clipShape(Capsule())
-                Text(instruction)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
-        .padding(.vertical, 2)
     }
 
-    private func impactColor(_ impact: String) -> Color {
-        switch impact {
-        case "Most demanding", "High": return .red
-        case "Moderate": return .orange
-        case "Least demanding": return .green
-        default: return .secondary
-        }
-    }
 }
 
 // MARK: - Rider Profile
@@ -340,6 +207,7 @@ struct RiderProfileView: View {
     @State private var showAddBike = false
     @State private var newBikeName = ""
     @State private var newBikeWeight = "22"  // lbs
+    @FocusState private var isFieldFocused: Bool
 
     // Imperial bindings (stored as kg/cm, displayed as lbs/in)
     private var riderWeightLbs: Binding<Double> {
@@ -385,6 +253,7 @@ struct RiderProfileView: View {
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .frame(width: 80)
+                    .focused($isFieldFocused)
                     Text("lbs")
                         .foregroundStyle(.secondary)
                 }
@@ -399,6 +268,7 @@ struct RiderProfileView: View {
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .frame(width: 80)
+                    .focused($isFieldFocused)
                     Text("in")
                         .foregroundStyle(.secondary)
                 }
@@ -491,6 +361,7 @@ struct RiderProfileView: View {
                             text: $userSettings.settings.bikes[activeIdx].name
                         )
                         .multilineTextAlignment(.trailing)
+                        .focused($isFieldFocused)
                     }
                     HStack {
                         Label("Weight", systemImage: "scalemass")
@@ -503,6 +374,7 @@ struct RiderProfileView: View {
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 80)
+                        .focused($isFieldFocused)
                         Text("lbs")
                             .foregroundStyle(.secondary)
                     }
@@ -530,7 +402,13 @@ struct RiderProfileView: View {
                 )
             }
         }
-        .navigationTitle("Rider Profile")
+        .settingsPageTitle("Rider Profile", profile: userSettings.activeProfileName)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { isFieldFocused = false }
+            }
+        }
         .alert("Add Bike", isPresented: $showAddBike) {
             TextField("Name (e.g. Road Bike)", text: $newBikeName)
             TextField("Weight in lbs", text: $newBikeWeight)
@@ -572,29 +450,13 @@ struct SafariView: UIViewControllerRepresentable {
     ) {}
 }
 
-// MARK: - Placeholder Setting
+// MARK: - Settings Profile Subtitle
 
-struct PlaceholderSettingView: View {
-    let title: String
-    let icon: String
-    let description: String
-
-    var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            Image(systemName: icon)
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-            Text("Coming Soon")
-                .font(.title2.weight(.semibold))
-            Text(description)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Spacer()
-            Spacer()
-        }
-        .navigationTitle(title)
+extension View {
+    func settingsPageTitle(_ title: String, profile: String) -> some View {
+        self
+            .navigationTitle(title)
+            .navigationSubtitle(profile)
     }
 }
+

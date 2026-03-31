@@ -67,7 +67,14 @@ struct UnitsSettingsView: View {
             } footer: {
                 Text("Override individual units. Changing these will set the system to Custom.")
             }
+            if userSettings.settings.unitPreferences != .default {
+                Section {
+                    Button("Reset Units to Defaults", role: .destructive) {
+                        userSettings.settings.unitPreferences = .default
+                    }
+                }
+            }
         }
-        .navigationTitle("Units")
+        .settingsPageTitle("Units", profile: userSettings.activeProfileName)
     }
 }

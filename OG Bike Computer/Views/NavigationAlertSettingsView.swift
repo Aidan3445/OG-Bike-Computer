@@ -26,8 +26,16 @@ struct NavigationAlertSettingsView: View {
             descentAlertsSection
             climbAlertsSection
             hapticsSection
+
+            if userSettings.settings.navigationAlerts != .default {
+                Section {
+                    Button("Reset Navigation Alerts to Defaults", role: .destructive) {
+                        userSettings.settings.navigationAlerts = .default
+                    }
+                }
+            }
         }
-        .navigationTitle("Navigation Alerts")
+        .settingsPageTitle("Navigation Alerts", profile: userSettings.activeProfileName)
     }
 
     // MARK: - Turn Alerts
@@ -184,12 +192,12 @@ struct NavigationAlertSettingsView: View {
                 SplitDistancePicker(meters: prefs.splitAlerts.splitDistance)
 
                 NavigationLink {
-                    SplitMetricPickerView(selectedMetrics: prefs.splitAlerts.selectedMetrics)
+                    SplitMetricPickerView(metrics: prefs.splitAlerts.metrics)
                 } label: {
                     HStack {
                         Text("Stats to Read")
                         Spacer()
-                        Text("\(userSettings.settings.navigationAlerts.splitAlerts.selectedMetrics.count) selected")
+                        Text("\(userSettings.settings.navigationAlerts.splitAlerts.metrics.count) selected")
                             .foregroundStyle(.secondary)
                     }
                 }

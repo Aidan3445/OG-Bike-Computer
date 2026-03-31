@@ -97,13 +97,27 @@ struct UserSettings: Codable, Equatable {
 
 class UserSettingsStore: ObservableObject {
     @Published var settings: UserSettings
+    @Published var presets: [SettingsPreset] = []
+    @Published var activePresetID: UUID?
 
+    private(set) weak var metricConfigStore: MetricConfigStore?
     private let fileURL: URL
+    private let presetsURL: URL
     private var cancellables = Set<AnyCancellable>()
+    static let maxPresets = 10
+
+    /// Name of the currently active profile (for display in navigation subtitles)
+    var activeProfileName: String {
+        if let id = activePresetID, let preset = presets.first(where: { $0.id == id }) {
+            return preset.name
+        }
+        return "No Profile"
+    }
 
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         fileURL = docs.appendingPathComponent("userSettings.json")
+        presetsURL = docs.appendingPathComponent("settingsPresets.json")
 
         if let data = try? Data(contentsOf: fileURL),
            let loaded = try? JSONDecoder().decode(UserSettings.self, from: data) {
@@ -117,14 +131,56 @@ class UserSettingsStore: ObservableObject {
             settings.activeBikeID = first.id
         }
 
-        // Debounce disk writes and watch sync to avoid flooding I/O and WCSession traffic
-        // while the user is actively editing text fields.
+        // Load presets
+        if let data = try? Data(contentsOf: presetsURL),
+           let loaded = try? JSONDecoder().decode([SettingsPreset].self, from: data) {
+            presets = loaded
+        }
+
+        // Load persisted active preset ID
+        if let idString = UserDefaults.standard.string(forKey: "activePresetID"),
+           let id = UUID(uuidString: idString),
+           presets.contains(where: { $0.id == id }) {
+            activePresetID = id
+        }
+
+        // Create default "Main" profile on first launch
+        if presets.isEmpty {
+            let main = SettingsPreset(name: "Main", settings: settings)
+            presets = [main]
+            activePresetID = main.id
+            savePresets()
+        }
+
+        // If no active preset but presets exist, activate the first one
+        if activePresetID == nil, let first = presets.first {
+            activePresetID = first.id
+            persistActivePresetID()
+        }
+
+        // Debounce disk writes, watch sync, and auto-save to active profile
         $settings
             .dropFirst()
             .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.save()
                 self?.sendToWatch()
+                self?.autoSaveToActivePreset()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Attach the MetricConfigStore so metric pages are included in profile auto-save.
+    /// Call this once after both stores are initialized.
+    func attachMetricStore(_ store: MetricConfigStore) {
+        self.metricConfigStore = store
+
+        // Observe metric config changes for auto-save
+        store.$config
+            .dropFirst()
+            .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.autoSaveToActivePreset()
             }
             .store(in: &cancellables)
     }
@@ -147,5 +203,110 @@ class UserSettingsStore: ObservableObject {
         guard let data = try? JSONEncoder().encode(settings) else { return }
         ConnectivityManager.shared.sendUserSettings(data)
         #endif
+    }
+
+    // MARK: - Profiles
+
+    /// Auto-save current settings + metric config to the active profile.
+    /// Called automatically on every debounced settings or metric config change.
+    private func autoSaveToActivePreset() {
+        guard let id = activePresetID,
+              let idx = presets.firstIndex(where: { $0.id == id }) else { return }
+        presets[idx].settings = settings
+        if let config = metricConfigStore?.config {
+            presets[idx].metricConfig = config
+        }
+        savePresets()
+    }
+
+    /// Create a new profile from the current settings and activate it.
+    func createFromCurrent(name: String) -> Bool {
+        guard presets.count < Self.maxPresets else { return false }
+        let preset = SettingsPreset(
+            name: name,
+            settings: settings,
+            metricConfig: metricConfigStore?.config ?? .default
+        )
+        presets.append(preset)
+        activePresetID = preset.id
+        persistActivePresetID()
+        savePresets()
+        return true
+    }
+
+    /// Create a new profile from default settings and activate it.
+    func createFromDefaults(name: String) -> Bool {
+        guard presets.count < Self.maxPresets else { return false }
+        let preset = SettingsPreset(name: name, settings: .default, metricConfig: .default)
+        presets.append(preset)
+        activePresetID = preset.id
+        persistActivePresetID()
+        // Apply default settings (preserve rider profile)
+        let currentProfile = (settings.riderWeight, settings.riderHeight, settings.bikes)
+        settings = .default
+        settings.riderWeight = currentProfile.0
+        settings.riderHeight = currentProfile.1
+        settings.bikes = currentProfile.2
+        if let first = settings.bikes.first { settings.activeBikeID = first.id }
+        metricConfigStore?.config = .default
+        savePresets()
+        return true
+    }
+
+    /// Switch to a different profile. Auto-saves current profile first, then loads the target.
+    func switchToProfile(id: UUID) {
+        guard let preset = presets.first(where: { $0.id == id }),
+              id != activePresetID else { return }
+
+        // Auto-save current profile before switching
+        autoSaveToActivePreset()
+
+        // Load the target profile — preserve rider list (weight, height, bikes) but restore activeBikeID
+        let currentProfile = (settings.riderWeight, settings.riderHeight, settings.bikes)
+        settings = preset.settings
+        settings.riderWeight = currentProfile.0
+        settings.riderHeight = currentProfile.1
+        settings.bikes = currentProfile.2
+        // Restore which bike was active in this profile (if it still exists)
+        if let bikeID = preset.settings.activeBikeID,
+           settings.bikes.contains(where: { $0.id == bikeID }) {
+            settings.activeBikeID = bikeID
+        }
+
+        // Load metric config
+        metricConfigStore?.config = preset.metricConfig
+
+        activePresetID = id
+        persistActivePresetID()
+    }
+
+    func deletePreset(id: UUID) {
+        presets.removeAll { $0.id == id }
+        if activePresetID == id {
+            // Activate the first remaining profile
+            activePresetID = presets.first?.id
+            persistActivePresetID()
+        }
+        savePresets()
+    }
+
+    func renamePreset(id: UUID, name: String) {
+        guard let idx = presets.firstIndex(where: { $0.id == id }) else { return }
+        presets[idx].name = name
+        savePresets()
+    }
+
+    private func savePresets() {
+        if let data = try? JSONEncoder().encode(presets) {
+            try? data.write(to: presetsURL, options: .atomic)
+        }
+    }
+
+    private func persistActivePresetID() {
+        if let id = activePresetID {
+            UserDefaults.standard.set(id.uuidString, forKey: "activePresetID")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "activePresetID")
+        }
     }
 }
