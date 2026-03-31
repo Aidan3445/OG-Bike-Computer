@@ -7,10 +7,20 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DD21F80D2F7984D20001B407 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD21F80C2F7984D20001B407 /* WidgetKit.framework */; };
+		DD21F80F2F7984D20001B407 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD21F80E2F7984D20001B407 /* SwiftUI.framework */; };
+		DD21F81E2F7984D30001B407 /* OG Bike Computer WidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DD21F80A2F7984D10001B407 /* OG Bike Computer WidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DD5D2CD12F525E5B00988CBB /* OG Bike Computer Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = DD5D2CD02F525E5B00988CBB /* OG Bike Computer Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		DD21F81C2F7984D30001B407 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DD5D2CBB2F525E5900988CBB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DD21F8092F7984D10001B407;
+			remoteInfo = "OG Bike Computer WidgetExtension";
+		};
 		DD5D2CD22F525E5B00988CBB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = DD5D2CBB2F525E5900988CBB /* Project object */;
@@ -21,6 +31,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		DD21F8232F7984D30001B407 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				DD21F81E2F7984D30001B407 /* OG Bike Computer WidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DD5D2CE02F525E5C00988CBB /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -35,11 +56,41 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		DD21F80A2F7984D10001B407 /* OG Bike Computer WidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "OG Bike Computer WidgetExtension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DD21F80C2F7984D20001B407 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		DD21F80E2F7984D20001B407 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		DD5D2CC32F525E5900988CBB /* OG Bike Computer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "OG Bike Computer.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD5D2CD02F525E5B00988CBB /* OG Bike Computer Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "OG Bike Computer Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		DD21F81F2F7984D30001B407 /* Exceptions for "OG Bike Computer Widget" folder in "OG Bike Computer WidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */;
+		};
+		DD21F8482F7987350001B407 /* Exceptions for "Shared" folder in "OG Bike Computer WidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Models/SettingsPreset.swift,
+				Services/ConnectivityManager.swift,
+				Stores/UserSettingsStore.swift,
+			);
+			target = DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		DD21F8102F7984D20001B407 /* OG Bike Computer Widget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DD21F81F2F7984D30001B407 /* Exceptions for "OG Bike Computer Widget" folder in "OG Bike Computer WidgetExtension" target */,
+			);
+			path = "OG Bike Computer Widget";
+			sourceTree = "<group>";
+		};
 		DD5D2CC52F525E5900988CBB /* OG Bike Computer */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "OG Bike Computer";
@@ -52,12 +103,24 @@
 		};
 		DD9A560A2F535D64001156B1 /* Shared */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DD21F8482F7987350001B407 /* Exceptions for "Shared" folder in "OG Bike Computer WidgetExtension" target */,
+			);
 			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		DD21F8072F7984D10001B407 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DD21F80F2F7984D20001B407 /* SwiftUI.framework in Frameworks */,
+				DD21F80D2F7984D20001B407 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DD5D2CC02F525E5900988CBB /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -75,12 +138,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		DD21F80B2F7984D20001B407 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				DD21F80C2F7984D20001B407 /* WidgetKit.framework */,
+				DD21F80E2F7984D20001B407 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		DD5D2CBA2F525E5900988CBB = {
 			isa = PBXGroup;
 			children = (
 				DD9A560A2F535D64001156B1 /* Shared */,
 				DD5D2CC52F525E5900988CBB /* OG Bike Computer */,
 				DD5D2CD42F525E5B00988CBB /* OG Bike Computer Watch App */,
+				DD21F8102F7984D20001B407 /* OG Bike Computer Widget */,
+				DD21F80B2F7984D20001B407 /* Frameworks */,
 				DD5D2CC42F525E5900988CBB /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,6 +164,7 @@
 			children = (
 				DD5D2CC32F525E5900988CBB /* OG Bike Computer.app */,
 				DD5D2CD02F525E5B00988CBB /* OG Bike Computer Watch App.app */,
+				DD21F80A2F7984D10001B407 /* OG Bike Computer WidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -97,6 +172,29 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DD21F8202F7984D30001B407 /* Build configuration list for PBXNativeTarget "OG Bike Computer WidgetExtension" */;
+			buildPhases = (
+				DD21F8062F7984D10001B407 /* Sources */,
+				DD21F8072F7984D10001B407 /* Frameworks */,
+				DD21F8082F7984D10001B407 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				DD21F8102F7984D20001B407 /* OG Bike Computer Widget */,
+				DD9A560A2F535D64001156B1 /* Shared */,
+			);
+			name = "OG Bike Computer WidgetExtension";
+			packageProductDependencies = (
+			);
+			productName = "OG Bike Computer WidgetExtension";
+			productReference = DD21F80A2F7984D10001B407 /* OG Bike Computer WidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		DD5D2CC22F525E5900988CBB /* OG Bike Computer */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = DD5D2CE12F525E5C00988CBB /* Build configuration list for PBXNativeTarget "OG Bike Computer" */;
@@ -105,11 +203,13 @@
 				DD5D2CC02F525E5900988CBB /* Frameworks */,
 				DD5D2CC12F525E5900988CBB /* Resources */,
 				DD5D2CE02F525E5C00988CBB /* Embed Watch Content */,
+				DD21F8232F7984D30001B407 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				DD5D2CD32F525E5B00988CBB /* PBXTargetDependency */,
+				DD21F81D2F7984D30001B407 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				DD5D2CC52F525E5900988CBB /* OG Bike Computer */,
@@ -152,9 +252,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2620;
+				LastSwiftUpdateCheck = 2630;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
+					DD21F8092F7984D10001B407 = {
+						CreatedOnToolsVersion = 26.3;
+					};
 					DD5D2CC22F525E5900988CBB = {
 						CreatedOnToolsVersion = 26.2;
 					};
@@ -179,11 +282,19 @@
 			targets = (
 				DD5D2CC22F525E5900988CBB /* OG Bike Computer */,
 				DD5D2CCF2F525E5B00988CBB /* OG Bike Computer Watch App */,
+				DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		DD21F8082F7984D10001B407 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DD5D2CC12F525E5900988CBB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -201,6 +312,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		DD21F8062F7984D10001B407 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DD5D2CBF2F525E5900988CBB /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -218,6 +336,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		DD21F81D2F7984D30001B407 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */;
+			targetProxy = DD21F81C2F7984D30001B407 /* PBXContainerItemProxy */;
+		};
 		DD5D2CD32F525E5B00988CBB /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = DD5D2CCF2F525E5B00988CBB /* OG Bike Computer Watch App */;
@@ -226,6 +349,73 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		DD21F8212F7984D30001B407 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = AXZR9KKTUD;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "OG Bike Computer Widget/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "OG Bike Computer Widget";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aidan3445.OG-Bike-Computer.OG-Bike-Computer-Widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		DD21F8222F7984D30001B407 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = AXZR9KKTUD;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "OG Bike Computer Widget/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "OG Bike Computer Widget";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aidan3445.OG-Bike-Computer.OG-Bike-Computer-Widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		DD5D2CDB2F525E5C00988CBB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -362,6 +552,7 @@
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Reads heart rate during cycling workouts";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and routes";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tracks your position for turn-by-turn navigation during rides";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "com.aidan3445.OG-Bike-Computer";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -400,6 +591,7 @@
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Reads heart rate during cycling workouts";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and routes";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tracks your position for turn-by-turn navigation during rides";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "com.aidan3445.OG-Bike-Computer";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -442,6 +634,7 @@
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Displays workout metrics during rides";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and heart rate";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Shows your position on the route map";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -489,6 +682,7 @@
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Displays workout metrics during rides";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and heart rate";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Shows your position on the route map";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -521,6 +715,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		DD21F8202F7984D30001B407 /* Build configuration list for PBXNativeTarget "OG Bike Computer WidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DD21F8212F7984D30001B407 /* Debug */,
+				DD21F8222F7984D30001B407 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		DD5D2CBE2F525E5900988CBB /* Build configuration list for PBXProject "OG Bike Computer" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -5,6 +5,7 @@
 //  Created by Aidan Weinberg on 2/28/26.
 //
 
+#if canImport(WatchConnectivity)
 import Foundation
 import WatchConnectivity
 import Combine
@@ -614,3 +615,4 @@ private extension ConnectivityManager {
     }
     #endif
 }
+#endif // canImport(WatchConnectivity)
