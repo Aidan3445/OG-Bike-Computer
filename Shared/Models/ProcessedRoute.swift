@@ -44,6 +44,13 @@ enum TurnDirection: String, Codable {
         }
     }
 
+    /// Returns true if the string contains a recognizable turn direction keyword.
+    static func hasTurnKeyword(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        let keywords = ["left", "right", "u-turn", "uturn", "straight", "keep", "sharp", "slight", "continue", "turn"]
+        return keywords.contains { lower.contains($0) }
+    }
+
     /// Map a GPX waypoint name (e.g. "Left", "Slight Right", "Uturn") to a TurnDirection.
     static func from(waypointName: String) -> TurnDirection {
         let lower = waypointName.lowercased().trimmingCharacters(in: .whitespaces)

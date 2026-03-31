@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CoreLocation
 import Combine
 import os
 
@@ -76,12 +77,28 @@ class RideStore: ObservableObject {
     func exportGPX(for ride: RideSummary) -> URL? {
         let trackURL = directory.appendingPathComponent(ride.trackFilename)
         guard let data = try? Data(contentsOf: trackURL) else { return nil }
-        let points = TrackEncoder.decode(data)
-        let locations = TrackEncoder.toLocations(points)
+
+        // Decode with extended data (v5 includes HR/power, v4 falls back gracefully)
+        let v5Points = TrackEncoder.decodeV5Full(data)
+        let locations = v5Points.map { pt in
+            CLLocation(
+                coordinate: CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lon),
+                altitude: pt.altitude,
+                horizontalAccuracy: 0,
+                verticalAccuracy: 0,
+                timestamp: Date(timeIntervalSince1970: pt.timestamp))
+        }
+        let pointExtras = v5Points.map { pt in
+            GPXExporter.PointExtras(
+                power: pt.power > 0 ? pt.power : nil,
+                heartRate: pt.heartRate > 0 ? pt.heartRate : nil
+            )
+        }
         let gpxString = GPXExporter.export(
             name: ride.name,
             locations: locations,
-            activityType: ride.activityType.rawValue)
+            activityType: ride.activityType.rawValue,
+            pointExtras: pointExtras)
         guard let gpxData = gpxString.data(using: .utf8) else { return nil }
         let sanitized = ride.name
             .replacingOccurrences(of: "/", with: "-")
