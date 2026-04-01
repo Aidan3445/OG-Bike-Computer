@@ -1,6 +1,14 @@
 # Xcode
 #
 # gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
+
+## Pages
+ogbc-pages/
+ogbc-pages/**/*
+
+## Integration Secrets
+Secrets.swift
+
 ## Claude
 .claude/*
 

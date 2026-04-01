@@ -32,6 +32,7 @@ struct RideSummary: Codable, Identifiable {
     let maxHeartRate: Double?
     let highestElevation: Double?
     let lowestElevation: Double?
+    var uploads: [ServiceUploadRecord]?
 
     init(id: UUID, name: String, activityType: ActivityType, date: Date,
          elapsedTime: TimeInterval, movingTime: TimeInterval, distance: Double,
@@ -39,7 +40,8 @@ struct RideSummary: Codable, Identifiable {
          avgSpeed: Double, pointCount: Int, trackFilename: String,
          maxSpeed: Double? = nil, avgPower: Double? = nil, maxPower: Double? = nil,
          avgHeartRate: Double? = nil, maxHeartRate: Double? = nil,
-         highestElevation: Double? = nil, lowestElevation: Double? = nil) {
+         highestElevation: Double? = nil, lowestElevation: Double? = nil,
+         uploads: [ServiceUploadRecord]? = nil) {
         self.id = id
         self.name = name
         self.activityType = activityType
@@ -60,6 +62,7 @@ struct RideSummary: Codable, Identifiable {
         self.maxHeartRate = maxHeartRate
         self.highestElevation = highestElevation
         self.lowestElevation = lowestElevation
+        self.uploads = uploads
     }
 
     init(from decoder: Decoder) throws {
@@ -85,5 +88,6 @@ struct RideSummary: Codable, Identifiable {
         maxHeartRate = try container.decodeIfPresent(Double.self, forKey: .maxHeartRate)
         highestElevation = try container.decodeIfPresent(Double.self, forKey: .highestElevation)
         lowestElevation = try container.decodeIfPresent(Double.self, forKey: .lowestElevation)
+        uploads = try container.decodeIfPresent([ServiceUploadRecord].self, forKey: .uploads)
     }
 }

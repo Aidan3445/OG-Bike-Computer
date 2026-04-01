@@ -14,13 +14,15 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
     let points: [TrackPoint]
     let waypoints: [Waypoint]?
     let createdAt: Date
+    let source: RouteSource?
 
-    init(id: UUID = UUID(), name: String, points: [TrackPoint], waypoints: [Waypoint]? = nil, createdAt: Date = Date()) {
+    init(id: UUID = UUID(), name: String, points: [TrackPoint], waypoints: [Waypoint]? = nil, createdAt: Date = Date(), source: RouteSource? = nil) {
         self.id = id
         self.name = name
         self.points = points
         self.waypoints = waypoints
         self.createdAt = createdAt
+        self.source = source
     }
 
     init(from decoder: Decoder) throws {
@@ -30,6 +32,7 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
         points = try container.decode([TrackPoint].self, forKey: .points)
         waypoints = try container.decodeIfPresent([Waypoint].self, forKey: .waypoints)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        source = try container.decodeIfPresent(RouteSource.self, forKey: .source)
     }
 
     func hash(into hasher: inout Hasher) {

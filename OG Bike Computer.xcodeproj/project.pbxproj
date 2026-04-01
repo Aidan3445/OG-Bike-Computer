@@ -11,6 +11,9 @@
 		DD21F80F2F7984D20001B407 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD21F80E2F7984D20001B407 /* SwiftUI.framework */; };
 		DD21F81E2F7984D30001B407 /* OG Bike Computer WidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DD21F80A2F7984D10001B407 /* OG Bike Computer WidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DD5D2CD12F525E5B00988CBB /* OG Bike Computer Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = DD5D2CD02F525E5B00988CBB /* OG Bike Computer Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DDEEE97E2F7CF8440089CD3F /* Computa.png in Resources */ = {isa = PBXBuildFile; fileRef = DDEEE97D2F7CF8440089CD3F /* Computa.png */; };
+		DDEEE97F2F7CF8440089CD3F /* Computa.png in Resources */ = {isa = PBXBuildFile; fileRef = DDEEE97D2F7CF8440089CD3F /* Computa.png */; };
+		DDEEE9802F7CF8440089CD3F /* Computa.png in Resources */ = {isa = PBXBuildFile; fileRef = DDEEE97D2F7CF8440089CD3F /* Computa.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,6 +64,7 @@
 		DD21F80E2F7984D20001B407 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		DD5D2CC32F525E5900988CBB /* OG Bike Computer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "OG Bike Computer.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD5D2CD02F525E5B00988CBB /* OG Bike Computer Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "OG Bike Computer Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DDEEE97D2F7CF8440089CD3F /* Computa.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = Computa.png; path = "OG Bike Computer/Assets.xcassets/AppIcon.appiconset/Computa.png"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -150,6 +154,7 @@
 		DD5D2CBA2F525E5900988CBB = {
 			isa = PBXGroup;
 			children = (
+				DDEEE97D2F7CF8440089CD3F /* Computa.png */,
 				DD9A560A2F535D64001156B1 /* Shared */,
 				DD5D2CC52F525E5900988CBB /* OG Bike Computer */,
 				DD5D2CD42F525E5B00988CBB /* OG Bike Computer Watch App */,
@@ -292,6 +297,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DDEEE9802F7CF8440089CD3F /* Computa.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -299,6 +305,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DDEEE97E2F7CF8440089CD3F /* Computa.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -306,6 +313,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DDEEE97F2F7CF8440089CD3F /* Computa.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

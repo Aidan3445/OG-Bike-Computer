@@ -225,7 +225,12 @@ class WorkoutManager: NSObject, ObservableObject {
                     isActivelyMoving: self.autoPauseState == .moving)
             }
 
-            guard !self.isSimulating else { return }
+            // Accumulate distance in simulation mode too
+            if self.isSimulating {
+                self.accumulateDistance(location)
+                self.checkSplit()
+                return
+            }
 
             // Battery optimization only with a route (needs turn distances)
             if self.hasRoute {

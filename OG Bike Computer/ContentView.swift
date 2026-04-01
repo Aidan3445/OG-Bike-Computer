@@ -15,12 +15,14 @@ struct ContentView: View {
     @ObservedObject var rideStore: RideStore
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
+    @ObservedObject var integrationSettings: IntegrationSettingsStore
     @StateObject private var connectivity = ConnectivityManager.shared
 
     @State private var showFilePicker = false
     @State private var importError: String?
     @State private var uploadingRouteID: UUID?
     @State private var selectedRoute: Route?
+    @State private var serviceRoutePickerService: IntegrationServiceID?
 
     @State private var selectedTab = 0
     @State private var navigationPath = NavigationPath()
@@ -95,10 +97,29 @@ struct ContentView: View {
                         )
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showFilePicker = true
-                        } label: {
-                            Label("Import GPX", systemImage: "plus")
+                        if integrationSettings.settings.importRouteServices.isEmpty {
+                            Button {
+                                showFilePicker = true
+                            } label: {
+                                Label("Import GPX", systemImage: "plus")
+                            }
+                        } else {
+                            Menu {
+                                Button {
+                                    showFilePicker = true
+                                } label: {
+                                    Label("From Files", systemImage: "folder")
+                                }
+                                ForEach(integrationSettings.settings.importRouteServices) { service in
+                                    Button {
+                                        serviceRoutePickerService = service
+                                    } label: {
+                                        Label("From \(service.displayName)", systemImage: service.iconName)
+                                    }
+                                }
+                            } label: {
+                                Label("Import", systemImage: "plus")
+                            }
                         }
                     }
                 }
@@ -108,6 +129,9 @@ struct ContentView: View {
                     allowsMultipleSelection: true
                 ) { result in
                     handleImport(result)
+                }
+                .sheet(item: $serviceRoutePickerService) { service in
+                    ServiceRoutePickerView(service: service, routeStore: routeStore)
                 }
                 .alert("Import Error", isPresented: .init(
                     get: { importError != nil },
@@ -132,7 +156,7 @@ struct ContentView: View {
             .tag(1)
 
             NavigationStack {
-                SettingsView(metricConfig: metricConfig, userSettings: userSettings)
+                SettingsView(metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings)
             }
             .tabItem {
                 Label("Settings", systemImage: "gearshape")

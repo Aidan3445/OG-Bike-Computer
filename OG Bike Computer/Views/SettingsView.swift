@@ -11,6 +11,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
+    @ObservedObject var integrationSettings: IntegrationSettingsStore
     @State private var showSupportSafari = false
 
     private var navigationAlertsSummary: String {
@@ -21,6 +22,14 @@ struct SettingsView: View {
         if alerts.descentAlerts.enabled { parts.append("Descent") }
         if alerts.climbAlerts.enabled { parts.append("Climb") }
         return parts.joined(separator: " \u{2022} ")
+    }
+
+    private var integrationsSummary: String {
+        let connected = integrationSettings.settings.connectedServices
+        if connected.isEmpty {
+            return "No services connected"
+        }
+        return connected.map(\.displayName).joined(separator: ", ")
     }
 
     private var rideSettingsSummary: String {
@@ -145,6 +154,25 @@ struct SettingsView: View {
                     } icon: {
                         Image(systemName: "battery.100.bolt")
                             .foregroundStyle(.green)
+                    }
+                }
+            }
+
+            // MARK: - Integrations
+            Section {
+                NavigationLink {
+                    IntegrationsSettingsView(integrationSettings: integrationSettings)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Integrations")
+                            Text(integrationsSummary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(.teal)
                     }
                 }
             }

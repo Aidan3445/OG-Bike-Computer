@@ -13,6 +13,7 @@ struct RideDetailView: View {
     let ride: RideSummary
     let rideStore: RideStore
     @ObservedObject private var unitState = UnitState.shared
+    @ObservedObject private var uploadManager = UploadManager.shared
 
     enum PanelState {
         case collapsed, compact, expanded
@@ -21,6 +22,8 @@ struct RideDetailView: View {
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var panelState: PanelState = .compact
     @State private var showShareSheet = false
+    @State private var isUploadingToStrava = false
+    @State private var uploadError: String?
     @State private var segments: [SpeedPolyline] = []
     @State private var startCoord: CLLocationCoordinate2D?
     @State private var endCoord: CLLocationCoordinate2D?
@@ -218,10 +221,40 @@ struct RideDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showShareSheet = true
+                Menu {
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        Label("Export GPX", systemImage: "square.and.arrow.up")
+                    }
+
+                    let stravaTokenExists = KeychainHelper.loadTokens(for: .strava) != nil
+                    let alreadyOnStrava = ride.uploads?.contains(where: { $0.service == .strava }) == true
+                    if stravaTokenExists && !alreadyOnStrava {
+                        Button {
+                            uploadToStrava()
+                        } label: {
+                            Label("Upload to Strava", systemImage: "figure.outdoor.cycle")
+                        }
+                        .disabled(isUploadingToStrava)
+                    }
+
+                    if let uploads = ride.uploads, !uploads.isEmpty {
+                        Divider()
+                        ForEach(uploads) { upload in
+                            if let urlString = upload.webURL, let url = URL(string: urlString) {
+                                Link(destination: url) {
+                                    Label("View on \(upload.service.displayName)", systemImage: "arrow.up.right")
+                                }
+                            }
+                        }
+                    }
                 } label: {
-                    Image(systemName: "square.and.arrow.up")
+                    if isUploadingToStrava {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                    }
                 }
             }
         }
@@ -230,7 +263,31 @@ struct RideDetailView: View {
                 ShareSheet(activityItems: [gpxURL])
             }
         }
+        .alert("Upload Error", isPresented: .init(
+            get: { uploadError != nil },
+            set: { if !$0 { uploadError = nil } }
+        )) {
+            Button("OK") { uploadError = nil }
+        } message: {
+            Text(uploadError ?? "")
+        }
         .onAppear { loadTrack() }
+    }
+
+    private func uploadToStrava() {
+        isUploadingToStrava = true
+        Task {
+            do {
+                _ = try await uploadManager.manualUploadToStrava(ride)
+            } catch {
+                await MainActor.run {
+                    uploadError = error.localizedDescription
+                }
+            }
+            await MainActor.run {
+                isUploadingToStrava = false
+            }
+        }
     }
 
     private var hasExtendedStats: Bool {

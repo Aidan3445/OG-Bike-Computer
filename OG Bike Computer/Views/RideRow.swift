@@ -23,6 +23,11 @@ struct RideRow: View {
                     .foregroundStyle(.secondary)
                 Text(ride.name)
                     .font(.headline)
+                if let uploads = ride.uploads, !uploads.isEmpty {
+                    ForEach(uploads) { upload in
+                        ServiceBadge(service: upload.service)
+                    }
+                }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 0) {
                     Text(ride.date, style: .date)

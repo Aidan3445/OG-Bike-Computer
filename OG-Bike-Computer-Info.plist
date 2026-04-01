@@ -15,6 +15,21 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLIconFile</key>
+			<string>Computa</string>
+			<key>CFBundleURLName</key>
+			<string>com.aidan3445.ogbikecomputer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ogbikecomputer</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
