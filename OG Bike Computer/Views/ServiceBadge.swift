@@ -11,15 +11,10 @@ struct ServiceBadge: View {
     let service: IntegrationServiceID
 
     var body: some View {
-        Image(systemName: service.iconName)
-            .font(.caption2)
-            .foregroundStyle(color)
-    }
-
-    private var color: Color {
-        switch service {
-        case .rideWithGPS: return .orange
-        case .strava: return .orange
-        }
+        Image(service.iconAsset)
+            .resizable()
+            .scaledToFit()
+            .frame(width: 16, height: 16)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
     }
 }
