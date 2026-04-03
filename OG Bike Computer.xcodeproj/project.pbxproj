@@ -367,7 +367,7 @@
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "OG Bike Computer Widget/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "OG Bike Computer Widget";
+				INFOPLIST_KEY_CFBundleDisplayName = "Computa Widget";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
@@ -377,7 +377,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.aidan3445.OG-Bike-Computer.OG-Bike-Computer-Widget";
+				PRODUCT_BUNDLE_IDENTIFIER = com.aidan3445.computa.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -400,7 +400,7 @@
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "OG Bike Computer Widget/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "OG Bike Computer Widget";
+				INFOPLIST_KEY_CFBundleDisplayName = "Computa Widget";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
@@ -410,7 +410,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.aidan3445.OG-Bike-Computer.OG-Bike-Computer-Widget";
+				PRODUCT_BUNDLE_IDENTIFIER = com.aidan3445.computa.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -568,7 +568,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.aidan3445.OG-Bike-Computer.watchkitapp";
+				PRODUCT_BUNDLE_IDENTIFIER = com.aidan3445.computa.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -607,7 +607,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.aidan3445.OG-Bike-Computer.watchkitapp";
+				PRODUCT_BUNDLE_IDENTIFIER = com.aidan3445.computa.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -655,7 +655,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.aidan3445.OG-Bike-Computer";
+				PRODUCT_BUNDLE_IDENTIFIER = com.aidan3445.computa;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -703,7 +703,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.aidan3445.OG-Bike-Computer";
+				PRODUCT_BUNDLE_IDENTIFIER = com.aidan3445.computa;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
