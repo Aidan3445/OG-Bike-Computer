@@ -18,7 +18,7 @@ struct IntegrationsSettingsView: View {
             if integrationSettings.settings.totalAutoUploadCount >= 2 {
                 Section {
                     Label {
-                        Text("Multiple services are set to auto-upload. If any of these services are also connected to each other (e.g., Ride With GPS auto-syncs to Strava), you may end up with duplicate activities.")
+                        Text("Multiple services are set to auto-upload. If any of these services are also connected to each other (e.g. Strava auto-syncs to Apple Fitness), you may end up with duplicate activities.")
                             .font(.footnote)
                     } icon: {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -156,7 +156,15 @@ struct IntegrationsSettingsView: View {
                 }
             }
         } header: {
-            Label(service.displayName, systemImage: service.iconName)
+            Label {
+                Text(service.displayName)
+            } icon: {
+                Image(service.iconAsset)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 20, height: 20)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
         }
     }
 
