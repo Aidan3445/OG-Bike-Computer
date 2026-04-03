@@ -23,13 +23,15 @@ class StravaClient: ServiceClient, UploadableServiceClient {
             throw ServiceError.notAuthenticated
         }
 
-        var request = URLRequest(url: URL(string: "\(baseURL)/athletes/\(athleteID)/routes?page=\(page + 1)&per_page=20")!)
+        var request = URLRequest(url: URL(string: "\(baseURL)/athletes/\(athleteID)/routes?page=\(page)&per_page=20")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         let (data, response) = try await URLSession.shared.data(for: request)
         try validateResponse(response)
 
         let routes = try JSONDecoder().decode([StravaRoute].self, from: data)
+        logger.debug("Fetched \(routes.count) routes (page \(page))")
+
         return routes.map { route in
             ServiceRoute(
                 id: "\(route.id)",
@@ -41,6 +43,9 @@ class StravaClient: ServiceClient, UploadableServiceClient {
         }
     }
 
+    /// Downloads a route as GPX and parses it using the existing GPX parser.
+    /// Strava route waypoints are POIs (not turn cues), so GPX export is the
+    /// best source — our parser extracts any `<wpt>` turn directions present.
     func downloadRoute(id: String) async throws -> Route {
         let token = try await OAuthManager.shared.validToken(for: .strava)
 
@@ -52,18 +57,18 @@ class StravaClient: ServiceClient, UploadableServiceClient {
 
         let parser = GPXParser()
         let routes = parser.parse(data: data)
-        guard var route = routes.first else {
+        guard let parsed = routes.first else {
             throw ServiceError.noData
         }
 
-        // Re-create with source metadata
-        route = Route(
-            name: route.name,
-            points: route.points,
-            waypoints: route.waypoints,
+        logger.info("Imported '\(parsed.name)': \(parsed.points.count) pts, \(parsed.waypoints?.count ?? 0) cues")
+
+        return Route(
+            name: parsed.name,
+            points: parsed.points,
+            waypoints: parsed.waypoints,
             source: RouteSource(service: .strava, remoteID: id)
         )
-        return route
     }
 
     // MARK: - Upload
@@ -78,22 +83,15 @@ class StravaClient: ServiceClient, UploadableServiceClient {
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
         var body = Data()
-
-        // data_type field
         body.appendMultipart(name: "data_type", value: "gpx", boundary: boundary)
-
-        // name field
         body.appendMultipart(name: "name", value: name, boundary: boundary)
 
-        // file field
+        // GPX file attachment
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(name).gpx\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: application/gpx+xml\r\n\r\n".data(using: .utf8)!)
         body.append(gpxData)
-        body.append("\r\n".data(using: .utf8)!)
-
-        // Close boundary
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
         request.httpBody = body
 
@@ -101,9 +99,8 @@ class StravaClient: ServiceClient, UploadableServiceClient {
         try validateResponse(response)
 
         let uploadResponse = try JSONDecoder().decode(StravaUploadResponse.self, from: data)
-        logger.info("[Strava] Upload started, id: \(uploadResponse.id)")
+        logger.info("Upload started, id=\(uploadResponse.id)")
 
-        // Poll for completion
         let activityID = try await pollUpload(uploadID: uploadResponse.id, token: token)
 
         return ServiceUploadRecord(
@@ -119,7 +116,6 @@ class StravaClient: ServiceClient, UploadableServiceClient {
             throw ServiceError.uploadFailed("Upload processing timed out")
         }
 
-        // Wait before polling (exponential backoff: 2, 4, 6 seconds)
         try await Task.sleep(nanoseconds: UInt64(min(2 + attempts * 2, 10)) * 1_000_000_000)
 
         var request = URLRequest(url: URL(string: "\(baseURL)/uploads/\(uploadID)")!)
@@ -135,10 +131,7 @@ class StravaClient: ServiceClient, UploadableServiceClient {
         }
 
         if let error = status.error {
-            // "duplicate" errors mean it already exists — still a success from our perspective
             if error.lowercased().contains("duplicate") {
-                logger.info("[Strava] Upload was a duplicate")
-                // Return the upload ID as a fallback identifier
                 throw ServiceError.uploadFailed("Activity already exists on Strava (duplicate)")
             }
             throw ServiceError.uploadFailed(error)
@@ -175,12 +168,16 @@ private extension Data {
 struct StravaRoute: Codable {
     let id: Int
     let name: String
-    let distance: Double
-    let elevation_gain: Double
+    let distance: Double        // meters
+    let elevation_gain: Double  // meters
     let created_at: Date?
+    let description: String?
+    let starred: Bool?
+    let sub_type: Int?          // 1=road, 2=mtb, 3=cx, 4=trail, 5=mixed
+    let map: StravaMap?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, distance, elevation_gain, created_at
+        case id, name, distance, elevation_gain, created_at, description, starred, sub_type, map
     }
 
     init(from decoder: Decoder) throws {
@@ -189,6 +186,10 @@ struct StravaRoute: Codable {
         name = try container.decode(String.self, forKey: .name)
         distance = try container.decode(Double.self, forKey: .distance)
         elevation_gain = try container.decode(Double.self, forKey: .elevation_gain)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        starred = try container.decodeIfPresent(Bool.self, forKey: .starred)
+        sub_type = try container.decodeIfPresent(Int.self, forKey: .sub_type)
+        map = try container.decodeIfPresent(StravaMap.self, forKey: .map)
 
         if let dateString = try container.decodeIfPresent(String.self, forKey: .created_at) {
             let formatter = ISO8601DateFormatter()
@@ -202,6 +203,12 @@ struct StravaRoute: Codable {
             created_at = nil
         }
     }
+}
+
+struct StravaMap: Codable {
+    let id: String?
+    let polyline: String?
+    let summary_polyline: String?
 }
 
 struct StravaUploadResponse: Codable {
