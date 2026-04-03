@@ -14,16 +14,37 @@ struct ServiceRoutePickerView: View {
 
     @State private var routes: [ServiceRoute] = []
     @State private var isLoading = false
-    @State private var currentPage = 0
+    @State private var currentPage = 1
     @State private var hasMore = true
     @State private var error: String?
     @State private var downloadingID: String?
 
+    // RWGPS filter state
+    @State private var searchText = ""
+    @State private var showFilters = false
+    @State private var distanceMin: String = ""
+    @State private var distanceMax: String = ""
+    @State private var activeFilter = RWGPSRouteFilter()
+
+    @ObservedObject private var unitState = UnitState.shared
+
+    private var rwgpsClient: RWGPSClient? {
+        service == .rideWithGPS ? RWGPSClient() : nil
+    }
+
     private var client: ServiceClient {
-        switch service {
-        case .rideWithGPS: return RWGPSClient()
-        case .strava: return StravaClient()
+        if let rwgps = rwgpsClient {
+            return rwgps
         }
+        return StravaClient()
+    }
+
+    private var isImperial: Bool {
+        unitState.preferences.distance == .miles
+    }
+
+    private var distanceUnitLabel: String {
+        isImperial ? "mi" : "km"
     }
 
     var body: some View {
@@ -32,10 +53,17 @@ struct ServiceRoutePickerView: View {
                 if routes.isEmpty && isLoading {
                     ProgressView("Loading routes...")
                 } else if routes.isEmpty && !isLoading {
-                    ContentUnavailableView(
-                        "No Routes Found",
-                        systemImage: "map",
-                        description: Text("No routes found on your \(service.displayName) account."))
+                    VStack(spacing: 16) {
+                        ContentUnavailableView(
+                            "No Routes Found",
+                            systemImage: "map",
+                            description: Text(activeFilter.isEmpty
+                                ? "No routes found on your \(service.displayName) account."
+                                : "No routes match your filters. Try adjusting your search."))
+                        if service == .strava {
+                            stravaVisibilityNote
+                        }
+                    }
                 } else {
                     List {
                         ForEach(routes) { route in
@@ -66,15 +94,39 @@ struct ServiceRoutePickerView: View {
                             }
                             .disabled(isLoading)
                         }
+
+                        if service == .strava {
+                            Section {
+                                stravaVisibilityNote
+                            }
+                        }
                     }
                 }
             }
             .navigationTitle("From \(service.displayName)")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, prompt: "Search routes")
+            .onSubmit(of: .search) {
+                applyFilters()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                if service == .rideWithGPS {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showFilters.toggle()
+                        } label: {
+                            Image(systemName: activeFilter.isEmpty && searchText.isEmpty
+                                  ? "line.3.horizontal.decrease.circle"
+                                  : "line.3.horizontal.decrease.circle.fill")
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showFilters) {
+                distanceFilterSheet
             }
             .alert("Error", isPresented: .init(
                 get: { error != nil },
@@ -90,10 +142,113 @@ struct ServiceRoutePickerView: View {
         }
     }
 
+    private var stravaVisibilityNote: some View {
+        Label {
+            Text("Only public routes appear here. To import a private route, set it to public on Strava first.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } icon: {
+            Image(systemName: "eye.slash")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Distance Filter Sheet
+
+    private var distanceFilterSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Text("Min")
+                            .foregroundStyle(.secondary)
+                        TextField("0", text: $distanceMin)
+                            .keyboardType(.decimalPad)
+                        Text(distanceUnitLabel)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Max")
+                            .foregroundStyle(.secondary)
+                        TextField("Any", text: $distanceMax)
+                            .keyboardType(.decimalPad)
+                        Text(distanceUnitLabel)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Distance Range")
+                }
+
+                if !activeFilter.isEmpty || !searchText.isEmpty {
+                    Section {
+                        Button("Clear All Filters", role: .destructive) {
+                            searchText = ""
+                            distanceMin = ""
+                            distanceMax = ""
+                            showFilters = false
+                            applyFilters()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Filters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showFilters = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        showFilters = false
+                        applyFilters()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    // MARK: - Filter Logic
+
+    private func applyFilters() {
+        var filter = RWGPSRouteFilter()
+        filter.name = searchText
+
+        // Convert user-entered distance to meters
+        if let minVal = Double(distanceMin), minVal > 0 {
+            let meters = isImperial ? minVal * 1609.344 : minVal * 1000
+            filter.distanceMin = Int(meters)
+        }
+        if let maxVal = Double(distanceMax), maxVal > 0 {
+            let meters = isImperial ? maxVal * 1609.344 : maxVal * 1000
+            filter.distanceMax = Int(meters)
+        }
+
+        activeFilter = filter
+
+        // Reset and re-fetch
+        routes = []
+        currentPage = 1
+        hasMore = true
+        Task { await fetchRoutes() }
+    }
+
+    // MARK: - Data
+
     private func fetchRoutes() async {
         isLoading = true
         do {
-            let fetched = try await client.fetchRoutes(page: currentPage)
+            let serviceClient: ServiceClient
+            if service == .rideWithGPS {
+                let rwgps = RWGPSClient()
+                rwgps.filter = activeFilter
+                serviceClient = rwgps
+            } else {
+                serviceClient = StravaClient()
+            }
+
+            let fetched = try await serviceClient.fetchRoutes(page: currentPage)
             routes.append(contentsOf: fetched)
             hasMore = fetched.count >= 20
         } catch {
@@ -151,7 +306,7 @@ private struct ServiceRouteRow: View {
             }
             .labelStyle(StatLabelStyle())
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.white)
         }
         .padding(.vertical, 2)
     }
