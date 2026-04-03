@@ -81,7 +81,7 @@ struct SettingsView: View {
                             }
                         } icon: {
                             Image(systemName: "figure.outdoor.cycle")
-                                .foregroundStyle(.green)
+                                .foregroundStyle(.purple)
                         }
                     }
                 }
