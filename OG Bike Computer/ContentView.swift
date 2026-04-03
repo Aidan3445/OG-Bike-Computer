@@ -114,7 +114,13 @@ struct ContentView: View {
                                     Button {
                                         serviceRoutePickerService = service
                                     } label: {
-                                        Label("From \(service.displayName)", systemImage: service.iconName)
+                                        Label {
+                                            Text("From \(service.displayName)")
+                                        } icon: {
+                                            Image(service.iconAsset)
+                                                .resizable()
+                                                .scaledToFit()
+                                        }
                                     }
                                 }
                             } label: {

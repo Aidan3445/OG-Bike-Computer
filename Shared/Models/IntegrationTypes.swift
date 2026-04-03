@@ -22,10 +22,10 @@ enum IntegrationServiceID: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    var iconName: String {
+    var iconAsset: String {
         switch self {
-        case .rideWithGPS: return "map.circle.fill"
-        case .strava: return "figure.outdoor.cycle"
+        case .rideWithGPS: return "RWGPSIcon"
+        case .strava: return "StravaIcon"
         }
     }
 

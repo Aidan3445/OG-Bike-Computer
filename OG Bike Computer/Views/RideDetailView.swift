@@ -228,9 +228,8 @@ struct RideDetailView: View {
                         Label("Export GPX", systemImage: "square.and.arrow.up")
                     }
 
-                    let stravaTokenExists = KeychainHelper.loadTokens(for: .strava) != nil
                     let alreadyOnStrava = ride.uploads?.contains(where: { $0.service == .strava }) == true
-                    if stravaTokenExists && !alreadyOnStrava {
+                    if KeychainHelper.loadTokens(for: .strava) != nil && !alreadyOnStrava {
                         Button {
                             uploadToStrava()
                         } label: {
