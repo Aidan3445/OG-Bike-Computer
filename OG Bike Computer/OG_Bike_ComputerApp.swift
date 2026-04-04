@@ -286,17 +286,27 @@ struct OG_Bike_ComputerApp: App {
     @StateObject private var rideStore = RideStore()
     @StateObject private var metricConfig = MetricConfigStore()
     @StateObject private var userSettings = UserSettingsStore()
+    @StateObject private var integrationSettings = IntegrationSettingsStore()
 
     @State private var importedFileURL: URL?
 
     var body: some Scene {
         WindowGroup {
-            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings)
+            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings)
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                     UnitState.shared.preferences = userSettings.settings.unitPreferences
                     userSettings.attachMetricStore(metricConfig)
                     cachePreferencesForAppDelegate()
+                    UploadManager.shared.configure(rideStore: rideStore, integrationSettings: integrationSettings)
+                    UploadManager.shared.retryFailedUploads()
+                    ConnectivityManager.shared.onRideReceived = { ride in
+                        UploadManager.shared.handleNewRide(ride)
+                    }
+                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let window = windowScene.windows.first {
+                        OAuthManager.shared.setPresentationAnchor(window)
+                    }
                 }
                 .onChange(of: userSettings.settings.unitPreferences) { _, newValue in
                     UnitState.shared.preferences = newValue

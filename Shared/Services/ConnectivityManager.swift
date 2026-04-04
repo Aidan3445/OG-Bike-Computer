@@ -24,6 +24,9 @@ final class ConnectivityManager: NSObject, ObservableObject {
     var onRouteReceived: ((Route) -> Void)?
     var onMetricConfigReceived: ((Data) -> Void)?
     var onUserSettingsReceived: ((Data) -> Void)?
+    #if os(iOS)
+    var onRideReceived: ((RideSummary) -> Void)?
+    #endif
 
     #if os(watchOS)
     @Published var routeStore: RouteStore?
@@ -608,6 +611,9 @@ private extension ConnectivityManager {
                 store.rides.insert(summary, at: 0)
             }
             print("Ride received: \(summary.name)")
+
+            // Trigger auto-upload to connected services
+            self.onRideReceived?(summary)
         }
 
         // Send acknowledgment back to watch so it can mark the ride as confirmed
