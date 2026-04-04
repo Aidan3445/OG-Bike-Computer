@@ -126,7 +126,7 @@ struct RideDetailView: View {
                     if panelState != .collapsed {
                         // Drag handle — tap to collapse
                         Capsule()
-                            .fill(Color.white.opacity(0.3))
+                            .fill(.secondary)
                             .frame(width: 36, height: 4)
                             .padding(.top, 8)
                             .onTapGesture {
@@ -143,7 +143,7 @@ struct RideDetailView: View {
                         let rows = stats.chunked(into: 3)
                         ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
                             if rowIdx > 0 {
-                                Divider().overlay(Color.white.opacity(0.15))
+                                Divider()
                             }
                             LazyVGrid(columns: columns, spacing: 10) {
                                 ForEach(row, id: \.label) { stat in
@@ -173,7 +173,7 @@ struct RideDetailView: View {
                         // Collapsed — single round button
                         Image(systemName: "chart.bar.xaxis")
                             .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .padding(.top, 8)
                     }
                 }
@@ -186,8 +186,8 @@ struct RideDetailView: View {
                 .frame(width: panelState != .collapsed ? nil : 48, height: panelState != .collapsed ? nil : 48)
                 .background(
                     RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                        .fill(Color.black.opacity(0.7))
-                        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                        .fill(.ultraThinMaterial)
+                        .shadow(radius: 12, y: 4)
                 )
                 .padding(.horizontal, panelState != .collapsed ? 12 : 0)
                 .padding(.bottom, panelState != .collapsed ? 12 : 24)

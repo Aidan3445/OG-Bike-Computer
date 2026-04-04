@@ -133,7 +133,7 @@ struct RouteDetailView: View {
                 VStack(spacing: 12) {
                     if panelState != .collapsed {
                         Capsule()
-                            .fill(Color.white.opacity(0.3))
+                            .fill(.secondary)
                             .frame(width: 36, height: 4)
                             .padding(.top, 8)
                             .onTapGesture {
@@ -156,7 +156,7 @@ struct RouteDetailView: View {
                     } else {
                         Image(systemName: "chart.bar.xaxis")
                             .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .padding(.top, 8)
                     }
                 }
@@ -169,8 +169,8 @@ struct RouteDetailView: View {
                 .frame(width: panelState != .collapsed ? nil : 48, height: panelState != .collapsed ? nil : 48)
                 .background(
                     RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                        .fill(Color.black.opacity(0.7))
-                        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                        .fill(.ultraThinMaterial)
+                        .shadow(radius: 12, y: 4)
                 )
                 .padding(.horizontal, panelState != .collapsed ? 12 : 0)
                 .padding(.bottom, panelState != .collapsed ? 12 : 24)
