@@ -13,7 +13,9 @@ struct RouteDetailView: View {
     let route: Route
     let isOnWatch: Bool
     let isUploading: Bool
+    let isQueued: Bool
     let isUploadBlocked: Bool
+    let canSendToWatch: Bool
     let onSend: () -> Void
     @ObservedObject private var unitState = UnitState.shared
 
@@ -201,30 +203,35 @@ struct RouteDetailView: View {
         .navigationTitle(route.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    if isUploading || isUploadBlocked { return }
-                    if isOnWatch {
-                        showOverwriteAlert = true
-                    } else {
-                        onSend()
-                    }
-                } label: {
-                    Group {
-                        if isUploading {
-                            ProgressView()
+            if canSendToWatch {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        if isUploading || isQueued || isUploadBlocked { return }
+                        if isOnWatch {
+                            showOverwriteAlert = true
                         } else {
-                            Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
+                            onSend()
                         }
+                    } label: {
+                        Group {
+                            if isUploading {
+                                ProgressView()
+                            } else if isQueued {
+                                Image(systemName: "clock.arrow.circlepath")
+                            } else {
+                                Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
+                            }
+                        }
+                        .font(.title2)
+                        .foregroundStyle(buttonColor(
+                            isUploading: isUploading,
+                            isQueued: isQueued,
+                            isUploadBlocked: isUploadBlocked,
+                            isOnWatch: isOnWatch
+                        ))
                     }
-                    .font(.title2)
-                    .foregroundStyle(buttonColor(
-                        isUploading: isUploading,
-                        isUploadBlocked: isUploadBlocked,
-                        isOnWatch: isOnWatch
-                    ))
+                    .disabled(isUploadBlocked || isQueued)
                 }
-                .disabled(isUploadBlocked)
             }
         }
         .alert("Route Already on Watch", isPresented: $showOverwriteAlert) {

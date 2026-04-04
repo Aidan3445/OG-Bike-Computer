@@ -218,8 +218,9 @@ extension Array {
     }
 }
 
-func buttonColor(isUploading: Bool = false, isUploadBlocked: Bool = false, isOnWatch: Bool = false) -> Color {
+func buttonColor(isUploading: Bool = false, isQueued: Bool = false, isUploadBlocked: Bool = false, isOnWatch: Bool = false) -> Color {
     if isUploading { return .orange }
+    if isQueued { return .secondary }
     if isUploadBlocked { return .secondary }
     if isOnWatch { return .green }
     return .blue
