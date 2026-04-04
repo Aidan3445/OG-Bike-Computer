@@ -76,12 +76,12 @@ struct WorkoutView<ExtraTab: View>: View {
                         .allowsHitTesting(false)
                 }
             }
-            // Nav turn overlay — flash map when a turn is imminent and rider is on a metrics page
+            // Nav turn overlay — flash stripped-down map when a turn is imminent and rider is on a metrics page
             .overlay {
-                if showNavOverlay && tab >= 3 {
+                if showNavOverlay && tab >= 3 && workout.ridePreferences.mapScreen.showTurnOverlay {
                     ZStack {
                         Color.black.opacity(0.85)
-                        RouteMapView(workout: workout)
+                        RouteMapView(workout: workout, isOverlay: true)
                     }
                     .transition(.opacity)
                     .allowsHitTesting(true)
@@ -92,7 +92,7 @@ struct WorkoutView<ExtraTab: View>: View {
             }
             .onChange(of: workout.navigation.nextTurn?.index) { oldTurn, newTurn in
                 // A new turn became the next turn (rider passed one or a new one appeared)
-                guard newTurn != nil, tab >= 3 else { return }
+                guard newTurn != nil, tab >= 3, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
                 navOverlayTask?.cancel()
                 withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
                 navOverlayTask = Task {
@@ -105,7 +105,7 @@ struct WorkoutView<ExtraTab: View>: View {
             }
             .onChange(of: workout.navigation.distanceToNextTurn) { _, dist in
                 // Also flash when approaching a turn closely
-                guard dist > 0, dist < 150, tab >= 3, !showNavOverlay else { return }
+                guard dist > 0, dist < 150, tab >= 3, !showNavOverlay, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
                 navOverlayTask?.cancel()
                 withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
                 navOverlayTask = Task {

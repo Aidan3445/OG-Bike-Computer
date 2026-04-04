@@ -13,11 +13,22 @@ struct RouteMapView: View {
     @ObservedObject private var unitState = UnitState.shared
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
+    /// When true, renders a stripped-down version for the metric screen turn overlay
+    /// (no buttons, no stats, no heading — just route shape, orientation, and rider position)
+    var isOverlay: Bool = false
+
     @State private var showFullRoute = false
     @State private var autoSwitchTask: Task<Void, Never>?
 
-    private let zoomLevels: [Double] = [200, 400, 800, 1600]
-    @State private var zoomIndex: Int = 1
+    @State private var zoomIndex: Int = -1 // -1 means "use default from config"
+    private var mapConfig: MapScreenConfig { workout.ridePreferences.mapScreen }
+
+    private var zoomLevels: [Double] { mapConfig.computedZoomLevels }
+
+    private var effectiveZoomIndex: Int {
+        if zoomIndex < 0 { return mapConfig.defaultZoomIndex }
+        return min(zoomIndex, zoomLevels.count - 1)
+    }
 
     var body: some View {
         ZStack {
@@ -27,84 +38,36 @@ struct RouteMapView: View {
                 } else {
                     BreadcrumbCanvas(
                         workout: workout,
-                        viewDistance: zoomLevels[zoomIndex],
-                        useCompassHeading: workout.ridePreferences.mapRotation == .headingUp && !isLuminanceReduced)
+                        viewDistance: zoomLevels.isEmpty ? 400 : zoomLevels[effectiveZoomIndex],
+                        useCompassHeading: workout.ridePreferences.mapRotation == .headingUp && !isLuminanceReduced,
+                        routeAheadColor: mapConfig.routeAheadColor)
                 }
             }
             .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 4) {
-                    if !showFullRoute {
-                        if workout.navigation.isOffRoute {
-                            VStack(spacing: 1) {
-                                Text("OFF ROUTE")
-                                    .font(.system(size: 11, weight: .heavy))
-                                    .foregroundStyle(.red)
-                                Text(formatTurnDistance(workout.navigation.nearestRouteDistance))
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.red.opacity(0.8))
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(.red.opacity(0.15))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        } else if let turn = workout.navigation.nextTurn {
-                            VStack(spacing: 1) {
-                                HStack(spacing: 2) {
-                                    Text(formatSpeed(workout.speed, false))
-                                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                                        .monospacedDigit()
-                                    Text(currentUnits.speed.label)
-                                        .font(.system(size: 7))
-                                        .foregroundStyle(.secondary)
-                                }
-                                HStack(spacing: 4) {
-                                    Image(systemName: turn.direction.icon)
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(.yellow)
-                                    Text(formatTurnDistance(workout.navigation.distanceToNextTurn))
-                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                        .monospacedDigit()
-                                }
-                                Text(formatDistance(workout.totalDistance))
-                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                Text(formatTime(workout.movingTime))
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(.black.opacity(0.6))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        } else if !workout.hasRoute {
-                            VStack(spacing: 1) {
-                                HStack(spacing: 2) {
-                                    Text(formatSpeed(workout.speed, false))
-                                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                                        .monospacedDigit()
-                                    Text(currentUnits.speed.label)
-                                        .font(.system(size: 7))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text(formatDistance(workout.totalDistance))
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                    .monospacedDigit()
-                                Text(formatTime(workout.movingTime))
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(.black.opacity(0.6))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        }
-                    }
+            if !isOverlay {
+                fullControls
+            }
+        }
+        .onChange(of: isLuminanceReduced) { _, reduced in
+            workout.setHeadingUpdates(enabled: !reduced)
+         }
+    }
 
-                    Spacer()
+    // MARK: - Full Controls (non-overlay mode)
 
-                    VStack(spacing: 2) {
+    @ViewBuilder
+    private var fullControls: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 4) {
+                if !showFullRoute {
+                    statsOverlay
+                }
+
+                Spacer()
+
+                VStack(spacing: 2) {
+                    if mapConfig.showFullRouteToggle {
                         Button {
                             showFullRoute.toggle()
                             if showFullRoute {
@@ -122,61 +85,156 @@ struct RouteMapView: View {
                         .buttonStyle(.plain)
                         .frame(width: 48, height: 48)
                         .contentShape(Rectangle())
-
-                        if workout.hasRoute {
-                            Text(cardinalDirection)
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.7))
-                        }
                     }
-                }
-                .padding(.horizontal, 4)
-                .padding(.top, 0)
 
-                Spacer()
-
-                if !showFullRoute {
-                    HStack(alignment: .bottom) {
-                        Button {
-                            if zoomIndex < zoomLevels.count - 1 {
-                                zoomIndex += 1
-                            }
-                        } label: {
-                            Image(systemName: "minus")
-                                .font(.system(size: 16, weight: .bold))
-                                .frame(width: 36, height: 36)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(width: 48, height: 48)
-                        .contentShape(Rectangle())
-                        .opacity(zoomIndex < zoomLevels.count - 1 ? 1 : 0.3)
-
-                        Spacer()
-
-                        Button {
-                            if zoomIndex > 0 {
-                                zoomIndex -= 1
-                            }
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 16, weight: .bold))
-                                .frame(width: 36, height: 36)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(width: 48, height: 48)
-                        .contentShape(Rectangle())
-                        .opacity(zoomIndex > 0 ? 1 : 0.3)
+                    if mapConfig.showHeading && workout.hasRoute {
+                        Text(cardinalDirection)
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.7))
                     }
                 }
             }
+            .padding(.horizontal, 4)
+            .padding(.top, 0)
+
+            Spacer()
+
+            if !showFullRoute {
+                HStack(alignment: .bottom) {
+                    Button {
+                        let idx = effectiveZoomIndex
+                        if idx < zoomLevels.count - 1 {
+                            zoomIndex = idx + 1
+                        }
+                    } label: {
+                        Image(systemName: "minus")
+                            .font(.system(size: 16, weight: .bold))
+                            .frame(width: 36, height: 36)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 48, height: 48)
+                    .contentShape(Rectangle())
+                    .opacity(effectiveZoomIndex < zoomLevels.count - 1 ? 1 : 0.3)
+
+                    Spacer()
+
+                    Button {
+                        let idx = effectiveZoomIndex
+                        if idx > 0 {
+                            zoomIndex = idx - 1
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .bold))
+                            .frame(width: 36, height: 36)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 48, height: 48)
+                    .contentShape(Rectangle())
+                    .opacity(effectiveZoomIndex > 0 ? 1 : 0.3)
+                }
+            }
         }
-        .onChange(of: isLuminanceReduced) { _, reduced in
-            workout.setHeadingUpdates(enabled: !reduced)
-         }
+    }
+
+    // MARK: - Stats Overlay
+
+    @ViewBuilder
+    private var statsOverlay: some View {
+        if workout.navigation.isOffRoute {
+            VStack(spacing: 1) {
+                Text("OFF ROUTE")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundStyle(.red)
+                Text(formatTurnDistance(workout.navigation.nearestRouteDistance))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.red.opacity(0.8))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.red.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else if workout.navigation.nextTurn != nil || !workout.hasRoute || mapConfig.primaryStat != .none || !mapConfig.secondaryStats.filter({ $0 != .none }).isEmpty {
+            VStack(spacing: 1) {
+                // Primary stat
+                if mapConfig.primaryStat != .none {
+                    let primary = resolveMapStat(mapConfig.primaryStat)
+                    HStack(spacing: 2) {
+                        Text(primary.value)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                        if let unit = primary.unit {
+                            Text(unit)
+                                .font(.system(size: 7))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                // Turn info
+                if mapConfig.showTurnInfo, let turn = workout.navigation.nextTurn {
+                    HStack(spacing: 4) {
+                        Image(systemName: turn.direction.icon)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.yellow)
+                        Text(formatTurnDistance(workout.navigation.distanceToNextTurn))
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                    }
+                }
+
+                // Secondary stats (value + unit inline)
+                ForEach(Array(mapConfig.secondaryStats.enumerated()), id: \.offset) { index, stat in
+                    if stat != .none {
+                        let resolved = resolveMapStat(stat)
+                        let display = resolved.unit != nil ? "\(resolved.value) \(resolved.unit!)" : resolved.value
+                        Text(display)
+                            .font(.system(size: index == mapConfig.secondaryStats.count - 1 ? 9 : 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(index == mapConfig.secondaryStats.count - 1 ? .secondary : .primary)
+                    }
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.black.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    // MARK: - Stat Resolution
+
+    private func resolveMapStat(_ type: MapStatType) -> (value: String, unit: String?) {
+        switch type {
+        case .speed:
+            return (formatSpeed(workout.speed, false), currentUnits.speed.label)
+        case .averageSpeed:
+            return (formatSpeed(workout.averageSpeed, false), currentUnits.speed.label)
+        case .heartRate:
+            return (workout.heartRate > 0 ? "\(Int(workout.heartRate))" : "--", "bpm")
+        case .distance:
+            return (formatDistance(workout.totalDistance), nil)
+        case .movingTime:
+            return (formatTime(workout.movingTime), nil)
+        case .elapsedTime:
+            return (formatTime(workout.elapsedTime), nil)
+        case .elevation:
+            return (formatElevation(workout.currentElevation), nil)
+        case .grade:
+            return (String(format: "%.1f%%", workout.currentGrade), nil)
+        case .power:
+            return (workout.estimatedPower > 0 ? "\(Int(workout.estimatedPower))" : "--", "W")
+        case .distanceRemaining:
+            return (formatDistance(workout.navigation.distanceRemaining), nil)
+        case .calories:
+            return ("\(Int(workout.activeCalories))", "cal")
+        case .none:
+            return ("", nil)
+        }
     }
 
     private var cardinalDirection: String {
@@ -380,6 +438,7 @@ private struct BreadcrumbCanvas: View {
     @ObservedObject private var unitState = UnitState.shared
     let viewDistance: Double
     var useCompassHeading: Bool = true
+    var routeAheadColor: RouteColor = .white
 
     private let routeLineWidth: CGFloat = 6
 
@@ -588,7 +647,7 @@ private struct BreadcrumbCanvas: View {
 
                 let style = StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round)
                 context.stroke(behindPath, with: .color(.green.opacity(0.4)), style: style)
-                context.stroke(aheadPath, with: .color(.white), style: style)
+                context.stroke(aheadPath, with: .color(routeAheadColor.color), style: style)
 
                 // Mile markers on breadcrumb view
                 struct MileMarkerCache {

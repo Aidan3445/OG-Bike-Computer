@@ -211,6 +211,7 @@ struct RidePreferences: Codable, Equatable, Hashable {
     var dynamicGPSOptimization: Bool
     var telemetryRate: TelemetryRate
     var offRouteGraceSamples: Int
+    var mapScreen: MapScreenConfig
 
     static let `default` = RidePreferences(
         autoPause: .default,
@@ -223,7 +224,8 @@ struct RidePreferences: Codable, Equatable, Hashable {
         voiceAlertConnectionCheck: true,
         dynamicGPSOptimization: true,
         telemetryRate: .standard,
-        offRouteGraceSamples: 3
+        offRouteGraceSamples: 3,
+        mapScreen: .default
     )
 
     init(
@@ -237,7 +239,8 @@ struct RidePreferences: Codable, Equatable, Hashable {
         voiceAlertConnectionCheck: Bool = true,
         dynamicGPSOptimization: Bool = true,
         telemetryRate: TelemetryRate = .standard,
-        offRouteGraceSamples: Int = 3
+        offRouteGraceSamples: Int = 3,
+        mapScreen: MapScreenConfig = .default
     ) {
         self.autoPause = autoPause
         self.autoLap = autoLap
@@ -250,6 +253,7 @@ struct RidePreferences: Codable, Equatable, Hashable {
         self.dynamicGPSOptimization = dynamicGPSOptimization
         self.telemetryRate = telemetryRate
         self.offRouteGraceSamples = offRouteGraceSamples
+        self.mapScreen = mapScreen
     }
 
     init(from decoder: Decoder) throws {
@@ -265,5 +269,6 @@ struct RidePreferences: Codable, Equatable, Hashable {
         dynamicGPSOptimization = try c.decodeIfPresent(Bool.self, forKey: .dynamicGPSOptimization) ?? true
         telemetryRate = try c.decodeIfPresent(TelemetryRate.self, forKey: .telemetryRate) ?? .standard
         offRouteGraceSamples = try c.decodeIfPresent(Int.self, forKey: .offRouteGraceSamples) ?? 3
+        mapScreen = try c.decodeIfPresent(MapScreenConfig.self, forKey: .mapScreen) ?? .default
     }
 }
