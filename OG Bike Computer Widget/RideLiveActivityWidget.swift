@@ -22,8 +22,6 @@ struct RideLiveActivity: Widget {
         ActivityConfiguration(for: RideActivityAttributes.self) { context in
             // Lock Screen / Banner
             LockScreenView(context: context)
-                .activityBackgroundTint(.black)
-                .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
                 // Expanded
