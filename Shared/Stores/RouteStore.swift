@@ -43,6 +43,17 @@ class RouteStore: ObservableObject {
         onChange?()
     }
 
+    func deleteAll() {
+        let fm = FileManager.default
+        if let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            for file in files {
+                try? fm.removeItem(at: file)
+            }
+        }
+        routes.removeAll()
+        onChange?()
+    }
+
     func loadAll() {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory,
