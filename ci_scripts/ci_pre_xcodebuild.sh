@@ -1,6 +1,8 @@
 #!/bin/sh
 
 # Generate Secrets.swift from Xcode Cloud environment variables
+# Use /Users/aidan/Documents/CS/OG Bike Computer/OG Bike Computer/Services/Integrations/Secrets.swift
+# with the same structure for local development
 
 SECRETS_PATH="$CI_WORKSPACE/OG Bike Computer/Services/Integrations/Secrets.swift"
 
