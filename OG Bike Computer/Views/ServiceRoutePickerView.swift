@@ -307,6 +307,7 @@ private struct ServiceRouteRow: View {
             .labelStyle(StatLabelStyle())
             .font(.caption)
             .foregroundStyle(.primary)
+            .foregroundStyle(.opacity(80))
         }
         .padding(.vertical, 2)
     }

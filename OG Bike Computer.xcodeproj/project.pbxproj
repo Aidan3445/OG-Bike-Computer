@@ -374,6 +374,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "OG Bike Computer Widget/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Computa Widget";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
@@ -407,6 +408,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "OG Bike Computer Widget/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Computa Widget";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
@@ -563,6 +565,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "OG-Bike-Computer-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Computa;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Reads heart rate during cycling workouts";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and routes";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tracks your position for turn-by-turn navigation during rides";
@@ -602,6 +605,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "OG-Bike-Computer-Watch-App-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Computa;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Reads heart rate during cycling workouts";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and routes";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tracks your position for turn-by-turn navigation during rides";
@@ -648,6 +652,7 @@
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = NO;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Displays workout metrics during rides";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and heart rate";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Shows your position on the route map";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -697,6 +702,7 @@
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = NO;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Displays workout metrics during rides";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and heart rate";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Shows your position on the route map";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

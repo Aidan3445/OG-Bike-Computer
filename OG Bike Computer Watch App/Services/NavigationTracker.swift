@@ -29,6 +29,7 @@ class NavigationTracker: ObservableObject {
     @Published var nearestRouteDistance: Double = 0
     @Published var bearingToRoute: Double = 0
     @Published var rejoinCandidates: [RejoinCandidate] = []
+    @Published var isDrifting: Bool = false
     @Published var turnMode: TurnMode = .calculated
 
     /// The active turn list based on the current turn mode.
@@ -44,6 +45,7 @@ class NavigationTracker: ObservableObject {
 
     var offRouteThreshold: Double = 100
     let rejoinThreshold: Double = 30
+    let driftingThreshold: Double = 20
 
     // Grace period: require consecutive off-route samples before firing
     private var offRouteSampleCount: Int = 0
@@ -153,6 +155,7 @@ class NavigationTracker: ObservableObject {
         offRouteLocation = nil
         nearestRouteDistance = 0
         bearingToRoute = 0
+        isDrifting = false
         lastAlertedTurnIndex = nil
         lastAlertLevel = nil
         rejoinCandidates = []
@@ -197,14 +200,20 @@ class NavigationTracker: ObservableObject {
         }
         wasOffRoute = isOffRoute
 
-        // Compute rejoin candidates when off-route
-        if isOffRoute {
-            rejoinCandidates = computeRejoinCandidates(location: location, route: route)
-
+        // Always compute bearing to route for drifting/off-route alerts
+        if nearestDistance > 10 {
             let nearestPoint = route.points[nearestIndex]
             bearingToRoute = RouteProcessor.bearing(
                 from: location.coordinate,
                 to: nearestPoint.coordinate)
+        }
+
+        // Drifting detection: between normal and off-route
+        isDrifting = !isOffRoute && nearestDistance > driftingThreshold
+
+        // Compute rejoin candidates when off-route
+        if isOffRoute {
+            rejoinCandidates = computeRejoinCandidates(location: location, route: route)
             return nil
         } else {
             if !rejoinCandidates.isEmpty { rejoinCandidates = [] }

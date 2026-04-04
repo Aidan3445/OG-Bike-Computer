@@ -526,8 +526,8 @@ private struct BreadcrumbCanvas: View {
                 let riderScreenY = size.height * 0.75
                 let metersPerPx = min(size.width, size.height) / viewDistance
 
-                let behind = viewDistance * 0.5
-                let ahead = viewDistance * 1.5
+                let behind = viewDistance * 1.0
+                let ahead = viewDistance * 2.5
                 let minDist = currentDist - behind
                 let maxDist = currentDist + ahead
 
@@ -548,7 +548,7 @@ private struct BreadcrumbCanvas: View {
                 // Feature 2: Draw all visible route sections (distant sections first, dimmer)
                 let screenW = Double(size.width)
                 let screenH = Double(size.height)
-                let margin: Double = 20
+                let margin: Double = 60
                 let visStride = max(1, points.count / 800)
 
                 var distantGrayPath = Path()
@@ -560,7 +560,7 @@ private struct BreadcrumbCanvas: View {
                     let point = points[i]
 
                     // Skip points already in the primary window
-                    if point.distanceFromStart >= minDist - 100 && point.distanceFromStart <= maxDist + 100 {
+                    if point.distanceFromStart >= minDist - 200 && point.distanceFromStart <= maxDist + 200 {
                         if distantGrayStarted { distantGrayStarted = false }
                         if distantGreenStarted { distantGreenStarted = false }
                         continue
@@ -613,8 +613,8 @@ private struct BreadcrumbCanvas: View {
                 var bridgePoint: CGPoint?
 
                 for point in points {
-                    guard point.distanceFromStart >= minDist - 100,
-                          point.distanceFromStart <= maxDist + 100 else { continue }
+                    guard point.distanceFromStart >= minDist - 200,
+                          point.distanceFromStart <= maxDist + 200 else { continue }
 
                     let pt = toScreen(point.coordinate)
 

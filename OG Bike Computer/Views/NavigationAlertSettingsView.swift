@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 // MARK: - Main View
 
@@ -317,6 +318,14 @@ struct NavigationAlertSettingsView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .onChange(of: prefs.haptics.intensity.wrappedValue) { _, newValue in
+                let style: UIImpactFeedbackGenerator.FeedbackStyle = switch newValue {
+                case .light:  .light
+                case .medium: .medium
+                case .strong: .heavy
+                }
+                UIImpactFeedbackGenerator(style: style).impactOccurred()
+            }
         } header: {
             Label("Haptic Feedback", systemImage: "hand.point.up.braille")
         } footer: {
