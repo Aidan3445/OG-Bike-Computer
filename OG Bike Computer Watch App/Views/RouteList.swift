@@ -26,7 +26,7 @@ struct RouteList: View {
                             .foregroundStyle(.secondary)
                         Text("No Routes")
                             .font(.headline)
-                        Text("Import a from your phone.")
+                        Text("Import from phone")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
