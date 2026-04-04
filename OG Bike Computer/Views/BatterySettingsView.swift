@@ -24,11 +24,15 @@ struct BatterySettingsView: View {
                 )
                 batteryTipRow(
                     title: "Live Activity Updates",
-                    value: userSettings.settings.ridePreferences
-                        .telemetryRate.label,
-                    impact: userSettings.settings.ridePreferences
-                        .telemetryRate.batteryImpact,
-                    instruction: "Change below in Efficiency Settings."
+                    value: userSettings.settings.phoneAlerts.mode == .off
+                        ? "Disabled"
+                        : userSettings.settings.ridePreferences.telemetryRate.label,
+                    impact: userSettings.settings.phoneAlerts.mode == .off
+                        ? "Least demanding"
+                        : userSettings.settings.ridePreferences.telemetryRate.batteryImpact,
+                    instruction: userSettings.settings.phoneAlerts.mode == .off
+                        ? "Live Activity is off. Enable in Phone Alerts."
+                        : "Change below in Efficiency Settings."
                 )
                 batteryTipRow(
                     title: "Display Brightness & Always-On",

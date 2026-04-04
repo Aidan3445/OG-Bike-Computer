@@ -11,6 +11,7 @@ import SwiftUI
 
 struct MetricCustomizationView: View {
     @ObservedObject var metricConfig: MetricConfigStore
+    @ObservedObject var userSettings: UserSettingsStore
     var profileName: String = ""
     @State private var selectedPage: Int = 0
     @State private var showAddPage = false
@@ -18,8 +19,25 @@ struct MetricCustomizationView: View {
     @State private var showResetConfirm = false
     @State private var editingPageIndex: Int?
 
-    /// Total number of carousel items: pages + 1 "Add Page" card
-    private var totalItems: Int { metricConfig.config.pages.count + 1 }
+    /// Pages from other profiles available for import, excluding any that match a current page
+    private var otherProfilePages: [(profileName: String, page: MetricPage)] {
+        guard let activeID = userSettings.activePresetID else { return [] }
+        let currentPages = metricConfig.config.pages
+        return userSettings.presets
+            .filter { $0.id != activeID }
+            .flatMap { preset in
+                preset.metricConfig.pages.map { (profileName: preset.name, page: $0) }
+            }
+            .filter { item in
+                !currentPages.contains { current in
+                    current.name == item.page.name
+                    && current.slots.map(\.type) == item.page.slots.map(\.type)
+                }
+            }
+    }
+
+    /// Total number of carousel items: pages + 1 "Add Page" card + other profile pages
+    private var totalItems: Int { metricConfig.config.pages.count + 1 + otherProfilePages.count }
 
     var body: some View {
         ScrollView {
@@ -58,7 +76,7 @@ struct MetricCustomizationView: View {
                         .padding(.horizontal, 32)
                     }
 
-                    // "Add Page" card at the end
+                    // "Add Page" card
                     Button {
                         showAddPage = true
                     } label: {
@@ -67,22 +85,39 @@ struct MetricCustomizationView: View {
                     .buttonStyle(.plain)
                     .tag(metricConfig.config.pages.count)
                     .padding(.horizontal, 32)
+
+                    // Pages from other profiles
+                    ForEach(Array(otherProfilePages.enumerated()), id: \.element.page.id) { index, item in
+                        Button {
+                            importPage(item.page)
+                        } label: {
+                            ProfilePageCard(page: item.page, profileName: item.profileName)
+                        }
+                        .buttonStyle(.plain)
+                        .tag(metricConfig.config.pages.count + 1 + index)
+                        .padding(.horizontal, 32)
+                    }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .frame(height: 240)
 
-                // Page dots (include the + card)
+                // Page dots
                 HStack(spacing: 6) {
                     ForEach(0..<totalItems, id: \.self) { i in
                         if i < metricConfig.config.pages.count {
                             Circle()
                                 .fill(i == selectedPage ? Color.primary : Color.secondary.opacity(0.4))
                                 .frame(width: i == selectedPage ? 8 : 6, height: i == selectedPage ? 8 : 6)
-                        } else {
+                        } else if i == metricConfig.config.pages.count {
                             // "Add" dot
                             Image(systemName: "plus")
                                 .font(.system(size: 6, weight: .bold))
                                 .foregroundStyle(i == selectedPage ? Color.primary : Color.secondary.opacity(0.5))
+                        } else {
+                            // Other profile page dot
+                            Circle()
+                                .fill(i == selectedPage ? Color.secondary : Color.secondary.opacity(0.2))
+                                .frame(width: i == selectedPage ? 7 : 5, height: i == selectedPage ? 7 : 5)
                         }
                     }
                 }
@@ -99,7 +134,7 @@ struct MetricCustomizationView: View {
                     Text("\(page.slots.count)/\(MetricPage.maxSlots) metrics")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Tap to edit · Hold to reorder or delete")
+                    Text("Tap/Hold to manage")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .padding(.top, 2)
@@ -107,6 +142,18 @@ struct MetricCustomizationView: View {
                     Text("Add a new page")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                } else {
+                    let profileIdx = selectedPage - metricConfig.config.pages.count - 1
+                    if otherProfilePages.indices.contains(profileIdx) {
+                        let item = otherProfilePages[profileIdx]
+                        Text(item.page.name)
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 2)
+                        Text("From \(item.profileName) · Tap to import")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Button {
@@ -154,10 +201,56 @@ struct MetricCustomizationView: View {
         }
     }
 
+    private func importPage(_ page: MetricPage) {
+        // Create a copy with a new ID so it's independent
+        var imported = page
+        imported.id = UUID()
+        metricConfig.addPage(imported)
+        selectedPage = metricConfig.config.pages.count - 1
+        syncToWatch()
+    }
+
     private func syncToWatch() {
         if let data = metricConfig.encodedConfig {
             ConnectivityManager.shared.sendMetricConfig(data)
         }
+    }
+}
+
+// MARK: - Profile Page Card (greyed-out preview from another profile)
+
+private struct ProfilePageCard: View {
+    let page: MetricPage
+    let profileName: String
+
+    private let watchWidth: CGFloat  = 148
+    private let watchHeight: CGFloat = 182
+
+    var body: some View {
+        ZStack {
+            // Dimmed watch preview
+            WatchPagePreview(page: page)
+                .opacity(0.35)
+
+            // Profile name badge
+            VStack {
+                Spacer()
+                HStack(spacing: 4) {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(profileName)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .padding(.bottom, 12)
+            }
+        }
+        .frame(width: watchWidth, height: watchHeight)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
 

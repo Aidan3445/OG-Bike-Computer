@@ -12,7 +12,11 @@ struct SettingsView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject var integrationSettings: IntegrationSettingsStore
+    @ObservedObject var rideStore: RideStore
+    @ObservedObject var routeStore: RouteStore
     @State private var showSupportSafari = false
+    @State private var showClearRides = false
+    @State private var showClearRoutes = false
 
     private var navigationAlertsSummary: String {
         let alerts = userSettings.settings.navigationAlerts
@@ -32,6 +36,15 @@ struct SettingsView: View {
         return connected.map(\.displayName).joined(separator: ", ")
     }
 
+    private var mapScreenSummary: String {
+        let map = userSettings.settings.ridePreferences.mapScreen
+        var parts: [String] = []
+        parts.append(map.routeAheadColor.label)
+        parts.append("\(Int(map.defaultZoom))m zoom")
+        if !map.showTurnOverlay { parts.append("Overlay off") }
+        return parts.joined(separator: " \u{2022} ")
+    }
+
     private var rideSettingsSummary: String {
         let ride = userSettings.settings.ridePreferences
         var parts: [String] = []
@@ -48,7 +61,23 @@ struct SettingsView: View {
             // MARK: - Metric Pages
             Section {
                 NavigationLink {
-                    MetricCustomizationView(metricConfig: metricConfig, profileName: userSettings.activeProfileName)
+                    MapCustomizationView(userSettings: userSettings)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Map Screen")
+                            Text(mapScreenSummary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "map")
+                            .foregroundStyle(.blue)
+                    }
+                }
+                
+                NavigationLink {
+                    MetricCustomizationView(metricConfig: metricConfig, userSettings: userSettings, profileName: userSettings.activeProfileName)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
@@ -61,7 +90,7 @@ struct SettingsView: View {
                         }
                     } icon: {
                         Image(systemName: "gauge.with.dots.needle.33percent")
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(.yellow)
                     }
                 }
 
@@ -177,6 +206,45 @@ struct SettingsView: View {
                 }
             }
 
+            // MARK: - Data Management
+            Section {
+                Button(role: .destructive) {
+                    showClearRides = true
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Clear All Rides")
+                            Text("\(rideStore.rides.count) rides on phone")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                    }
+                }
+                .disabled(rideStore.rides.isEmpty)
+
+                Button(role: .destructive) {
+                    showClearRoutes = true
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Clear All Routes")
+                            Text("\(routeStore.routes.count) routes on phone")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "map")
+                            .foregroundStyle(.red)
+                    }
+                }
+                .disabled(routeStore.routes.isEmpty)
+            } header: {
+                Text("Data Management")
+            }
+
             // MARK: - Support the Developer
             Section {
                 Button {
@@ -214,6 +282,30 @@ struct SettingsView: View {
                 url: URL(string: "https://www.buymeacoffee.com/aidanweinberg")!
             )
         }
+        .confirmationDialog(
+            "Delete all \(rideStore.rides.count) rides?",
+            isPresented: $showClearRides,
+            titleVisibility: .visible
+        ) {
+            Button("Delete All Rides", role: .destructive) {
+                rideStore.deleteAll()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete all ride history from your phone. This cannot be undone.")
+        }
+        .sheet(isPresented: $showClearRoutes) {
+            ClearRoutesSheet(
+                routeCount: routeStore.routes.count,
+                onConfirm: { alsoWatch in
+                    routeStore.deleteAll()
+                    if alsoWatch {
+                        ConnectivityManager.shared.sendClearAllRoutes()
+                    }
+                }
+            )
+            .presentationDetents([.height(280)])
+        }
         .settingsPageTitle("Settings", profile: userSettings.activeProfileName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -235,29 +327,10 @@ struct RiderProfileView: View {
     @State private var showAddBike = false
     @State private var newBikeName = ""
     @State private var newBikeWeight = "22"  // lbs
+    @State private var weightText = ""
+    @State private var heightText = ""
+    @State private var bikeWeightText = ""
     @FocusState private var isFieldFocused: Bool
-
-    // Imperial bindings (stored as kg/cm, displayed as lbs/in)
-    private var riderWeightLbs: Binding<Double> {
-        Binding(
-            get: { userSettings.settings.riderWeight * 2.20462 },
-            set: { userSettings.settings.riderWeight = $0 / 2.20462 }
-        )
-    }
-
-    private var riderHeightIn: Binding<Double> {
-        Binding(
-            get: { userSettings.settings.riderHeight / 2.54 },
-            set: { userSettings.settings.riderHeight = $0 * 2.54 }
-        )
-    }
-
-    private func bikeWeightLbs(at index: Int) -> Binding<Double> {
-        Binding(
-            get: { userSettings.settings.bikes[index].weight * 2.20462 },
-            set: { userSettings.settings.bikes[index].weight = $0 / 2.20462 }
-        )
-    }
 
     private var heightString: String {
         let totalInches = userSettings.settings.riderHeight / 2.54
@@ -273,30 +346,32 @@ struct RiderProfileView: View {
                 HStack {
                     Label("Weight", systemImage: "scalemass")
                     Spacer()
-                    TextField(
-                        "lbs",
-                        value: riderWeightLbs,
-                        format: .number.precision(.fractionLength(0))
-                    )
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 80)
-                    .focused($isFieldFocused)
+                    TextField("lbs", text: $weightText)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                        .focused($isFieldFocused)
+                        .onChange(of: weightText) { _, newValue in
+                            if let lbs = Double(newValue) {
+                                userSettings.settings.riderWeight = lbs / 2.20462
+                            }
+                        }
                     Text("lbs")
                         .foregroundStyle(.secondary)
                 }
                 HStack {
                     Label("Height", systemImage: "ruler")
                     Spacer()
-                    TextField(
-                        "in",
-                        value: riderHeightIn,
-                        format: .number.precision(.fractionLength(0))
-                    )
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 80)
-                    .focused($isFieldFocused)
+                    TextField("in", text: $heightText)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                        .focused($isFieldFocused)
+                        .onChange(of: heightText) { _, newValue in
+                            if let inches = Double(newValue) {
+                                userSettings.settings.riderHeight = inches * 2.54
+                            }
+                        }
                     Text("in")
                         .foregroundStyle(.secondary)
                 }
@@ -306,6 +381,10 @@ struct RiderProfileView: View {
                 Text(
                     "\(String(format: "%.0f", userSettings.settings.riderWeight * 2.20462)) lbs \u{2022} \(heightString)"
                 )
+            }
+            .onAppear {
+                weightText = "\(Int(round(userSettings.settings.riderWeight * 2.20462)))"
+                heightText = "\(Int(round(userSettings.settings.riderHeight / 2.54)))"
             }
 
             // MARK: Bikes
@@ -394,17 +473,21 @@ struct RiderProfileView: View {
                     HStack {
                         Label("Weight", systemImage: "scalemass")
                         Spacer()
-                        TextField(
-                            "lbs",
-                            value: bikeWeightLbs(at: activeIdx),
-                            format: .number.precision(.fractionLength(1))
-                        )
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                        .focused($isFieldFocused)
+                        TextField("lbs", text: $bikeWeightText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                            .focused($isFieldFocused)
+                            .onChange(of: bikeWeightText) { _, newValue in
+                                if let lbs = Double(newValue) {
+                                    userSettings.settings.bikes[activeIdx].weight = lbs / 2.20462
+                                }
+                            }
                         Text("lbs")
                             .foregroundStyle(.secondary)
+                    }
+                    .onAppear {
+                        bikeWeightText = String(format: "%.1f", userSettings.settings.bikes[activeIdx].weight * 2.20462)
                     }
                 } header: {
                     Text(
@@ -458,6 +541,64 @@ struct RiderProfileView: View {
             Button("Cancel", role: .cancel) {
                 newBikeName = ""
                 newBikeWeight = "22"
+            }
+        }
+    }
+}
+
+// MARK: - Clear Routes Sheet
+
+struct ClearRoutesSheet: View {
+    let routeCount: Int
+    let onConfirm: (Bool) -> Void
+    @State private var alsoDeleteFromWatch = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.red)
+
+                Text("Delete all \(routeCount) routes?")
+                    .font(.headline)
+
+                Text("This will permanently delete all routes from your phone. This cannot be undone.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                Toggle(isOn: $alsoDeleteFromWatch) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Also delete from watch")
+                        Text("Removes all routes synced to your Apple Watch")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+
+                Spacer()
+
+                Button(role: .destructive) {
+                    onConfirm(alsoDeleteFromWatch)
+                    dismiss()
+                } label: {
+                    Text(alsoDeleteFromWatch ? "Delete from Phone & Watch" : "Delete from Phone")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .padding(.horizontal)
+            }
+            .padding()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
             }
         }
     }
