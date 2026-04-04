@@ -13,7 +13,9 @@ struct ContentView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @StateObject private var connectivity = ConnectivityManager.shared
     @StateObject private var workout = WorkoutManager()
+    #if DEBUG
     @StateObject private var simulator = RideSimulator()
+    #endif
 
     @State private var showDiscardAlert = false
 
@@ -25,14 +27,20 @@ struct ContentView: View {
                         workout.dismissSummary()
                     })
                 } else if workout.isSimulating {
+                    #if DEBUG
                     SimPlaybackOverlay(simulator: simulator, workout: workout)
+                    #endif
                 } else {
                     WorkoutView(workout: workout, metricConfig: metricConfig, onStop: handleStop) {
                         MidRideRouteList(store: store, workout: workout)
                     }
                 }
             } else {
+                #if DEBUG
                 RouteList(store: store, workout: workout, simulator: simulator)
+                #else
+                RouteList(store: store, workout: workout)
+                #endif
             }
         }
         .onAppear {

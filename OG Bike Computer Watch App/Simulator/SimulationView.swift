@@ -5,6 +5,7 @@
 //  Created by Aidan Weinberg on 3/6/26.
 //
 
+#if DEBUG
 import SwiftUI
 
 struct SimulationView: View {
@@ -161,3 +162,4 @@ struct SimPlaybackOverlay: View {
         }
     }
 }
+#endif

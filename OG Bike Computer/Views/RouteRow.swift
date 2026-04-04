@@ -11,7 +11,9 @@ struct RouteRow: View {
     let route: Route
     let isOnWatch: Bool
     let isUploading: Bool
+    let isQueued: Bool
     let isUploadBlocked: Bool
+    let canSendToWatch: Bool
     let onSend: () -> Void
     @ObservedObject private var unitState = UnitState.shared
     let onRename: (String) -> Void
@@ -31,31 +33,36 @@ struct RouteRow: View {
                 }
             }
             HStack(spacing: 12) {
-                Button {
-                    if isUploading || isUploadBlocked { return }
-                    if isOnWatch {
-                        showOverwriteAlert = true
-                    } else {
-                        onSend()
-                    }
-                } label: {
-                    Group {
-                        if isUploading {
-                            ProgressView()
+                if canSendToWatch {
+                    Button {
+                        if isUploading || isQueued || isUploadBlocked { return }
+                        if isOnWatch {
+                            showOverwriteAlert = true
                         } else {
-                            Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
+                            onSend()
                         }
+                    } label: {
+                        Group {
+                            if isUploading {
+                                ProgressView()
+                            } else if isQueued {
+                                Image(systemName: "clock.arrow.circlepath")
+                            } else {
+                                Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
+                            }
+                        }
+                        .font(.title2)
+                        .foregroundStyle(buttonColor(
+                            isUploading: isUploading,
+                            isQueued: isQueued,
+                            isUploadBlocked: isUploadBlocked,
+                            isOnWatch: isOnWatch
+                        ))
                     }
-                    .font(.title2)
-                    .foregroundStyle(buttonColor(
-                        isUploading: isUploading,
-                        isUploadBlocked: isUploadBlocked,
-                        isOnWatch: isOnWatch
-                    ))
+                    .buttonStyle(.plain)
+                    .disabled(isUploadBlocked || isQueued)
                 }
-                .buttonStyle(.plain)
-                .disabled(isUploadBlocked)
-                
+
                 Label(formatDistance(route.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 if route.elevationGain > 0 {
                     Label(formatElevation(route.elevationGain), systemImage: "arrow.up.right")

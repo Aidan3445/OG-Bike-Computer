@@ -136,7 +136,8 @@ class WorkoutManager: NSObject, ObservableObject {
     private var isMirroringReady = false
     private var mirroringRetryWorkItem: DispatchWorkItem?
 
-    // SIM
+    // SIM — only available in debug builds
+    #if DEBUG
     @Published var isSimulating = false
 
     func startSimulation(activity: ActivityType) {
@@ -199,6 +200,9 @@ class WorkoutManager: NSObject, ObservableObject {
         startTelemetryTimer()
         startConnectionCheckTimer()
     }
+    #else
+    let isSimulating = false
+    #endif
 
     func processLocation(_ location: CLLocation) {
         DispatchQueue.main.async {
@@ -741,7 +745,9 @@ class WorkoutManager: NSObject, ObservableObject {
                 self.isActive = false
             }
             self.isPaused = false
+            #if DEBUG
             self.isSimulating = false
+            #endif
             self.isMirroringReady = false
             self.recordedLocations = []
             self.recordedHeartRates = []

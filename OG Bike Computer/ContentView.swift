@@ -21,11 +21,18 @@ struct ContentView: View {
     @State private var showFilePicker = false
     @State private var importError: String?
     @State private var uploadingRouteID: UUID?
+    @State private var queuedRouteID: UUID?
+    @State private var showQueuedAlert = false
     @State private var selectedRoute: Route?
     @State private var serviceRoutePickerService: IntegrationServiceID?
 
     @State private var selectedTab = 0
     @State private var navigationPath = NavigationPath()
+
+    /// Whether the watch is paired and has the app installed
+    private var canSendToWatch: Bool {
+        connectivity.isPaired && connectivity.isWatchAppInstalled
+    }
 
     private var routeSections: [(DateSection, [Route])] {
         let sorted = routeStore.routes.sorted { $0.createdAt > $1.createdAt }
@@ -51,7 +58,9 @@ struct ContentView: View {
                                                 route: route,
                                                 isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
                                                 isUploading: uploadingRouteID == route.id,
+                                                isQueued: queuedRouteID == route.id,
                                                 isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                                                canSendToWatch: canSendToWatch,
                                                 onSend: { sendToWatch(route) },
                                                 onRename: { newName in
                                                     routeStore.rename(route, to: newName)
@@ -79,13 +88,18 @@ struct ContentView: View {
                         navigationPath.append(route)
                     }
                 }
-                .onReceive(connectivity.$routeNamesOnWatch) { _ in uploadingRouteID = nil }
+                .onReceive(connectivity.$routeNamesOnWatch) { _ in
+                    uploadingRouteID = nil
+                    queuedRouteID = nil
+                }
                 .navigationDestination(for: Route.self) { route in
                     RouteDetailView(
                         route: route,
                         isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
                         isUploading: uploadingRouteID == route.id,
+                        isQueued: queuedRouteID == route.id,
                         isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                        canSendToWatch: canSendToWatch,
                         onSend: { sendToWatch(route) }
                     )
                 }
@@ -147,6 +161,11 @@ struct ContentView: View {
                 } message: {
                     Text(importError ?? "")
                 }
+                .alert("Route Queued", isPresented: $showQueuedAlert) {
+                    Button("OK") {}
+                } message: {
+                    Text("The route will appear on your watch when you open the app.")
+                }
             }
             .tabItem {
                 Label("Routes", systemImage: "map")
@@ -162,7 +181,7 @@ struct ContentView: View {
             .tag(1)
 
             NavigationStack {
-                SettingsView(metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings)
+                SettingsView(metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings, rideStore: rideStore, routeStore: routeStore)
             }
             .tabItem {
                 Label("Settings", systemImage: "gearshape")
@@ -174,14 +193,22 @@ struct ContentView: View {
     private func sendToWatch(_ route: Route) {
         guard uploadingRouteID == nil else { return }
         uploadingRouteID = route.id
+        queuedRouteID = nil
 
         ConnectivityManager.shared.sendRoute(route) { result in
             DispatchQueue.main.async {
                 if case .failure(let error) = result {
                     print("Failed to send route: \(error)")
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
                     uploadingRouteID = nil
+                    return
+                }
+                // After 3 seconds, if still uploading (watch hasn't confirmed),
+                // transition to "queued" state
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    guard uploadingRouteID == route.id else { return }
+                    uploadingRouteID = nil
+                    queuedRouteID = route.id
+                    showQueuedAlert = true
                 }
             }
         }

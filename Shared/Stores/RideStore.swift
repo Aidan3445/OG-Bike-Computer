@@ -49,6 +49,17 @@ class RideStore: ObservableObject {
         logger.log("[RideStore] deleted: \(ride.name)")
     }
 
+    func deleteAll() {
+        let fm = FileManager.default
+        if let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            for file in files {
+                try? fm.removeItem(at: file)
+            }
+        }
+        rides.removeAll()
+        logger.log("[RideStore] deleted all rides")
+    }
+
     func rename(_ ride: RideSummary, to newName: String) {
         guard let index = rides.firstIndex(where: { $0.id == ride.id }) else { return }
         var updated = ride

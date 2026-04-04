@@ -197,6 +197,25 @@ extension ConnectivityManager {
         }
     }
 
+    /// Tell the watch to delete all its routes.
+    func sendClearAllRoutes() {
+        guard WCSession.default.activationState == .activated else { return }
+
+        let msg: [String: Any] = ["type": "clearAllRoutes"]
+
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: { _ in
+                print("[ClearRoutes] Sent via message")
+            }, errorHandler: { error in
+                print("[ClearRoutes] Message failed, using userInfo: \(error)")
+                WCSession.default.transferUserInfo(msg)
+            })
+        } else {
+            WCSession.default.transferUserInfo(msg)
+            print("[ClearRoutes] Queued via userInfo")
+        }
+    }
+
     /// Send acknowledgment to watch that a ride was successfully received.
     func sendRideAck(rideID: UUID) {
         guard WCSession.default.activationState == .activated else { return }
@@ -486,6 +505,15 @@ extension ConnectivityManager: WCSessionDelegate {
             handleTransferAck(rideID: rideID)
             return
         }
+
+        if let type = userInfo["type"] as? String,
+           type == "clearAllRoutes" {
+            DispatchQueue.main.async {
+                self.routeStore?.deleteAll()
+                self.routeStore.map { self.reportRoutes($0.routes) }
+            }
+            return
+        }
         #endif
 
         if let data = userInfo["route"] as? Data,
@@ -539,6 +567,16 @@ extension ConnectivityManager: WCSessionDelegate {
            let rideID = UUID(uuidString: idString) {
             handleTransferAck(rideID: rideID)
             replyHandler(["received": true])
+            return
+        }
+
+        if let type = message["type"] as? String,
+           type == "clearAllRoutes" {
+            DispatchQueue.main.async {
+                self.routeStore?.deleteAll()
+                self.routeStore.map { self.reportRoutes($0.routes) }
+            }
+            replyHandler(["cleared": true])
             return
         }
         #endif
