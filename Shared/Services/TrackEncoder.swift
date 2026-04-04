@@ -110,7 +110,7 @@ struct TrackEncoder {
 
     private static func isV5(_ data: Data) -> Bool {
         guard data.count >= magicSize else { return false }
-        let magic = data.withUnsafeBytes { $0.load(as: UInt32.self) }
+        let magic = data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
         return magic == v5Magic
     }
 
@@ -121,10 +121,10 @@ struct TrackEncoder {
 
         for i in 0..<count {
             let offset = i * v4PointSize
-            let lat = data.withUnsafeBytes { $0.load(fromByteOffset: offset, as: Double.self) }
-            let lon = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 8, as: Double.self) }
-            let alt = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 16, as: Double.self) }
-            let ts  = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 24, as: Double.self) }
+            let lat = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: Double.self) }
+            let lon = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 8, as: Double.self) }
+            let alt = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 16, as: Double.self) }
+            let ts  = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 24, as: Double.self) }
             points.append(TrackPoint4(lat: lat, lon: lon, altitude: alt, timestamp: ts))
         }
         return points
@@ -138,12 +138,12 @@ struct TrackEncoder {
 
         for i in 0..<count {
             let offset = magicSize + i * v5PointSize
-            let lat = data.withUnsafeBytes { $0.load(fromByteOffset: offset, as: Double.self) }
-            let lon = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 8, as: Double.self) }
-            let alt = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 16, as: Double.self) }
-            let ts  = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 24, as: Double.self) }
-            let hr  = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 32, as: Double.self) }
-            let pw  = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 40, as: Double.self) }
+            let lat = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: Double.self) }
+            let lon = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 8, as: Double.self) }
+            let alt = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 16, as: Double.self) }
+            let ts  = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 24, as: Double.self) }
+            let hr  = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 32, as: Double.self) }
+            let pw  = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 40, as: Double.self) }
             points.append(TrackPoint5(lat: lat, lon: lon, altitude: alt, timestamp: ts, heartRate: hr, power: pw))
         }
         return points
