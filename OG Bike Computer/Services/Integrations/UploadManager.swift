@@ -43,7 +43,7 @@ class UploadManager: ObservableObject {
         guard let rideStore else { return }
 
         let rideID = ride.id
-        await MainActor.run { pendingUploads.insert(rideID) }
+        _ = await MainActor.run { pendingUploads.insert(rideID) }
         defer { Task { @MainActor in pendingUploads.remove(rideID) } }
 
         guard let gpxURL = rideStore.exportGPX(for: ride),
