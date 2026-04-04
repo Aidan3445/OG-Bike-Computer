@@ -1,10 +1,13 @@
 #!/bin/sh
+set -e
 
 # Generate Secrets.swift from Xcode Cloud environment variables
-# Use /Users/aidan/Documents/CS/OG Bike Computer/OG Bike Computer/Services/Integrations/Secrets.swift
-# with the same structure for local development
 
-SECRETS_PATH="$CI_WORKSPACE/OG Bike Computer/Services/Integrations/Secrets.swift"
+REPO_ROOT="${CI_PRIMARY_REPOSITORY_PATH:-$CI_WORKSPACE}"
+SECRETS_DIR="$REPO_ROOT/OG Bike Computer/Services/Integrations"
+SECRETS_PATH="$SECRETS_DIR/Secrets.swift"
+
+mkdir -p "$SECRETS_DIR"
 
 cat > "$SECRETS_PATH" << EOF
 //
@@ -36,5 +39,10 @@ struct RWGPSConfig {
     static let callbackScheme = "ogbikecomputer"
 }
 EOF
+
+if [ ! -f "$SECRETS_PATH" ]; then
+    echo "ERROR: Failed to create Secrets.swift at $SECRETS_PATH"
+    exit 1
+fi
 
 echo "Generated Secrets.swift at $SECRETS_PATH"
