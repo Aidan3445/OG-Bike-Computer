@@ -8,6 +8,9 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import os
+
+private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "RideDetail")
 
 struct RideDetailView: View {
     let ride: RideSummary
@@ -15,12 +18,18 @@ struct RideDetailView: View {
     @ObservedObject private var unitState = UnitState.shared
     @ObservedObject private var uploadManager = UploadManager.shared
 
+    init(ride: RideSummary, rideStore: RideStore) {
+        self.ride = ride
+        self.rideStore = rideStore
+        logger.info("[RideDetail] init: ride=\(ride.id) '\(ride.name)' points=\(ride.pointCount) dist=\(ride.distance)")
+    }
+
     enum PanelState {
         case collapsed, compact, expanded
     }
 
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var panelState: PanelState = .compact
+    @State private var panelState: PanelState = .collapsed
     @State private var showShareSheet = false
     @State private var isUploadingToStrava = false
     @State private var uploadError: String?
@@ -31,6 +40,8 @@ struct RideDetailView: View {
     @State private var mileMarkers: [MileMarker] = []
 
     var body: some View {
+        let _ = logger.info("[RideDetail] body: rendering for ride \(self.ride.id) '\(self.ride.name)'")
+        let _ = logger.info("[RideDetail] body: segments=\(self.segments.count) start=\(self.startCoord != nil) end=\(self.endCoord != nil) elevExtremes=\(self.elevationExtremes != nil) markers=\(self.mileMarkers.count)")
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
@@ -97,18 +108,13 @@ struct RideDetailView: View {
                 // Mile markers
                 ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
                     Annotation("", coordinate: marker.coordinate) {
-                        VStack(spacing: 1) {
-                            Text("\(marker.mile) \(currentUnits.distance.label)")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(.orange)
-                                .clipShape(Capsule())
-                            Image(systemName: "flag.fill")
-                                .font(.system(size: 8))
-                                .foregroundStyle(.orange)
-                        }
+                        Text("\(marker.mile) \(currentUnits.distance.label)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor)
+                            .clipShape(Capsule())
                     }
                 }
             }
@@ -204,13 +210,23 @@ struct RideDetailView: View {
                 .gesture(
                     DragGesture(minimumDistance: 30)
                         .onEnded { value in
-                            guard value.translation.height > 30,
+                            guard abs(value.translation.height) > 30,
                                   abs(value.translation.height) > abs(value.translation.width) else { return }
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                switch panelState {
-                                case .expanded: panelState = .compact
-                                case .compact: panelState = .collapsed
-                                case .collapsed: break
+                                if value.translation.height > 0 {
+                                    // Swipe down — collapse
+                                    switch panelState {
+                                    case .expanded: panelState = .compact
+                                    case .compact: panelState = .collapsed
+                                    case .collapsed: break
+                                    }
+                                } else {
+                                    // Swipe up — expand
+                                    switch panelState {
+                                    case .collapsed: panelState = .compact
+                                    case .compact: panelState = .expanded
+                                    case .expanded: break
+                                    }
                                 }
                             }
                         }
@@ -332,35 +348,91 @@ struct RideDetailView: View {
     }
 
     private func loadTrack() {
+        logger.info("[RideDetail] loadTrack: starting for ride \(ride.id)")
         let url = rideStore.trackURL(for: ride)
-        guard let data = try? Data(contentsOf: url) else { return }
+        logger.info("[RideDetail] loadTrack: trackURL = \(url.path)")
+        guard let data = try? Data(contentsOf: url) else {
+            logger.info("[RideDetail] loadTrack: failed to read track data from disk")
+            return
+        }
+        logger.info("[RideDetail] loadTrack: read \(data.count) bytes")
         let points = TrackEncoder.decode(data)
+        logger.info("[RideDetail] loadTrack: decoded \(points.count) track points")
         let locations = TrackEncoder.toLocations(points)
-        guard locations.count >= 2 else { return }
+        logger.info("[RideDetail] loadTrack: converted to \(locations.count) CLLocations")
+        guard locations.count >= 2 else {
+            logger.info("[RideDetail] loadTrack: not enough locations (<2), bailing")
+            return
+        }
 
         startCoord = locations.first?.coordinate
         endCoord = locations.last?.coordinate
+        logger.info("[RideDetail] loadTrack: set start/end coords")
 
-        // Compute speeds between consecutive points
-        var speeds: [Double] = []
+        // Build cumulative distances and per-segment speeds
+        let sampleInterval: Double = 30 // meters — speed is averaged over this window
+        var cumDists: [Double] = [0]
+        var rawSpeeds: [Double] = [] // one per segment (between consecutive points)
         for i in 1..<locations.count {
-            let dist = locations[i].distance(from: locations[i - 1])
+            let segDist = locations[i].distance(from: locations[i - 1])
             let dt = locations[i].timestamp.timeIntervalSince(locations[i - 1].timestamp)
-            speeds.append(dt > 0 ? dist / dt : 0)
+            cumDists.append(cumDists.last! + segDist)
+            rawSpeeds.append(dt > 0 ? segDist / dt : 0)
         }
 
-        let movingSpeeds = speeds.filter { $0 > 0.5 }
-        let minSpeed = movingSpeeds.min() ?? 0
-        let maxSpeed = movingSpeeds.max() ?? 1
-        let range = max(maxSpeed - minSpeed, 0.1)
+        // Build speed samples at fixed intervals for smooth color curve
+        let totalDist = cumDists.last ?? 0
+        var speedSamples: [(dist: Double, speed: Double)] = []
+        var windowStart = 0
+        var sampleDist: Double = 0
+        while sampleDist <= totalDist {
+            // Average raw speeds of all segments within ±sampleInterval/2 of this distance
+            let lo = sampleDist - sampleInterval / 2
+            let hi = sampleDist + sampleInterval / 2
+            var sum: Double = 0
+            var count = 0
+            for j in windowStart..<rawSpeeds.count {
+                let segMid = (cumDists[j] + cumDists[j + 1]) / 2
+                if segMid < lo { windowStart = j; continue }
+                if segMid > hi { break }
+                sum += rawSpeeds[j]
+                count += 1
+            }
+            speedSamples.append((sampleDist, count > 0 ? sum / Double(count) : 0))
+            sampleDist += sampleInterval
+        }
 
-        // Build colored segments — batch consecutive similar colors
+        // Use percentile-based range so outliers don't wash out the colors
+        let movingSpeeds = speedSamples.map(\.speed).filter { $0 > 0.5 }.sorted()
+        let p10 = movingSpeeds.isEmpty ? 0.0 : movingSpeeds[movingSpeeds.count / 10]
+        let p90 = movingSpeeds.isEmpty ? 1.0 : movingSpeeds[min(movingSpeeds.count - 1, movingSpeeds.count * 9 / 10)]
+        let speedRange = max(p90 - p10, 0.1)
+        logger.info("[RideDetail] loadTrack: \(speedSamples.count) speed samples, p10=\(p10) p90=\(p90)")
+
+        // Interpolate smooth speed for each original GPS point from the sample curve
+        func interpolatedSpeed(at dist: Double) -> Double {
+            guard speedSamples.count >= 2 else { return speedSamples.first?.speed ?? 0 }
+            // Binary search for the bracketing samples
+            var lo = 0, hi = speedSamples.count - 1
+            while lo < hi - 1 {
+                let mid = (lo + hi) / 2
+                if speedSamples[mid].dist <= dist { lo = mid } else { hi = mid }
+            }
+            let s0 = speedSamples[lo], s1 = speedSamples[hi]
+            let gap = s1.dist - s0.dist
+            guard gap > 0 else { return s0.speed }
+            let t = max(0, min(1, (dist - s0.dist) / gap))
+            return s0.speed + (s1.speed - s0.speed) * t
+        }
+
+        // Build colored segments using original GPS coordinates with smooth colors
         var segs: [SpeedPolyline] = []
         var batchCoords: [CLLocationCoordinate2D] = [locations[0].coordinate]
-        var batchColor = speedColor(ratio: 0)
+        var batchColor = speedColor(ratio: max(0, min(1, (interpolatedSpeed(at: 0) - p10) / speedRange)))
 
         for i in 1..<locations.count {
-            let ratio = max(0, min(1, (speeds[i - 1] - minSpeed) / range))
+            let speed = interpolatedSpeed(at: cumDists[i])
+            let ratio = max(0, min(1, (speed - p10) / speedRange))
             let color = speedColor(ratio: ratio)
 
             if color == batchColor {
@@ -376,25 +448,33 @@ struct RideDetailView: View {
             segs.append(SpeedPolyline(coords: batchCoords, color: batchColor))
         }
         segments = segs
+        logger.info("[RideDetail] loadTrack: built \(segs.count) speed segments")
 
         // Mile markers
         mileMarkers = computeRideMileMarkers(locations: locations)
+        logger.info("[RideDetail] loadTrack: computed \(mileMarkers.count) mile markers")
 
         // Elevation extremes
         let minElevDiff: Double = 50
         let withElev = locations.filter { $0.verticalAccuracy >= 0 }
+        logger.info("[RideDetail] loadTrack: \(withElev.count) points with valid elevation")
         if let highest = withElev.max(by: { $0.altitude < $1.altitude }),
            let lowest = withElev.min(by: { $0.altitude < $1.altitude }),
            highest.altitude - lowest.altitude >= minElevDiff {
             elevationExtremes = (
                 high: ElevPoint(coordinate: highest.coordinate, elevation: highest.altitude),
                 low: ElevPoint(coordinate: lowest.coordinate, elevation: lowest.altitude))
+            logger.info("[RideDetail] loadTrack: elevation extremes set (high=\(highest.altitude), low=\(lowest.altitude))")
+        } else {
+            logger.info("[RideDetail] loadTrack: no significant elevation extremes found")
         }
+        logger.info("[RideDetail] loadTrack: done")
     }
 
-    // Quantized to 8 steps so consecutive segments batch together
+    /// Red → yellow → green gradient. Lightly quantized (32 steps) so nearby
+    /// colors batch into single polylines for performance while looking smooth.
     private func speedColor(ratio: Double) -> Color {
-        let step = (ratio * 7).rounded() / 7
+        let step = (ratio * 31).rounded() / 31
         let r: Double
         let g: Double
         if step < 0.5 {

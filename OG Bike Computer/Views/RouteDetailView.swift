@@ -24,7 +24,7 @@ struct RouteDetailView: View {
     }
 
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var panelState: PanelState = .compact
+    @State private var panelState: PanelState = .collapsed
     @State private var showOverwriteAlert = false
 
     // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
@@ -62,38 +62,42 @@ struct RouteDetailView: View {
 
                 // Elevation markers
                 if let peaks = cachedElevationExtremes {
-                    Annotation("", coordinate: peaks.high.coordinate) {
-                        VStack(spacing: 2) {
-                            Text(formatElevation(peaks.high.elevation!))
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(.orange)
-                                .clipShape(Capsule())
-                                .opacity(0.5)
-                            Image(systemName: "triangle.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.orange)
-                                .opacity(0.5)
+                    if let highElev = peaks.high.elevation {
+                        Annotation("", coordinate: peaks.high.coordinate) {
+                            VStack(spacing: 2) {
+                                Text(formatElevation(highElev))
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(.orange)
+                                    .clipShape(Capsule())
+                                    .opacity(0.5)
+                                Image(systemName: "triangle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.orange)
+                                    .opacity(0.5)
+                            }
                         }
                     }
 
-                    Annotation("", coordinate: peaks.low.coordinate) {
-                        VStack(spacing: 2) {
-                            Image(systemName: "triangle.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.cyan)
-                                .rotationEffect(.degrees(180))
-                                .opacity(0.5)
-                            Text(formatElevation(peaks.low.elevation!))
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(.cyan)
-                                .clipShape(Capsule())
-                                .opacity(0.5)
+                    if let lowElev = peaks.low.elevation {
+                        Annotation("", coordinate: peaks.low.coordinate) {
+                            VStack(spacing: 2) {
+                                Image(systemName: "triangle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.cyan)
+                                    .rotationEffect(.degrees(180))
+                                    .opacity(0.5)
+                                Text(formatElevation(lowElev))
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(.cyan)
+                                    .clipShape(Capsule())
+                                    .opacity(0.5)
+                            }
                         }
                     }
                 }
@@ -101,18 +105,13 @@ struct RouteDetailView: View {
                 // Mile markers
                 ForEach(Array(cachedMileMarkers.enumerated()), id: \.offset) { _, marker in
                     Annotation("", coordinate: marker.coordinate) {
-                        VStack(spacing: 1) {
-                            Text("\(marker.mile) \(currentUnits.distance.label)")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(.orange)
-                                .clipShape(Capsule())
-                            Image(systemName: "flag.fill")
-                                .font(.system(size: 8))
-                                .foregroundStyle(.orange)
-                        }
+                        Text("\(marker.mile) \(currentUnits.distance.label)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor)
+                            .clipShape(Capsule())
                     }
                 }
 
@@ -187,13 +186,23 @@ struct RouteDetailView: View {
                 .gesture(
                     DragGesture(minimumDistance: 30)
                         .onEnded { value in
-                            guard value.translation.height > 30,
+                            guard abs(value.translation.height) > 30,
                                   abs(value.translation.height) > abs(value.translation.width) else { return }
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                switch panelState {
-                                case .expanded: panelState = .compact
-                                case .compact: panelState = .collapsed
-                                case .collapsed: break
+                                if value.translation.height > 0 {
+                                    // Swipe down — collapse
+                                    switch panelState {
+                                    case .expanded: panelState = .compact
+                                    case .compact: panelState = .collapsed
+                                    case .collapsed: break
+                                    }
+                                } else {
+                                    // Swipe up — expand
+                                    switch panelState {
+                                    case .collapsed: panelState = .compact
+                                    case .compact: panelState = .expanded
+                                    case .expanded: break
+                                    }
                                 }
                             }
                         }
