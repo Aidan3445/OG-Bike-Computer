@@ -10,7 +10,9 @@ import SwiftUI
 struct RouteList: View {
     @ObservedObject var store: RouteStore
     @ObservedObject var workout: WorkoutManager
+    #if DEBUG
     @ObservedObject var simulator: RideSimulator
+    #endif
     @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
@@ -24,7 +26,7 @@ struct RouteList: View {
                             .foregroundStyle(.secondary)
                         Text("No Routes")
                             .font(.headline)
-                        Text("Import a GPX on your iPhone and send it here.")
+                        Text("Import a from your phone.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -66,11 +68,13 @@ struct RouteList: View {
                             }
                         }
 
+                        #if DEBUG
                         NavigationLink {
                             SimulationView(store: store, workout: workout, simulator: simulator)
                         } label: {
                             Label("Simulate", systemImage: "play.circle")
                         }
+                        #endif
 
                         Text(formattedStorageSize(store.storageSize))
                             .font(.caption)

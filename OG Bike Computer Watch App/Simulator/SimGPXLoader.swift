@@ -5,6 +5,7 @@
 //  Created by Aidan Weinberg on 3/6/26.
 //
 
+#if DEBUG
 import Foundation
 import CoreLocation
 
@@ -132,3 +133,4 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
         currentText = ""
     }
 }
+#endif

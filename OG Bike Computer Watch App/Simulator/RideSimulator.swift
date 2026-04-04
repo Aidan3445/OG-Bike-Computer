@@ -5,6 +5,7 @@
 //  Created by Aidan Weinberg on 3/6/26.
 //
 
+#if DEBUG
 import Foundation
 import CoreLocation
 import Combine
@@ -157,3 +158,4 @@ class RideSimulator: ObservableObject {
             timestamp: Date())
     }
 }
+#endif
