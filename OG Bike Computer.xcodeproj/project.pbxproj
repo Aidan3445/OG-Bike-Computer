@@ -197,7 +197,6 @@
 			);
 			fileSystemSynchronizedGroups = (
 				DD21F8102F7984D20001B407 /* OG Bike Computer Widget */,
-				DD3C3B432F80DB800058DD87 /* ci_scripts */,
 				DD9A560A2F535D64001156B1 /* Shared */,
 			);
 			name = "OG Bike Computer WidgetExtension";
@@ -224,7 +223,6 @@
 				DD21F81D2F7984D30001B407 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				DD3C3B432F80DB800058DD87 /* ci_scripts */,
 				DD5D2CC52F525E5900988CBB /* OG Bike Computer */,
 				DD9A560A2F535D64001156B1 /* Shared */,
 			);
@@ -248,7 +246,6 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				DD3C3B432F80DB800058DD87 /* ci_scripts */,
 				DD5D2CD42F525E5B00988CBB /* OG Bike Computer Watch App */,
 				DD9A560A2F535D64001156B1 /* Shared */,
 			);
