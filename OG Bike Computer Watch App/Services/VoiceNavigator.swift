@@ -23,7 +23,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private let groupTurnThreshold: Double = 150 // meters between turns to group them
 
     private let atTurnThreshold: Double = 20
-    private let cooldown: TimeInterval = 6
+    private let cooldown: TimeInterval = 4
     private let minTimeBeforeTurn: TimeInterval = 4
 
     // State
@@ -39,6 +39,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var pendingHalfway = false  // deferred when canSpeak is false
     private var announcedArrival = false
     private var announcedOffRoute = false
+    private var announcedDrifting = false
     private var wasOffRoute = false
     private var lastAnnouncementTime: Date = .distantPast
     private var lastTurnAlertTime: Date = .distantPast  // for minimum gap enforcement
@@ -72,6 +73,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         pendingHalfway = false
         announcedArrival = false
         announcedOffRoute = false
+        announcedDrifting = false
         wasOffRoute = false
         lastAnnouncementTime = .distantPast
         lastTurnAlertTime = .distantPast
@@ -93,6 +95,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         pendingHalfway = false
         announcedArrival = false
         announcedOffRoute = false
+        announcedDrifting = false
         wasOffRoute = false
         lastAnnouncementTime = .distantPast
         lastTurnAlertTime = .distantPast
@@ -142,11 +145,24 @@ class VoiceNavigator: NSObject, ObservableObject {
         } else if wasOffRoute {
             wasOffRoute = false
             announcedOffRoute = false
+            announcedDrifting = false
             // Calculate direction to continue along route after rejoining
             let routeBearing = nav.currentBearing
             let continueDirection = voiceDirectionToTarget(heading: heading, bearingToTarget: routeBearing)
             speak("Back on route. \(continueDirection.capitalized) to continue.", mode: navEvents.backOnRouteAlert, category: "backOnRoute")
             return
+        }
+
+        // Drifting warning — gentle alert before full off-route
+        if nav.isDrifting {
+            if !announcedDrifting {
+                announcedDrifting = true
+                let direction = voiceDirectionToTarget(heading: heading, bearingToTarget: nav.bearingToRoute)
+                speak("Route is 50 feet ahead. \(direction.capitalized) to rejoin.", mode: navEvents.offRouteAlert, category: "drifting")
+            }
+            // Don't return — still process turn alerts
+        } else if !nav.isOffRoute {
+            announcedDrifting = false
         }
 
         if let turn = nav.nextTurn, turn.index != currentTurnIndex {
@@ -310,8 +326,8 @@ class VoiceNavigator: NSObject, ObservableObject {
             }
 
             // Suppress approach prompts when not actively moving
+            // Don't mark as fired — retry when rider starts moving again
             if !isAtTurn && !isActivelyMoving {
-                fired.insert(i)
                 continue
             }
 
@@ -324,7 +340,8 @@ class VoiceNavigator: NSObject, ObservableObject {
 
             // Minimum time gap: skip approach alerts if too soon after the
             // auto "next turn" announcement. Never skip at-turn alerts.
-            if !isAtTurn && isTurnAlert {
+            // Bypass gap enforcement within 200m of the turn to ensure final approach alerts fire.
+            if !isAtTurn && isTurnAlert && distance > 200 {
                 let gap = Date().timeIntervalSince(lastTurnAlertTime)
                 if gap < preferences.turnAlerts.minimumAlertGap {
                     fired.insert(i)

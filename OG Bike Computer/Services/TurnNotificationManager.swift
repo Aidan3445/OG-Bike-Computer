@@ -11,7 +11,8 @@ import UserNotifications
 class TurnNotificationManager {
     static let shared = TurnNotificationManager()
 
-    private static let notificationIdentifier = "bike-nav-turn"
+    private var notificationCounter: Int = 0
+    private var postedIdentifiers: [String] = []
 
     private init() {}
 
@@ -30,9 +31,13 @@ class TurnNotificationManager {
 
     // MARK: - Post / Update
 
-    /// Posts or replaces the navigation notification.
+    /// Posts a navigation notification with a unique identifier.
     /// All turn alerts use `.timeSensitive` to wake the phone screen.
     func post(text: String) {
+        notificationCounter += 1
+        let identifier = "bike-nav-turn-\(notificationCounter)"
+        postedIdentifiers.append(identifier)
+
         let content = UNMutableNotificationContent()
         content.title = "Navigation"
         content.body = text
@@ -41,7 +46,7 @@ class TurnNotificationManager {
         content.sound = nil
 
         let request = UNNotificationRequest(
-            identifier: Self.notificationIdentifier,
+            identifier: identifier,
             content: content,
             trigger: nil // deliver immediately
         )
@@ -55,6 +60,10 @@ class TurnNotificationManager {
 
     /// Posts an off-route notification
     func postOffRoute(message: String) {
+        notificationCounter += 1
+        let identifier = "bike-nav-offroute-\(notificationCounter)"
+        postedIdentifiers.append(identifier)
+
         let content = UNMutableNotificationContent()
         content.title = "Off Route"
         content.body = message
@@ -63,7 +72,7 @@ class TurnNotificationManager {
         content.sound = nil
 
         let request = UNNotificationRequest(
-            identifier: Self.notificationIdentifier,
+            identifier: identifier,
             content: content,
             trigger: nil
         )
@@ -75,10 +84,12 @@ class TurnNotificationManager {
 
     func clearAll() {
         UNUserNotificationCenter.current().removeDeliveredNotifications(
-            withIdentifiers: [Self.notificationIdentifier]
+            withIdentifiers: postedIdentifiers
         )
         UNUserNotificationCenter.current().removePendingNotificationRequests(
-            withIdentifiers: [Self.notificationIdentifier]
+            withIdentifiers: postedIdentifiers
         )
+        postedIdentifiers.removeAll()
+        notificationCounter = 0
     }
 }

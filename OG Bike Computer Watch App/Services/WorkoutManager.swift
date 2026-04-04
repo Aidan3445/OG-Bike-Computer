@@ -1318,7 +1318,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.mirroringRetryWorkItem = nil
         }
         mirroringRetryWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
     }
 }
 

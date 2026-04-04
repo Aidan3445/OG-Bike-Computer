@@ -30,18 +30,18 @@ struct PhoneAlertPreferences: Codable, Equatable, Hashable {
     var liveActivityShowMap: Bool
 
     static let `default` = PhoneAlertPreferences(
-        mode: .off,
+        mode: .liveActivity,
         liveActivityShowMap: true
     )
 
-    init(mode: PhoneAlertMode = .off, liveActivityShowMap: Bool = true) {
+    init(mode: PhoneAlertMode = .liveActivity, liveActivityShowMap: Bool = true) {
         self.mode = mode
         self.liveActivityShowMap = liveActivityShowMap
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        mode = try c.decodeIfPresent(PhoneAlertMode.self, forKey: .mode) ?? .off
+        mode = try c.decodeIfPresent(PhoneAlertMode.self, forKey: .mode) ?? .liveActivity
         liveActivityShowMap = try c.decodeIfPresent(Bool.self, forKey: .liveActivityShowMap) ?? true
     }
 }
