@@ -8,21 +8,12 @@
 import SwiftUI
 import MapKit
 import CoreLocation
-import os
-
-private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "RideDetail")
 
 struct RideDetailView: View {
     let ride: RideSummary
     let rideStore: RideStore
     @ObservedObject private var unitState = UnitState.shared
     @ObservedObject private var uploadManager = UploadManager.shared
-
-    init(ride: RideSummary, rideStore: RideStore) {
-        self.ride = ride
-        self.rideStore = rideStore
-        logger.info("[RideDetail] init: ride=\(ride.id) '\(ride.name)' points=\(ride.pointCount) dist=\(ride.distance)")
-    }
 
     enum PanelState {
         case collapsed, compact, expanded
@@ -33,19 +24,17 @@ struct RideDetailView: View {
     @State private var showShareSheet = false
     @State private var isUploadingToStrava = false
     @State private var uploadError: String?
-    @State private var segments: [SpeedPolyline] = []
+    @State private var coloredSegments: [ColoredSegment] = []
     @State private var startCoord: CLLocationCoordinate2D?
     @State private var endCoord: CLLocationCoordinate2D?
     @State private var elevationExtremes: (high: ElevPoint, low: ElevPoint)?
     @State private var mileMarkers: [MileMarker] = []
 
     var body: some View {
-        let _ = logger.info("[RideDetail] body: rendering for ride \(self.ride.id) '\(self.ride.name)'")
-        let _ = logger.info("[RideDetail] body: segments=\(self.segments.count) start=\(self.startCoord != nil) end=\(self.endCoord != nil) elevExtremes=\(self.elevationExtremes != nil) markers=\(self.mileMarkers.count)")
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
-                ForEach(segments) { seg in
+                ForEach(coloredSegments) { seg in
                     MapPolyline(coordinates: seg.coords)
                         .stroke(seg.color, lineWidth: 4)
                 }
@@ -286,7 +275,9 @@ struct RideDetailView: View {
         } message: {
             Text(uploadError ?? "")
         }
-        .onAppear { loadTrack() }
+        .onAppear {
+            buildRideCache()
+        }
     }
 
     private func uploadToStrava() {
@@ -347,147 +338,122 @@ struct RideDetailView: View {
         return stats
     }
 
-    private func loadTrack() {
-        logger.info("[RideDetail] loadTrack: starting for ride \(ride.id)")
+    // MARK: - Track loading (synchronous, matches RouteDetailView pattern)
+
+    private func buildRideCache() {
         let url = rideStore.trackURL(for: ride)
-        logger.info("[RideDetail] loadTrack: trackURL = \(url.path)")
-        guard let data = try? Data(contentsOf: url) else {
-            logger.info("[RideDetail] loadTrack: failed to read track data from disk")
-            return
+        guard let data = try? Data(contentsOf: url) else { return }
+        let pts = TrackEncoder.decode(data)
+        let locations = TrackEncoder.toLocations(pts)
+        guard locations.count >= 2 else { return }
+
+        startCoord        = locations.first?.coordinate
+        endCoord          = locations.last?.coordinate
+        mileMarkers       = computeRideMileMarkers(locations: locations)
+        elevationExtremes = computeElevExtremes(locations: locations)
+        coloredSegments   = buildColoredSegments(locations: locations, segmentCount: 500)
+    }
+}
+
+// MARK: - Speed coloring
+
+private struct ColoredSegment: Identifiable {
+    let id = UUID()
+    let coords: [CLLocationCoordinate2D]
+    let color: Color
+}
+
+/// Splits the track into `segmentCount` equal-sized chunks, computes average speed per chunk,
+/// then merges adjacent chunks that share the same quantized color step — so the rendered
+/// MapPolyline count equals the number of color *transitions*, not the chunk count.
+/// `colorSteps` controls color resolution: 20 gives 5% increments, plenty for a gradient.
+private func buildColoredSegments(
+    locations: [CLLocation],
+    segmentCount: Int = 500,
+    colorSteps: Int = 20
+) -> [ColoredSegment] {
+    guard locations.count >= 2 else { return [] }
+
+    let chunkSize = max(1, locations.count / segmentCount)
+
+    // ── Step 1: compute per-chunk average speed ──────────────────────────────
+    // Each chunk's last point == next chunk's first point, so polylines connect.
+    var chunks: [(coords: [CLLocationCoordinate2D], avgSpeed: Double)] = []
+    var i = 0
+    while i < locations.count - 1 {
+        let end   = min(i + chunkSize + 1, locations.count)
+        let slice = Array(locations[i..<end])
+
+        var totalDist = 0.0, totalTime = 0.0
+        for j in 1..<slice.count {
+            let d  = slice[j].distance(from: slice[j - 1])
+            let dt = slice[j].timestamp.timeIntervalSince(slice[j - 1].timestamp)
+            totalDist += d
+            if dt > 0 { totalTime += dt }
         }
-        logger.info("[RideDetail] loadTrack: read \(data.count) bytes")
-        let points = TrackEncoder.decode(data)
-        logger.info("[RideDetail] loadTrack: decoded \(points.count) track points")
-        let locations = TrackEncoder.toLocations(points)
-        logger.info("[RideDetail] loadTrack: converted to \(locations.count) CLLocations")
-        guard locations.count >= 2 else {
-            logger.info("[RideDetail] loadTrack: not enough locations (<2), bailing")
-            return
-        }
-
-        startCoord = locations.first?.coordinate
-        endCoord = locations.last?.coordinate
-        logger.info("[RideDetail] loadTrack: set start/end coords")
-
-        // Build cumulative distances and per-segment speeds
-        let sampleInterval: Double = 30 // meters — speed is averaged over this window
-        var cumDists: [Double] = [0]
-        var rawSpeeds: [Double] = [] // one per segment (between consecutive points)
-        for i in 1..<locations.count {
-            let segDist = locations[i].distance(from: locations[i - 1])
-            let dt = locations[i].timestamp.timeIntervalSince(locations[i - 1].timestamp)
-            cumDists.append(cumDists.last! + segDist)
-            rawSpeeds.append(dt > 0 ? segDist / dt : 0)
-        }
-
-        // Build speed samples at fixed intervals for smooth color curve
-        let totalDist = cumDists.last ?? 0
-        var speedSamples: [(dist: Double, speed: Double)] = []
-        var windowStart = 0
-        var sampleDist: Double = 0
-        while sampleDist <= totalDist {
-            // Average raw speeds of all segments within ±sampleInterval/2 of this distance
-            let lo = sampleDist - sampleInterval / 2
-            let hi = sampleDist + sampleInterval / 2
-            var sum: Double = 0
-            var count = 0
-            for j in windowStart..<rawSpeeds.count {
-                let segMid = (cumDists[j] + cumDists[j + 1]) / 2
-                if segMid < lo { windowStart = j; continue }
-                if segMid > hi { break }
-                sum += rawSpeeds[j]
-                count += 1
-            }
-            speedSamples.append((sampleDist, count > 0 ? sum / Double(count) : 0))
-            sampleDist += sampleInterval
-        }
-
-        // Use percentile-based range so outliers don't wash out the colors
-        let movingSpeeds = speedSamples.map(\.speed).filter { $0 > 0.5 }.sorted()
-        let p10 = movingSpeeds.isEmpty ? 0.0 : movingSpeeds[movingSpeeds.count / 10]
-        let p90 = movingSpeeds.isEmpty ? 1.0 : movingSpeeds[min(movingSpeeds.count - 1, movingSpeeds.count * 9 / 10)]
-        let speedRange = max(p90 - p10, 0.1)
-        logger.info("[RideDetail] loadTrack: \(speedSamples.count) speed samples, p10=\(p10) p90=\(p90)")
-
-        // Interpolate smooth speed for each original GPS point from the sample curve
-        func interpolatedSpeed(at dist: Double) -> Double {
-            guard speedSamples.count >= 2 else { return speedSamples.first?.speed ?? 0 }
-            // Binary search for the bracketing samples
-            var lo = 0, hi = speedSamples.count - 1
-            while lo < hi - 1 {
-                let mid = (lo + hi) / 2
-                if speedSamples[mid].dist <= dist { lo = mid } else { hi = mid }
-            }
-            let s0 = speedSamples[lo], s1 = speedSamples[hi]
-            let gap = s1.dist - s0.dist
-            guard gap > 0 else { return s0.speed }
-            let t = max(0, min(1, (dist - s0.dist) / gap))
-            return s0.speed + (s1.speed - s0.speed) * t
-        }
-
-        // Build colored segments using original GPS coordinates with smooth colors
-        var segs: [SpeedPolyline] = []
-        var batchCoords: [CLLocationCoordinate2D] = [locations[0].coordinate]
-        var batchColor = speedColor(ratio: max(0, min(1, (interpolatedSpeed(at: 0) - p10) / speedRange)))
-
-        for i in 1..<locations.count {
-            let speed = interpolatedSpeed(at: cumDists[i])
-            let ratio = max(0, min(1, (speed - p10) / speedRange))
-            let color = speedColor(ratio: ratio)
-
-            if color == batchColor {
-                batchCoords.append(locations[i].coordinate)
-            } else {
-                batchCoords.append(locations[i].coordinate)
-                segs.append(SpeedPolyline(coords: batchCoords, color: batchColor))
-                batchCoords = [locations[i].coordinate]
-                batchColor = color
-            }
-        }
-        if batchCoords.count >= 2 {
-            segs.append(SpeedPolyline(coords: batchCoords, color: batchColor))
-        }
-        segments = segs
-        logger.info("[RideDetail] loadTrack: built \(segs.count) speed segments")
-
-        // Mile markers
-        mileMarkers = computeRideMileMarkers(locations: locations)
-        logger.info("[RideDetail] loadTrack: computed \(mileMarkers.count) mile markers")
-
-        // Elevation extremes
-        let minElevDiff: Double = 50
-        let withElev = locations.filter { $0.verticalAccuracy >= 0 }
-        logger.info("[RideDetail] loadTrack: \(withElev.count) points with valid elevation")
-        if let highest = withElev.max(by: { $0.altitude < $1.altitude }),
-           let lowest = withElev.min(by: { $0.altitude < $1.altitude }),
-           highest.altitude - lowest.altitude >= minElevDiff {
-            elevationExtremes = (
-                high: ElevPoint(coordinate: highest.coordinate, elevation: highest.altitude),
-                low: ElevPoint(coordinate: lowest.coordinate, elevation: lowest.altitude))
-            logger.info("[RideDetail] loadTrack: elevation extremes set (high=\(highest.altitude), low=\(lowest.altitude))")
-        } else {
-            logger.info("[RideDetail] loadTrack: no significant elevation extremes found")
-        }
-        logger.info("[RideDetail] loadTrack: done")
+        chunks.append((coords: slice.map(\.coordinate),
+                       avgSpeed: totalTime > 0 ? totalDist / totalTime : 0))
+        i += chunkSize
     }
 
-    /// Red → yellow → green gradient. Lightly quantized (32 steps) so nearby
-    /// colors batch into single polylines for performance while looking smooth.
-    private func speedColor(ratio: Double) -> Color {
-        let step = (ratio * 31).rounded() / 31
-        let r: Double
-        let g: Double
-        if step < 0.5 {
-            let t = step * 2
-            r = 1.0
-            g = t
-        } else {
-            let t = (step - 0.5) * 2
-            r = 1.0 - t
-            g = 1.0
-        }
-        return Color(red: r, green: g, blue: 0)
+    // ── Step 2: normalize speeds to p10–p90 ──────────────────────────────────
+    let speeds = chunks.map(\.avgSpeed).filter { $0 > 0.5 }.sorted()
+    guard !speeds.isEmpty else {
+        return [ColoredSegment(coords: locations.map(\.coordinate), color: .blue)]
     }
+    let p10   = speeds[speeds.count / 10]
+    let p90   = speeds[min(speeds.count - 1, speeds.count * 9 / 10)]
+    let range = max(p90 - p10, 0.1)
+
+    func stepFor(speed: Double) -> Int {
+        let ratio = max(0.0, min(1.0, (speed - p10) / range))
+        return Int((ratio * Double(colorSteps - 1)).rounded())
+    }
+
+    // ── Step 3: merge adjacent chunks with the same color step ───────────────
+    var segments: [ColoredSegment] = []
+    var batchCoords = chunks[0].coords
+    var batchStep   = stepFor(speed: chunks[0].avgSpeed)
+
+    for chunk in chunks.dropFirst() {
+        let step = stepFor(speed: chunk.avgSpeed)
+        if step == batchStep {
+            // Same color — extend batch, drop duplicate shared endpoint
+            batchCoords.append(contentsOf: chunk.coords.dropFirst())
+        } else {
+            // Color changed — flush current batch, start new one
+            segments.append(ColoredSegment(
+                coords: batchCoords,
+                color:  rideSpeedColor(ratio: Double(batchStep) / Double(colorSteps - 1))
+            ))
+            batchCoords = chunk.coords
+            batchStep   = step
+        }
+    }
+    if !batchCoords.isEmpty {
+        segments.append(ColoredSegment(
+            coords: batchCoords,
+            color:  rideSpeedColor(ratio: Double(batchStep) / Double(colorSteps - 1))
+        ))
+    }
+    return segments
+}
+
+/// Red → yellow → green gradient.
+private func rideSpeedColor(ratio: Double) -> Color {
+    if ratio < 0.5 { return Color(red: 1.0, green: ratio * 2,           blue: 0) }
+    else           { return Color(red: 1.0 - (ratio - 0.5) * 2, green: 1.0, blue: 0) }
+}
+
+// MARK: - Elevation extremes
+
+private func computeElevExtremes(locations: [CLLocation]) -> (high: ElevPoint, low: ElevPoint)? {
+    let valid = locations.filter { $0.verticalAccuracy >= 0 }
+    guard let high = valid.max(by: { $0.altitude < $1.altitude }),
+          let low  = valid.min(by: { $0.altitude < $1.altitude }),
+          high.altitude - low.altitude >= 50 else { return nil }
+    return (high: ElevPoint(coordinate: high.coordinate, elevation: high.altitude),
+            low:  ElevPoint(coordinate: low.coordinate,  elevation: low.altitude))
 }
 
 private struct StatItem: View {
@@ -510,8 +476,4 @@ struct ElevPoint {
     let elevation: Double
 }
 
-struct SpeedPolyline: Identifiable {
-    let id = UUID()
-    let coords: [CLLocationCoordinate2D]
-    let color: Color
-}
+
