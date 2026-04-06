@@ -35,6 +35,12 @@ struct BatterySettingsView: View {
                         : "Change below in Efficiency Settings."
                 )
                 batteryTipRow(
+                    title: "Map Detail",
+                    value: userSettings.settings.ridePreferences.mapScreen.mapDetail.label,
+                    impact: userSettings.settings.ridePreferences.mapScreen.mapDetail.batteryImpact,
+                    instruction: "Change in Map Screen settings."
+                )
+                batteryTipRow(
                     title: "Display Brightness & Always-On",
                     value: nil,
                     impact: "Varies",
@@ -94,6 +100,22 @@ struct BatterySettingsView: View {
 
             // MARK: - Related Settings
             Section {
+                NavigationLink {
+                    MapCustomizationView(userSettings: userSettings)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Map Screen")
+                            Text("Map background, route colors, overlays")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "map")
+                            .foregroundStyle(.blue)
+                    }
+                }
+
                 NavigationLink {
                     RideSettingsView(userSettings: userSettings)
                 } label: {

@@ -39,6 +39,7 @@ struct SettingsView: View {
     private var mapScreenSummary: String {
         let map = userSettings.settings.ridePreferences.mapScreen
         var parts: [String] = []
+        if map.mapDetail != .off { parts.append(map.mapDetail.label) }
         parts.append(map.routeAheadColor.label)
         parts.append("\(Int(map.defaultZoom))m zoom")
         if !map.showTurnOverlay { parts.append("Overlay off") }
