@@ -880,7 +880,9 @@ private struct BreadcrumbMapView: View {
                 distance: viewDistance * 2.0,
                 heading: useCompassHeading ? bearing : 0,
                 pitch: 0
-            )))) {
+            ))),
+                interactionModes: []
+            ) {
                 routeContent(location: location)
             }
             .mapStyle(.standard(pointsOfInterest: .excludingAll))

@@ -233,7 +233,7 @@ struct RideDetailView: View {
                         Label("Export GPX", systemImage: "square.and.arrow.up")
                     }
 
-                    let alreadyOnStrava = ride.uploads?.contains(where: { $0.service == .strava }) == true
+                    let alreadyOnStrava = ride.uploads?.contains(where: { $0.service == .strava && $0.isComplete }) == true
                     if KeychainHelper.loadTokens(for: .strava) != nil && !alreadyOnStrava {
                         Button {
                             uploadToStrava()
@@ -243,7 +243,7 @@ struct RideDetailView: View {
                         .disabled(isUploadingToStrava)
                     }
 
-                    if let uploads = ride.uploads, !uploads.isEmpty {
+                    if let uploads = ride.uploads?.filter({ $0.isComplete }), !uploads.isEmpty {
                         Divider()
                         ForEach(uploads) { upload in
                             if let urlString = upload.webURL, let url = URL(string: urlString) {
