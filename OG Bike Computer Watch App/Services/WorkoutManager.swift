@@ -371,6 +371,7 @@ class WorkoutManager: NSObject, ObservableObject {
 
         VoiceNavigator.shared.announceSplit(
             number: currentSplitNumber,
+            splitDistance: splitDist,
             splitStats: splitStats,
             rideStats: rideStats,
             metrics: splitPrefs.metrics,
@@ -383,6 +384,16 @@ class WorkoutManager: NSObject, ObservableObject {
         splitMaxSpeed = 0
         splitHRSum = 0
         splitHRCount = 0
+    }
+
+    func currentRideStats() -> SplitStats {
+        SplitStats(
+            movingTime: movingTime,
+            distance: totalDistance,
+            averageSpeed: movingTime > 0 ? totalDistance / movingTime : 0,
+            maxSpeed: maxSpeed,
+            averageHeartRate: heartRateSampleCount > 0 ? averageHeartRate : 0
+        )
     }
 
     private func commitTentativeBuffer() {
@@ -576,6 +587,9 @@ class WorkoutManager: NSObject, ObservableObject {
                 autoPauseState = .paused
                 pauseSession()
                 slowSampleCount = 0
+                if navigationAlerts.autoPauseAlerts.enabled {
+                    VoiceNavigator.shared.announceAutoPause(mode: navigationAlerts.autoPauseAlerts.pauseMode)
+                }
             }
 
         case .paused:
@@ -606,6 +620,9 @@ class WorkoutManager: NSObject, ObservableObject {
                     commitTentativeBuffer()
                     resumeSession()
                     autoPauseState = .moving
+                    if navigationAlerts.autoPauseAlerts.enabled {
+                        VoiceNavigator.shared.announceAutoResume(mode: navigationAlerts.autoPauseAlerts.resumeMode)
+                    }
                 }
             } else {
                 // False alarm — discard buffer, stay paused
@@ -1024,7 +1041,7 @@ class WorkoutManager: NSObject, ObservableObject {
 
         let activity = currentActivity
 
-        let avgSpeed = elapsedTime > 0 ? totalDistance / elapsedTime : 0
+        let avgSpeed = movingTime > 0 ? totalDistance / movingTime : 0
         var elevGain: Double = 0
         var elevLoss: Double = 0
         if recordedLocations.count > 1 {

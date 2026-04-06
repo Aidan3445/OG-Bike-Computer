@@ -84,6 +84,29 @@ enum RouteColor: String, Codable, CaseIterable, Hashable {
     var label: String { rawValue.capitalized }
 }
 
+// MARK: - Map Detail Level
+
+enum MapDetail: String, Codable, CaseIterable, Identifiable, Hashable {
+    case off
+    case on
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .off: return "Off"
+        case .on: return "On"
+        }
+    }
+
+    var batteryImpact: String {
+        switch self {
+        case .off: return "Least demanding"
+        case .on: return "Most demanding"
+        }
+    }
+}
+
 // MARK: - Map Screen Config
 
 struct MapScreenConfig: Codable, Equatable, Hashable {
@@ -107,6 +130,8 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
     var routeAheadColor: RouteColor
     /// Show map overlay on metric screens when turns approach
     var showTurnOverlay: Bool
+    /// MapKit background detail level (off = black background, on = full map tiles)
+    var mapDetail: MapDetail
 
     static let maxSecondaryStats = 4
 
@@ -120,7 +145,8 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         zoomMax: 1600,
         defaultZoom: 400,
         routeAheadColor: .white,
-        showTurnOverlay: true
+        showTurnOverlay: true,
+        mapDetail: .off
     )
 
     /// Compute 4 zoom levels geometrically spaced between min and max
@@ -149,7 +175,8 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         zoomMax: Double = 1600,
         defaultZoom: Double = 400,
         routeAheadColor: RouteColor = .white,
-        showTurnOverlay: Bool = true
+        showTurnOverlay: Bool = true,
+        mapDetail: MapDetail = .off
     ) {
         self.primaryStat = primaryStat
         self.secondaryStats = secondaryStats
@@ -161,6 +188,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         self.defaultZoom = defaultZoom
         self.routeAheadColor = routeAheadColor
         self.showTurnOverlay = showTurnOverlay
+        self.mapDetail = mapDetail
     }
 
     init(from decoder: Decoder) throws {
@@ -175,5 +203,6 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         defaultZoom = try c.decodeIfPresent(Double.self, forKey: .defaultZoom) ?? 400
         routeAheadColor = try c.decodeIfPresent(RouteColor.self, forKey: .routeAheadColor) ?? .white
         showTurnOverlay = try c.decodeIfPresent(Bool.self, forKey: .showTurnOverlay) ?? true
+        mapDetail = try c.decodeIfPresent(MapDetail.self, forKey: .mapDetail) ?? .off
     }
 }

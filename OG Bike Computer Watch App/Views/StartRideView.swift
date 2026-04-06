@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import WatchKit
 
 struct StartRideView: View {
     let route: Route?
@@ -13,6 +14,7 @@ struct StartRideView: View {
     @ObservedObject private var unitState = UnitState.shared
 
     @State private var isLoading = false
+    @State private var extendedSession: WKExtendedRuntimeSession?
 
     var body: some View {
         let _ = unitState.preferences
@@ -67,6 +69,15 @@ struct StartRideView: View {
         .scrollIndicators(.visible)
         .navigationTitle("Start")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            let session = WKExtendedRuntimeSession()
+            session.start()
+            extendedSession = session
+        }
+        .onDisappear {
+            extendedSession?.invalidate()
+            extendedSession = nil
+        }
     }
 
     private func startRide(activity: ActivityType) {

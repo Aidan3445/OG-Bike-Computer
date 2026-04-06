@@ -8,6 +8,28 @@
 import SafariServices
 import SwiftUI
 
+// MARK: - Unit-Aware Formatting Helpers
+
+private func zoomLabel(_ meters: Double) -> String {
+    if currentUnits.distance == .miles {
+        let feet = meters * 3.28084
+        if feet >= 2640 {
+            let miles = meters / 1609.34
+            if miles == Double(Int(miles)) { return "\(Int(miles)) mi" }
+            return String(format: "%.1f mi", miles)
+        }
+        return "\(Int(round(feet))) ft"
+    }
+    return "\(Int(meters))m"
+}
+
+private func weightLabel(_ kg: Double) -> String {
+    if currentUnits.distance == .miles {
+        return "\(String(format: "%.0f", kg * 2.20462)) lbs"
+    }
+    return "\(String(format: "%.1f", kg)) kg"
+}
+
 struct SettingsView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
@@ -39,11 +61,14 @@ struct SettingsView: View {
     private var mapScreenSummary: String {
         let map = userSettings.settings.ridePreferences.mapScreen
         var parts: [String] = []
+        if map.mapDetail != .off { parts.append(map.mapDetail.label) }
         parts.append(map.routeAheadColor.label)
-        parts.append("\(Int(map.defaultZoom))m zoom")
+        parts.append("\(zoomLabel(map.defaultZoom)) zoom")
         if !map.showTurnOverlay { parts.append("Overlay off") }
         return parts.joined(separator: " \u{2022} ")
     }
+
+    private var isImperial: Bool { currentUnits.distance == .miles }
 
     private var rideSettingsSummary: String {
         let ride = userSettings.settings.ridePreferences
@@ -103,7 +128,7 @@ struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Rider Profile")
                                 Text(
-                                    "\(String(format: "%.0f", userSettings.settings.riderWeight * 2.20462)) lbs \u{2022} \(userSettings.settings.activeBikeName) (\(String(format: "%.0f", userSettings.settings.bikeWeight * 2.20462)) lbs)"
+                                    "\(weightLabel(userSettings.settings.riderWeight)) \u{2022} \(userSettings.settings.activeBikeName) (\(weightLabel(userSettings.settings.bikeWeight)))"
                                 )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -326,17 +351,48 @@ struct RiderProfileView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @State private var showAddBike = false
     @State private var newBikeName = ""
-    @State private var newBikeWeight = "22"  // lbs
+    @State private var newBikeWeight = ""
     @State private var weightText = ""
     @State private var heightText = ""
     @State private var bikeWeightText = ""
     @FocusState private var isFieldFocused: Bool
 
+    private var isImperial: Bool { currentUnits.distance == .miles }
+
     private var heightString: String {
-        let totalInches = userSettings.settings.riderHeight / 2.54
-        let feet = Int(totalInches) / 12
-        let inches = Int(totalInches) % 12
-        return "\(feet)'\(inches)\""
+        if isImperial {
+            let totalInches = userSettings.settings.riderHeight / 2.54
+            let feet = Int(totalInches) / 12
+            let inches = Int(totalInches) % 12
+            return "\(feet)'\(inches)\""
+        } else {
+            return "\(Int(round(userSettings.settings.riderHeight))) cm"
+        }
+    }
+
+    private var weightUnit: String { isImperial ? "lbs" : "kg" }
+    private var heightUnit: String { isImperial ? "in" : "cm" }
+
+    private func kgToDisplay(_ kg: Double) -> String {
+        if isImperial {
+            return "\(Int(round(kg * 2.20462)))"
+        }
+        return String(format: "%.1f", kg)
+    }
+
+    private func displayToKg(_ value: Double) -> Double {
+        isImperial ? value / 2.20462 : value
+    }
+
+    private func cmToDisplay(_ cm: Double) -> String {
+        if isImperial {
+            return "\(Int(round(cm / 2.54)))"
+        }
+        return "\(Int(round(cm)))"
+    }
+
+    private func displayToCm(_ value: Double) -> Double {
+        isImperial ? value * 2.54 : value
     }
 
     var body: some View {
@@ -346,45 +402,45 @@ struct RiderProfileView: View {
                 HStack {
                     Label("Weight", systemImage: "scalemass")
                     Spacer()
-                    TextField("lbs", text: $weightText)
+                    TextField(weightUnit, text: $weightText)
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 80)
                         .focused($isFieldFocused)
                         .onChange(of: weightText) { _, newValue in
-                            if let lbs = Double(newValue) {
-                                userSettings.settings.riderWeight = lbs / 2.20462
+                            if let val = Double(newValue) {
+                                userSettings.settings.riderWeight = displayToKg(val)
                             }
                         }
-                    Text("lbs")
+                    Text(weightUnit)
                         .foregroundStyle(.secondary)
                 }
                 HStack {
                     Label("Height", systemImage: "ruler")
                     Spacer()
-                    TextField("in", text: $heightText)
+                    TextField(heightUnit, text: $heightText)
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 80)
                         .focused($isFieldFocused)
                         .onChange(of: heightText) { _, newValue in
-                            if let inches = Double(newValue) {
-                                userSettings.settings.riderHeight = inches * 2.54
+                            if let val = Double(newValue) {
+                                userSettings.settings.riderHeight = displayToCm(val)
                             }
                         }
-                    Text("in")
+                    Text(heightUnit)
                         .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Rider")
             } footer: {
                 Text(
-                    "\(String(format: "%.0f", userSettings.settings.riderWeight * 2.20462)) lbs \u{2022} \(heightString)"
+                    "\(weightLabel(userSettings.settings.riderWeight)) \u{2022} \(heightString)"
                 )
             }
             .onAppear {
-                weightText = "\(Int(round(userSettings.settings.riderWeight * 2.20462)))"
-                heightText = "\(Int(round(userSettings.settings.riderHeight / 2.54)))"
+                weightText = kgToDisplay(userSettings.settings.riderWeight)
+                heightText = cmToDisplay(userSettings.settings.riderHeight)
             }
 
             // MARK: Bikes
@@ -406,9 +462,7 @@ struct RiderProfileView: View {
                                 Text(bike.name)
                                     .font(.body)
                                     .foregroundStyle(.primary)
-                                Text(
-                                    "\(String(format: "%.1f", bike.weight * 2.20462)) lbs"
-                                )
+                                Text(weightLabel(bike.weight))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             }
@@ -473,21 +527,26 @@ struct RiderProfileView: View {
                     HStack {
                         Label("Weight", systemImage: "scalemass")
                         Spacer()
-                        TextField("lbs", text: $bikeWeightText)
+                        TextField(weightUnit, text: $bikeWeightText)
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 80)
                             .focused($isFieldFocused)
                             .onChange(of: bikeWeightText) { _, newValue in
-                                if let lbs = Double(newValue) {
-                                    userSettings.settings.bikes[activeIdx].weight = lbs / 2.20462
+                                if let val = Double(newValue) {
+                                    userSettings.settings.bikes[activeIdx].weight = displayToKg(val)
                                 }
                             }
-                        Text("lbs")
+                        Text(weightUnit)
                             .foregroundStyle(.secondary)
                     }
                     .onAppear {
-                        bikeWeightText = String(format: "%.1f", userSettings.settings.bikes[activeIdx].weight * 2.20462)
+                        bikeWeightText = kgToDisplay(userSettings.settings.bikes[activeIdx].weight)
+                    }
+                    .onChange(of: userSettings.settings.activeBikeID) { _, _ in
+                        if let idx = userSettings.settings.bikes.firstIndex(where: { $0.id == userSettings.settings.activeBikeID }) {
+                            bikeWeightText = kgToDisplay(userSettings.settings.bikes[idx].weight)
+                        }
                     }
                 } header: {
                     Text(
@@ -502,9 +561,7 @@ struct RiderProfileView: View {
                     Text("Total Weight")
                         .fontWeight(.medium)
                     Spacer()
-                    Text(
-                        "\(String(format: "%.0f", userSettings.settings.totalMass * 2.20462)) lbs"
-                    )
+                    Text(weightLabel(userSettings.settings.totalMass))
                     .foregroundStyle(.secondary)
                 }
             } footer: {
@@ -522,25 +579,25 @@ struct RiderProfileView: View {
         }
         .alert("Add Bike", isPresented: $showAddBike) {
             TextField("Name (e.g. Road Bike)", text: $newBikeName)
-            TextField("Weight in lbs", text: $newBikeWeight)
+            TextField("Weight in \(weightUnit)", text: $newBikeWeight)
                 .keyboardType(.decimalPad)
             Button("Add") {
                 let name =
                     newBikeName.isEmpty
                     ? "Bike \(userSettings.settings.bikes.count + 1)"
                     : newBikeName
-                let lbs = Double(newBikeWeight) ?? 22
-                let bike = BikePreset(name: name, weight: lbs / 2.20462)  // store as kg
+                let val = Double(newBikeWeight) ?? (isImperial ? 22 : 10)
+                let bike = BikePreset(name: name, weight: displayToKg(val))
                 userSettings.settings.bikes.append(bike)
                 if userSettings.settings.bikes.count == 1 {
                     userSettings.settings.activeBikeID = bike.id
                 }
                 newBikeName = ""
-                newBikeWeight = "22"
+                newBikeWeight = ""
             }
             Button("Cancel", role: .cancel) {
                 newBikeName = ""
-                newBikeWeight = "22"
+                newBikeWeight = ""
             }
         }
     }

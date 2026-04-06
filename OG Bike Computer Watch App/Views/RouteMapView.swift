@@ -7,6 +7,7 @@
 
 import SwiftUI
 import CoreLocation
+import MapKit
 
 struct RouteMapView: View {
     @ObservedObject var workout: WorkoutManager
@@ -30,17 +31,46 @@ struct RouteMapView: View {
         return min(zoomIndex, zoomLevels.count - 1)
     }
 
+    private var currentViewDistance: Double {
+        zoomLevels.isEmpty ? 400 : zoomLevels[effectiveZoomIndex]
+    }
+
+    private var useCompassHeading: Bool {
+        workout.ridePreferences.mapRotation == .headingUp && !isLuminanceReduced
+    }
+
+    private var mapDetailEnabled: Bool {
+        mapConfig.mapDetail != .off && !isLuminanceReduced
+    }
+
     var body: some View {
         ZStack {
             Group {
-                if showFullRoute {
-                    FullRouteCanvas(workout: workout)
+                if showFullRoute || !workout.hasRoute {
+                    // Full route view: Map background + Canvas overlay (aligned, no rotation)
+                    if mapDetailEnabled {
+                        ZStack {
+                            fullRouteMapBackground
+                            FullRouteCanvas(workout: workout, routeAheadColor: mapConfig.routeAheadColor)
+                        }
+                    } else {
+                        FullRouteCanvas(workout: workout, routeAheadColor: mapConfig.routeAheadColor)
+                    }
                 } else {
-                    BreadcrumbCanvas(
-                        workout: workout,
-                        viewDistance: zoomLevels.isEmpty ? 400 : zoomLevels[effectiveZoomIndex],
-                        useCompassHeading: workout.ridePreferences.mapRotation == .headingUp && !isLuminanceReduced,
-                        routeAheadColor: mapConfig.routeAheadColor)
+                    // Breadcrumb view: use MapKit-native rendering when map is on
+                    if mapDetailEnabled {
+                        BreadcrumbMapView(
+                            workout: workout,
+                            viewDistance: currentViewDistance,
+                            useCompassHeading: useCompassHeading,
+                            routeAheadColor: mapConfig.routeAheadColor)
+                    } else {
+                        BreadcrumbCanvas(
+                            workout: workout,
+                            viewDistance: currentViewDistance,
+                            useCompassHeading: useCompassHeading,
+                            routeAheadColor: mapConfig.routeAheadColor)
+                    }
                 }
             }
             .ignoresSafeArea()
@@ -52,6 +82,40 @@ struct RouteMapView: View {
         .onChange(of: isLuminanceReduced) { _, reduced in
             workout.setHeadingUpdates(enabled: !reduced)
          }
+    }
+
+    // MARK: - Full Route Map Background
+
+    @ViewBuilder
+    private var fullRouteMapBackground: some View {
+        if let processed = workout.navigation.processedRoute {
+            let center = CLLocationCoordinate2D(
+                latitude: (processed.minLat + processed.maxLat) / 2,
+                longitude: (processed.minLon + processed.maxLon) / 2)
+            let span = MKCoordinateSpan(
+                latitudeDelta: (processed.maxLat - processed.minLat) * 1.3,
+                longitudeDelta: (processed.maxLon - processed.minLon) * 1.3)
+            Map(position: .constant(.region(MKCoordinateRegion(center: center, span: span)))) {}
+            .mapStyle(.standard(pointsOfInterest: .excludingAll))
+            .mapControlVisibility(.hidden)
+            .allowsHitTesting(false)
+        } else {
+            let trail = workout.recordedLocations
+            if trail.count >= 2 {
+                let lats = trail.map(\.coordinate.latitude)
+                let lons = trail.map(\.coordinate.longitude)
+                let center = CLLocationCoordinate2D(
+                    latitude: (lats.min()! + lats.max()!) / 2,
+                    longitude: (lons.min()! + lons.max()!) / 2)
+                let span = MKCoordinateSpan(
+                    latitudeDelta: (lats.max()! - lats.min()!) * 1.3,
+                    longitudeDelta: (lons.max()! - lons.min()!) * 1.3)
+                Map(position: .constant(.region(MKCoordinateRegion(center: center, span: span)))) {}
+                .mapStyle(.standard(pointsOfInterest: .excludingAll))
+                .mapControlVisibility(.hidden)
+                .allowsHitTesting(false)
+            }
+        }
     }
 
     // MARK: - Full Controls (non-overlay mode)
@@ -67,7 +131,7 @@ struct RouteMapView: View {
                 Spacer()
 
                 VStack(spacing: 2) {
-                    if mapConfig.showFullRouteToggle {
+                    if workout.hasRoute && mapConfig.showFullRouteToggle {
                         Button {
                             showFullRoute.toggle()
                             if showFullRoute {
@@ -99,7 +163,7 @@ struct RouteMapView: View {
 
             Spacer()
 
-            if !showFullRoute {
+            if !showFullRoute && workout.hasRoute {
                 HStack(alignment: .bottom) {
                     Button {
                         let idx = effectiveZoomIndex
@@ -258,6 +322,7 @@ struct RouteMapView: View {
 private struct FullRouteCanvas: View {
     @ObservedObject var workout: WorkoutManager
     @ObservedObject private var unitState = UnitState.shared
+    var routeAheadColor: RouteColor = .white
 
     var body: some View {
         let _ = unitState.preferences // register dependency for Canvas redraws
@@ -390,7 +455,7 @@ private struct FullRouteCanvas: View {
                     path.addLine(to: project(trail[i].coordinate, transform: transform))
                 }
                 path.addLine(to: project(trail[trail.count - 1].coordinate, transform: transform))
-                context.stroke(path, with: .color(.green),
+                context.stroke(path, with: .color(routeAheadColor.color),
                                style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
 
                 // Rider dot at current position (last recorded point)
@@ -778,5 +843,170 @@ private struct BreadcrumbCanvas: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Breadcrumb Map View (MapKit-native route rendering)
+
+private struct BreadcrumbMapView: View {
+    @ObservedObject var workout: WorkoutManager
+    @ObservedObject private var unitState = UnitState.shared
+    let viewDistance: Double
+    var useCompassHeading: Bool = true
+    var routeAheadColor: RouteColor = .white
+
+    private var bearing: Double {
+        guard let location = workout.currentLocation else { return 0 }
+        if useCompassHeading, workout.heading > 0 { return workout.heading }
+        if workout.speed > 1.0, location.course >= 0 { return location.course }
+        if let processed = workout.navigation.processedRoute {
+            let segIdx = workout.navigation.currentSegmentIndex
+            if segIdx < processed.points.count {
+                return processed.points[segIdx].bearingToNext
+            }
+        }
+        return location.course >= 0 ? location.course : 0
+    }
+
+    var body: some View {
+        let _ = unitState.preferences
+        if let location = workout.currentLocation {
+            // Offset center forward along bearing to push rider toward bottom of screen
+            let offsetCenter = location.coordinate.offset(
+                distanceMeters: viewDistance * 0.3, bearingDegrees: bearing)
+
+            Map(position: .constant(.camera(MapCamera(
+                centerCoordinate: offsetCenter,
+                distance: viewDistance * 2.0,
+                heading: useCompassHeading ? bearing : 0,
+                pitch: 0
+            )))) {
+                routeContent(location: location)
+            }
+            .mapStyle(.standard(pointsOfInterest: .excludingAll))
+            .mapControlVisibility(.hidden)
+            .allowsHitTesting(false)
+        }
+    }
+
+    @MapContentBuilder
+    private func routeContent(location: CLLocation) -> some MapContent {
+        if let processed = workout.navigation.processedRoute {
+            let points = processed.points
+            let segIdx = min(workout.navigation.currentSegmentIndex, points.count - 1)
+
+            // Completed portion (green) — all points, no subsampling
+            if segIdx > 0 {
+                let behindCoords = points[0...segIdx].map(\.coordinate)
+                MapPolyline(coordinates: behindCoords)
+                    .stroke(.green, lineWidth: 6)
+            }
+
+            // Ahead portion: near segment (configured color) + far segment (grey)
+            if segIdx < points.count - 1 {
+                let currentDist = points[segIdx].distanceFromStart
+                let nearThreshold = currentDist + 3219 // ~2 miles ahead
+
+                // Find split point where route exceeds 2 miles ahead
+                let farStartIdx = points[(segIdx + 1)...].firstIndex(where: {
+                    $0.distanceFromStart > nearThreshold
+                }) ?? points.count
+
+                // Near ahead (configured color)
+                if farStartIdx > segIdx {
+                    let nearCoords = points[segIdx..<farStartIdx].map(\.coordinate)
+                    MapPolyline(coordinates: nearCoords)
+                        .stroke(routeAheadColor.color, lineWidth: 6)
+                }
+
+                // Far ahead (grey, thinner)
+                if farStartIdx < points.count {
+                    let farCoords = points[(farStartIdx - 1)...].map(\.coordinate)
+                    MapPolyline(coordinates: farCoords)
+                        .stroke(.gray.opacity(0.5), lineWidth: 3)
+                }
+            }
+
+            // Off-route indicators
+            if workout.navigation.isOffRoute {
+                // Rejoin candidate lines
+                let candidates = workout.navigation.rejoinCandidates
+                if candidates.isEmpty {
+                    MapPolyline(coordinates: [
+                        location.coordinate,
+                        points[min(segIdx, points.count - 1)].coordinate
+                    ])
+                    .stroke(.red, lineWidth: 3)
+                }
+                ForEach(0..<candidates.count, id: \.self) { i in
+                    MapPolyline(coordinates: [
+                        location.coordinate,
+                        candidates[i].coordinate
+                    ])
+                    .stroke(.red.opacity(i == 0 ? 1.0 : 0.5), lineWidth: i == 0 ? 3 : 2)
+                }
+
+                // Recorded trail when off-route (orange)
+                let trail = workout.recordedLocations
+                if trail.count >= 2 {
+                    MapPolyline(coordinates: trail.map(\.coordinate))
+                        .stroke(.orange.opacity(0.7), lineWidth: 3)
+                }
+            }
+
+            // Mile markers
+            let markers = computeMileMarkers(points: points)
+            ForEach(markers, id: \.mile) { marker in
+                Annotation("", coordinate: marker.coordinate, anchor: .bottom) {
+                    VStack(spacing: 0) {
+                        Text("\(marker.mile)")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+        } else {
+            // Free ride: full recorded trail
+            let trail = workout.recordedLocations
+            if trail.count >= 2 {
+                MapPolyline(coordinates: trail.map(\.coordinate))
+                    .stroke(.green.opacity(0.6), lineWidth: 4)
+            }
+        }
+
+        // Rider dot
+        Annotation("", coordinate: location.coordinate, anchor: .center) {
+            ZStack {
+                Circle()
+                    .fill(workout.navigation.isOffRoute ? .red.opacity(0.3) : .white)
+                    .frame(width: 16, height: 16)
+                Circle()
+                    .fill(workout.navigation.isOffRoute ? .red : .blue)
+                    .frame(width: 12, height: 12)
+            }
+        }
+    }
+}
+
+// MARK: - Coordinate Offset Helper
+
+private extension CLLocationCoordinate2D {
+    /// Returns a new coordinate offset by the given distance (meters) along a bearing (degrees).
+    func offset(distanceMeters: Double, bearingDegrees: Double) -> CLLocationCoordinate2D {
+        let R = 6_371_000.0 // Earth radius in meters
+        let d = distanceMeters / R
+        let brng = bearingDegrees * .pi / 180
+        let lat1 = latitude * .pi / 180
+        let lon1 = longitude * .pi / 180
+
+        let lat2 = asin(sin(lat1) * cos(d) + cos(lat1) * sin(d) * cos(brng))
+        let lon2 = lon1 + atan2(sin(brng) * sin(d) * cos(lat1), cos(d) - sin(lat1) * sin(lat2))
+
+        return CLLocationCoordinate2D(
+            latitude: lat2 * 180 / .pi,
+            longitude: lon2 * 180 / .pi)
     }
 }

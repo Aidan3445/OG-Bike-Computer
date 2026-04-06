@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import WatchKit
 
 /// Transient summary captured at ride end, shown immediately while background processing runs.
 struct WatchRideSummary {
@@ -25,6 +26,8 @@ struct WatchRideSummary {
 struct RideSummaryView: View {
     let summary: WatchRideSummary
     var onDismiss: () -> Void
+
+    @State private var extendedSession: WKExtendedRuntimeSession?
 
     var body: some View {
         ScrollView {
@@ -76,6 +79,15 @@ struct RideSummaryView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
+        }
+        .onAppear {
+            let session = WKExtendedRuntimeSession()
+            session.start()
+            extendedSession = session
+        }
+        .onDisappear {
+            extendedSession?.invalidate()
+            extendedSession = nil
         }
     }
 

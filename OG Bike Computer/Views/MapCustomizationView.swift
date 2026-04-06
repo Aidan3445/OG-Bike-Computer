@@ -9,6 +9,7 @@ import SwiftUI
 
 struct MapCustomizationView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    @ObservedObject private var unitState = UnitState.shared
     @State private var showProfileImport = false
 
     private var config: Binding<MapScreenConfig> {
@@ -28,6 +29,7 @@ struct MapCustomizationView: View {
     var body: some View {
         Form {
             previewSection
+            mapDetailSection
             statsSection
             displaySection
             zoomSection
@@ -67,6 +69,26 @@ struct MapCustomizationView: View {
                 .listRowBackground(Color.clear)
         } header: {
             Text("Preview")
+        }
+    }
+
+    // MARK: - Map Detail
+
+    @ViewBuilder
+    private var mapDetailSection: some View {
+        Section {
+            Toggle("Map Background", isOn: Binding(
+                get: { userSettings.settings.ridePreferences.mapScreen.mapDetail == .on },
+                set: { userSettings.settings.ridePreferences.mapScreen.mapDetail = $0 ? .on : .off }
+            ))
+        } header: {
+            Label("Map Background", systemImage: "map.fill")
+        } footer: {
+            if userSettings.settings.ridePreferences.mapScreen.mapDetail == .on {
+                Text("Shows a map underneath your route. Uses more battery and requires phone connectivity for map tiles. Also expect longer loading times when starting a workout.")
+            } else {
+                Text("Route lines are drawn on a plain black background. Lightest battery usage.")
+            }
         }
     }
 
@@ -136,17 +158,35 @@ struct MapCustomizationView: View {
 
     // MARK: - Zoom
 
+    private var isImperial: Bool { currentUnits.distance == .miles }
+
+    /// Format a distance in meters for the zoom picker labels
+    private func zoomLabel(_ meters: Double) -> String {
+        if isImperial {
+            let feet = meters * 3.28084
+            if feet >= 2640 { // 0.5 miles
+                let miles = meters / 1609.34
+                if miles == Double(Int(miles)) {
+                    return "\(Int(miles)) mi"
+                }
+                return String(format: "%.1f mi", miles)
+            }
+            return "\(Int(round(feet))) ft"
+        }
+        return "\(Int(meters))m"
+    }
+
     @ViewBuilder
     private var zoomSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Closest Zoom")
                 Picker("Closest Zoom", selection: config.zoomMin) {
-                    Text("100m").tag(100.0)
-                    Text("150m").tag(150.0)
-                    Text("200m").tag(200.0)
-                    Text("300m").tag(300.0)
-                    Text("400m").tag(400.0)
+                    Text(zoomLabel(100)).tag(100.0)
+                    Text(zoomLabel(150)).tag(150.0)
+                    Text(zoomLabel(200)).tag(200.0)
+                    Text(zoomLabel(300)).tag(300.0)
+                    Text(zoomLabel(400)).tag(400.0)
                 }
                 .pickerStyle(.segmented)
             }
@@ -154,11 +194,11 @@ struct MapCustomizationView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Farthest Zoom")
                 Picker("Farthest Zoom", selection: config.zoomMax) {
-                    Text("800m").tag(800.0)
-                    Text("1200m").tag(1200.0)
-                    Text("1600m").tag(1600.0)
-                    Text("2400m").tag(2400.0)
-                    Text("3200m").tag(3200.0)
+                    Text(zoomLabel(800)).tag(800.0)
+                    Text(zoomLabel(1200)).tag(1200.0)
+                    Text(zoomLabel(1600)).tag(1600.0)
+                    Text(zoomLabel(2400)).tag(2400.0)
+                    Text(zoomLabel(3200)).tag(3200.0)
                 }
                 .pickerStyle(.segmented)
             }
@@ -167,7 +207,7 @@ struct MapCustomizationView: View {
                 HStack {
                     Text("Default Zoom")
                     Spacer()
-                    Text("\(Int(userSettings.settings.ridePreferences.mapScreen.defaultZoom))m")
+                    Text(zoomLabel(userSettings.settings.ridePreferences.mapScreen.defaultZoom))
                         .foregroundStyle(.secondary)
                 }
                 let zMin = userSettings.settings.ridePreferences.mapScreen.zoomMin
@@ -191,7 +231,7 @@ struct MapCustomizationView: View {
         } header: {
             Label("Zoom Range", systemImage: "magnifyingglass")
         } footer: {
-            Text("Set the closest and farthest zoom levels, and the default zoom when starting a ride. Zoom levels are measured in meters of visible distance around you.")
+            Text("Set the closest and farthest zoom levels, and the default zoom when starting a ride. Zoom levels are the visible distance around you.")
         }
     }
 
@@ -372,6 +412,11 @@ struct MapScreenPreview: View {
             RoundedRectangle(cornerRadius: 23)
                 .fill(Color(white: 0.05))
 
+            // Map detail background hint
+            if config.mapDetail == .on {
+                mockMapBackground
+            }
+
             // Mock route line
             mockRouteLine
 
@@ -494,6 +539,49 @@ struct MapScreenPreview: View {
             context.stroke(ahead, with: .color(config.routeAheadColor.color),
                           style: StrokeStyle(lineWidth: 4, lineCap: .round))
         }
+    }
+
+    /// Faint mock road lines to hint at map background mode
+    private var mockMapBackground: some View {
+        Canvas { context, size in
+            let roadColor = Color.gray.opacity(0.15)
+            let style = StrokeStyle(lineWidth: 1.5, lineCap: .round)
+
+            // Horizontal "roads"
+            let yOffsets: [(frac: Double, endOff: CGFloat, ctrlOff: CGFloat)] = [
+                (0.25, 4, -6), (0.45, -3, 8), (0.7, 5, -4), (0.88, -2, 6)
+            ]
+            for item in yOffsets {
+                var road = Path()
+                let y = size.height * item.frac
+                road.move(to: CGPoint(x: 0, y: y))
+                road.addQuadCurve(
+                    to: CGPoint(x: size.width, y: y + item.endOff),
+                    control: CGPoint(x: size.width * 0.5, y: y + item.ctrlOff))
+                context.stroke(road, with: .color(roadColor), style: style)
+            }
+
+            // Vertical "roads"
+            let xOffsets: [(frac: Double, endOff: CGFloat, ctrlOff: CGFloat)] = [
+                (0.2, 5, -7), (0.5, -4, 6), (0.78, 3, -5)
+            ]
+            for item in xOffsets {
+                var road = Path()
+                let x = size.width * item.frac
+                road.move(to: CGPoint(x: x, y: 0))
+                road.addQuadCurve(
+                    to: CGPoint(x: x + item.endOff, y: size.height),
+                    control: CGPoint(x: x + item.ctrlOff, y: size.height * 0.5))
+                context.stroke(road, with: .color(roadColor), style: style)
+            }
+
+            // Diagonal road
+            var diag = Path()
+            diag.move(to: CGPoint(x: 0, y: size.height * 0.15))
+            diag.addLine(to: CGPoint(x: size.width * 0.7, y: size.height))
+            context.stroke(diag, with: .color(roadColor), style: style)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 23))
     }
 
     /// Value only (used for primary stat where unit is shown separately)
