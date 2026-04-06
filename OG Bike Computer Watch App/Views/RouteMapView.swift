@@ -902,11 +902,29 @@ private struct BreadcrumbMapView: View {
                     .stroke(.green, lineWidth: 6)
             }
 
-            // Ahead portion (configured color) — all points, no subsampling
+            // Ahead portion: near segment (configured color) + far segment (grey)
             if segIdx < points.count - 1 {
-                let aheadCoords = points[segIdx...].map(\.coordinate)
-                MapPolyline(coordinates: aheadCoords)
-                    .stroke(routeAheadColor.color, lineWidth: 6)
+                let currentDist = points[segIdx].distanceFromStart
+                let nearThreshold = currentDist + 3219 // ~2 miles ahead
+
+                // Find split point where route exceeds 2 miles ahead
+                let farStartIdx = points[(segIdx + 1)...].firstIndex(where: {
+                    $0.distanceFromStart > nearThreshold
+                }) ?? points.count
+
+                // Near ahead (configured color)
+                if farStartIdx > segIdx {
+                    let nearCoords = points[segIdx..<farStartIdx].map(\.coordinate)
+                    MapPolyline(coordinates: nearCoords)
+                        .stroke(routeAheadColor.color, lineWidth: 6)
+                }
+
+                // Far ahead (grey, thinner)
+                if farStartIdx < points.count {
+                    let farCoords = points[(farStartIdx - 1)...].map(\.coordinate)
+                    MapPolyline(coordinates: farCoords)
+                        .stroke(.gray.opacity(0.5), lineWidth: 3)
+                }
             }
 
             // Off-route indicators

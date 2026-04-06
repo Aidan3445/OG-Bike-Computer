@@ -9,6 +9,7 @@ import SwiftUI
 
 struct MapCustomizationView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    @ObservedObject private var unitState = UnitState.shared
     @State private var showProfileImport = false
 
     private var config: Binding<MapScreenConfig> {
@@ -157,17 +158,35 @@ struct MapCustomizationView: View {
 
     // MARK: - Zoom
 
+    private var isImperial: Bool { currentUnits.distance == .miles }
+
+    /// Format a distance in meters for the zoom picker labels
+    private func zoomLabel(_ meters: Double) -> String {
+        if isImperial {
+            let feet = meters * 3.28084
+            if feet >= 2640 { // 0.5 miles
+                let miles = meters / 1609.34
+                if miles == Double(Int(miles)) {
+                    return "\(Int(miles)) mi"
+                }
+                return String(format: "%.1f mi", miles)
+            }
+            return "\(Int(round(feet))) ft"
+        }
+        return "\(Int(meters))m"
+    }
+
     @ViewBuilder
     private var zoomSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Closest Zoom")
                 Picker("Closest Zoom", selection: config.zoomMin) {
-                    Text("100m").tag(100.0)
-                    Text("150m").tag(150.0)
-                    Text("200m").tag(200.0)
-                    Text("300m").tag(300.0)
-                    Text("400m").tag(400.0)
+                    Text(zoomLabel(100)).tag(100.0)
+                    Text(zoomLabel(150)).tag(150.0)
+                    Text(zoomLabel(200)).tag(200.0)
+                    Text(zoomLabel(300)).tag(300.0)
+                    Text(zoomLabel(400)).tag(400.0)
                 }
                 .pickerStyle(.segmented)
             }
@@ -175,11 +194,11 @@ struct MapCustomizationView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Farthest Zoom")
                 Picker("Farthest Zoom", selection: config.zoomMax) {
-                    Text("800m").tag(800.0)
-                    Text("1200m").tag(1200.0)
-                    Text("1600m").tag(1600.0)
-                    Text("2400m").tag(2400.0)
-                    Text("3200m").tag(3200.0)
+                    Text(zoomLabel(800)).tag(800.0)
+                    Text(zoomLabel(1200)).tag(1200.0)
+                    Text(zoomLabel(1600)).tag(1600.0)
+                    Text(zoomLabel(2400)).tag(2400.0)
+                    Text(zoomLabel(3200)).tag(3200.0)
                 }
                 .pickerStyle(.segmented)
             }
@@ -188,7 +207,7 @@ struct MapCustomizationView: View {
                 HStack {
                     Text("Default Zoom")
                     Spacer()
-                    Text("\(Int(userSettings.settings.ridePreferences.mapScreen.defaultZoom))m")
+                    Text(zoomLabel(userSettings.settings.ridePreferences.mapScreen.defaultZoom))
                         .foregroundStyle(.secondary)
                 }
                 let zMin = userSettings.settings.ridePreferences.mapScreen.zoomMin
@@ -212,7 +231,7 @@ struct MapCustomizationView: View {
         } header: {
             Label("Zoom Range", systemImage: "magnifyingglass")
         } footer: {
-            Text("Set the closest and farthest zoom levels, and the default zoom when starting a ride. Zoom levels are measured in meters of visible distance around you.")
+            Text("Set the closest and farthest zoom levels, and the default zoom when starting a ride. Zoom levels are the visible distance around you.")
         }
     }
 

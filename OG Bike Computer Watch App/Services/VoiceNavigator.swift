@@ -39,7 +39,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var pendingHalfway = false  // deferred when canSpeak is false
     private var announcedArrival = false
     private var announcedOffRoute = false
-    private var announcedDrifting = false
+
     private var wasOffRoute = false
     private var lastAnnouncedStreetName: String?
     private var lastAnnouncementTime: Date = .distantPast
@@ -74,7 +74,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         pendingHalfway = false
         announcedArrival = false
         announcedOffRoute = false
-        announcedDrifting = false
+
         wasOffRoute = false
         lastAnnouncedStreetName = nil
         lastAnnouncementTime = .distantPast
@@ -103,7 +103,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         pendingHalfway = false
         announcedArrival = false
         announcedOffRoute = false
-        announcedDrifting = false
+
         wasOffRoute = false
         lastAnnouncedStreetName = nil
         lastAnnouncementTime = .distantPast
@@ -154,38 +154,12 @@ class VoiceNavigator: NSObject, ObservableObject {
         } else if wasOffRoute {
             wasOffRoute = false
             announcedOffRoute = false
-            announcedDrifting = false
+    
             // Calculate direction to continue along route after rejoining
             let routeBearing = nav.currentBearing
             let continueDirection = voiceDirectionToTarget(heading: heading, bearingToTarget: routeBearing)
             speak("Back on route. \(continueDirection.capitalized) to continue.", mode: navEvents.backOnRouteAlert, category: "backOnRoute")
             return
-        }
-
-        // Drifting warning — gentle alert before full off-route
-        if nav.isDrifting {
-            if !announcedDrifting {
-                announcedDrifting = true
-                let rawDirection = voiceDirectionToTarget(heading: heading, bearingToTarget: nav.bearingToRoute)
-                // Simplify to basic directions for rejoin context
-                let simplified: String
-                if rawDirection.contains("left") { simplified = "Turn left" }
-                else if rawDirection.contains("right") { simplified = "Turn right" }
-                else if rawDirection.contains("around") { simplified = "Turn around" }
-                else { simplified = "Continue straight" }
-
-                // Try to extract street name from the most recent passed turn
-                var streetSuffix = ""
-                if let lastTurn = nav.activeTurnPoints.last(where: { $0.distanceFromStart <= nav.distanceAlongRoute }),
-                   let street = extractStreetName(from: lastTurn.description) {
-                    streetSuffix = " onto \(street)"
-                }
-
-                speak("Route is 50 feet ahead. \(simplified)\(streetSuffix) to rejoin.", mode: navEvents.offRouteAlert, category: "drifting")
-            }
-            // Don't return — still process turn alerts
-        } else if !nav.isOffRoute {
-            announcedDrifting = false
         }
 
         if let turn = nav.nextTurn, turn.index != currentTurnIndex {
