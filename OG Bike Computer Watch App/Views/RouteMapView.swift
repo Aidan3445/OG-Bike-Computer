@@ -33,8 +33,8 @@ struct RouteMapView: View {
     var body: some View {
         ZStack {
             Group {
-                if showFullRoute {
-                    FullRouteCanvas(workout: workout)
+                if showFullRoute || !workout.hasRoute {
+                    FullRouteCanvas(workout: workout, routeAheadColor: mapConfig.routeAheadColor)
                 } else {
                     BreadcrumbCanvas(
                         workout: workout,
@@ -67,7 +67,7 @@ struct RouteMapView: View {
                 Spacer()
 
                 VStack(spacing: 2) {
-                    if mapConfig.showFullRouteToggle {
+                    if workout.hasRoute && mapConfig.showFullRouteToggle {
                         Button {
                             showFullRoute.toggle()
                             if showFullRoute {
@@ -99,7 +99,7 @@ struct RouteMapView: View {
 
             Spacer()
 
-            if !showFullRoute {
+            if !showFullRoute && workout.hasRoute {
                 HStack(alignment: .bottom) {
                     Button {
                         let idx = effectiveZoomIndex
@@ -258,6 +258,7 @@ struct RouteMapView: View {
 private struct FullRouteCanvas: View {
     @ObservedObject var workout: WorkoutManager
     @ObservedObject private var unitState = UnitState.shared
+    var routeAheadColor: RouteColor = .white
 
     var body: some View {
         let _ = unitState.preferences // register dependency for Canvas redraws
@@ -390,7 +391,7 @@ private struct FullRouteCanvas: View {
                     path.addLine(to: project(trail[i].coordinate, transform: transform))
                 }
                 path.addLine(to: project(trail[trail.count - 1].coordinate, transform: transform))
-                context.stroke(path, with: .color(.green),
+                context.stroke(path, with: .color(routeAheadColor.color),
                                style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
 
                 // Rider dot at current position (last recorded point)

@@ -51,6 +51,10 @@ class NavigationTracker: ObservableObject {
     private var offRouteSampleCount: Int = 0
     var offRouteGraceSamples: Int = 3
 
+    // Grace period: require consecutive drifting samples before alerting
+    private var driftingSampleCount: Int = 0
+    private let driftingGraceSamples: Int = 3
+
     let turnWarningDistance: Double = 500
     let turnAlertDistance: Double = 50
     let turnConfirmationBuffer: Double = 40
@@ -94,6 +98,7 @@ class NavigationTracker: ObservableObject {
         rejoinCandidates = []
         jumpCandidate = nil
         offRouteSampleCount = 0
+        driftingSampleCount = 0
 
         if let last = processedRoute.points.last {
             endpointLocation = CLLocation(
@@ -161,6 +166,7 @@ class NavigationTracker: ObservableObject {
         rejoinCandidates = []
         jumpCandidate = nil
         offRouteSampleCount = 0
+        driftingSampleCount = 0
     }
 
     func update(location: CLLocation, riderDistance: Double = 0) -> TurnAlert? {
@@ -208,8 +214,14 @@ class NavigationTracker: ObservableObject {
                 to: nearestPoint.coordinate)
         }
 
-        // Drifting detection: between normal and off-route
-        isDrifting = !isOffRoute && nearestDistance > driftingThreshold
+        // Drifting detection: between normal and off-route (with grace period)
+        if !isOffRoute && nearestDistance > driftingThreshold {
+            driftingSampleCount += 1
+            isDrifting = driftingSampleCount >= driftingGraceSamples
+        } else {
+            driftingSampleCount = 0
+            isDrifting = false
+        }
 
         // Compute rejoin candidates when off-route
         if isOffRoute {

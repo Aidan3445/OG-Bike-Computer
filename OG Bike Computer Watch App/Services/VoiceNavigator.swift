@@ -41,6 +41,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var announcedOffRoute = false
     private var announcedDrifting = false
     private var wasOffRoute = false
+    private var lastAnnouncedStreetName: String?
     private var lastAnnouncementTime: Date = .distantPast
     private var lastTurnAlertTime: Date = .distantPast  // for minimum gap enforcement
 
@@ -75,8 +76,15 @@ class VoiceNavigator: NSObject, ObservableObject {
         announcedOffRoute = false
         announcedDrifting = false
         wasOffRoute = false
+        lastAnnouncedStreetName = nil
         lastAnnouncementTime = .distantPast
         lastTurnAlertTime = .distantPast
+        statQueue.removeAll()
+        statQueueIndex = 0
+        isStatAnnouncing = false
+        statInterruptedAtIndex = nil
+        statResumeWorkItem?.cancel()
+        statResumeWorkItem = nil
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
@@ -97,6 +105,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         announcedOffRoute = false
         announcedDrifting = false
         wasOffRoute = false
+        lastAnnouncedStreetName = nil
         lastAnnouncementTime = .distantPast
         lastTurnAlertTime = .distantPast
     }
@@ -157,8 +166,22 @@ class VoiceNavigator: NSObject, ObservableObject {
         if nav.isDrifting {
             if !announcedDrifting {
                 announcedDrifting = true
-                let direction = voiceDirectionToTarget(heading: heading, bearingToTarget: nav.bearingToRoute)
-                speak("Route is 50 feet ahead. \(direction.capitalized) to rejoin.", mode: navEvents.offRouteAlert, category: "drifting")
+                let rawDirection = voiceDirectionToTarget(heading: heading, bearingToTarget: nav.bearingToRoute)
+                // Simplify to basic directions for rejoin context
+                let simplified: String
+                if rawDirection.contains("left") { simplified = "Turn left" }
+                else if rawDirection.contains("right") { simplified = "Turn right" }
+                else if rawDirection.contains("around") { simplified = "Turn around" }
+                else { simplified = "Continue straight" }
+
+                // Try to extract street name from the most recent passed turn
+                var streetSuffix = ""
+                if let lastTurn = nav.activeTurnPoints.last(where: { $0.distanceFromStart <= nav.distanceAlongRoute }),
+                   let street = extractStreetName(from: lastTurn.description) {
+                    streetSuffix = " onto \(street)"
+                }
+
+                speak("Route is 50 feet ahead. \(simplified)\(streetSuffix) to rejoin.", mode: navEvents.offRouteAlert, category: "drifting")
             }
             // Don't return — still process turn alerts
         } else if !nav.isOffRoute {
@@ -256,7 +279,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         // Check for pending halfway announcement (deferred from earlier when canSpeak was false)
         if pendingHalfway, canSpeak, isActivelyMoving {
             pendingHalfway = false
-            speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) to go.", mode: navEvents.halfwayAlert, category: "halfway")
+            announceHalfway(distanceRemaining: nav.distanceRemaining, mode: navEvents.halfwayAlert)
             return
         }
 
@@ -265,7 +288,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             if nav.distanceAlongRoute >= half {
                 announcedHalfway = true
                 if isActivelyMoving, canSpeak {
-                    speak("Halfway point. \(formatVoiceDistance(nav.distanceRemaining)) to go.", mode: navEvents.halfwayAlert, category: "halfway")
+                    announceHalfway(distanceRemaining: nav.distanceRemaining, mode: navEvents.halfwayAlert)
                 } else if isActivelyMoving {
                     // Cooldown active — defer to next update cycle
                     pendingHalfway = true
@@ -275,11 +298,24 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
     }
     
+    /// Extract street name from a turn description (e.g. "Turn right onto Main St" → "Main St")
+    private func extractStreetName(from description: String?) -> String? {
+        guard let desc = description,
+              let range = desc.range(of: " onto ", options: .caseInsensitive) else { return nil }
+        let street = String(desc[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return street.isEmpty ? nil : street
+    }
+
     /// Build voice text for a turn, including street name from description when available.
     /// Uses the description's own phrasing when possible (e.g. "Keep right onto Navy Pier Flyover")
     /// so that turns like "keep right" aren't awkwardly converted to "slight right".
-    private func voiceText(for turn: TurnPoint) -> String {
+    /// When `updateStreetTracking` is true (primary turn announcements), updates the last announced
+    /// street name for "stay on" detection. Pass false for grouped "then" turns.
+    private func voiceText(for turn: TurnPoint, updateStreetTracking: Bool = true) -> String {
+        let currentStreet = extractStreetName(from: turn.description)
+
         guard let desc = turn.description, !desc.isEmpty else {
+            if updateStreetTracking { lastAnnouncedStreetName = currentStreet }
             return turn.direction.voiceLabel
         }
 
@@ -288,13 +324,24 @@ class VoiceNavigator: NSObject, ObservableObject {
         let lower = desc.lowercased()
 
         // Strip leading "Make a " prefix (e.g. "Make a U-turn onto ...")
+        var baseText: String
         if lower.hasPrefix("make a ") {
-            return String(desc.dropFirst(7)).lowercased()
+            baseText = String(desc.dropFirst(7)).lowercased()
+        } else {
+            baseText = desc.lowercased()
         }
 
-        // Use the description directly — it reads naturally
-        // "Turn left", "Turn right onto X", "Keep right onto X"
-        return desc.lowercased()
+        // "Stay on" detection: if the street matches the last announced street,
+        // replace "onto X" with "to stay on X"
+        if let street = currentStreet,
+           let lastStreet = lastAnnouncedStreetName,
+           street.lowercased() == lastStreet.lowercased(),
+           let ontoRange = baseText.range(of: "onto \(street.lowercased())", options: .caseInsensitive) {
+            baseText = baseText.replacingCharacters(in: ontoRange, with: "to stay on \(street.lowercased())")
+        }
+
+        if updateStreetTracking { lastAnnouncedStreetName = currentStreet }
+        return baseText
     }
 
     
@@ -384,32 +431,137 @@ class VoiceNavigator: NSObject, ObservableObject {
     /// Callback for haptic feedback — set by WorkoutManager
     var onHaptic: ((AlertMode) -> Void)?
 
-    // MARK: - Split Alerts
+    // MARK: - Auto-Pause Alerts
 
-    func announceSplit(number: Int, splitStats: SplitStats, rideStats: SplitStats, metrics: [SplitMetricConfig], mode: AlertMode) {
-        var splitParts: [String] = []
-        var rideParts: [String] = []
+    func announceAutoPause(mode: AlertMode) {
+        speak("Auto paused.", mode: mode, category: "autoPause")
+    }
 
-        for config in metrics {
+    func announceAutoResume(mode: AlertMode) {
+        speak("Resumed.", mode: mode, category: "autoResume")
+    }
+
+    // MARK: - Split / Halfway Stat Queue
+
+    private var statQueue: [String] = []
+    private var statQueueIndex: Int = 0
+    private var isStatAnnouncing: Bool = false
+    private var statInterruptedAtIndex: Int?
+    private var statResumeWorkItem: DispatchWorkItem?
+    private var statMode: AlertMode = .voiceAndHaptic
+
+    func announceSplit(number: Int, splitDistance: Double, splitStats: SplitStats, rideStats: SplitStats, metrics: [SplitMetricConfig], mode: AlertMode) {
+        // Order metrics so .distance is always first if present
+        let orderedMetrics = metrics.sorted { a, _ in a.metric == .distance }
+
+        var parts: [String] = []
+        for config in orderedMetrics {
             let splitVal = statText(for: config.metric, from: splitStats, label: "")
             let rideVal = statText(for: config.metric, from: rideStats, label: "")
 
             switch config.scope {
             case .split:
-                if let sv = splitVal { splitParts.append(sv) }
+                if let sv = splitVal { parts.append(sv) }
             case .ride:
-                if let rv = rideVal { rideParts.append(rv) }
+                if let rv = rideVal { parts.append("ride \(rv)") }
             case .both:
-                if let sv = splitVal { splitParts.append(sv) }
-                if let rv = rideVal { rideParts.append("ride \(rv)") }
+                if let sv = splitVal { parts.append(sv) }
+                if let rv = rideVal { parts.append("ride \(rv)") }
             }
         }
 
-        var text = "Split \(number)."
-        if !splitParts.isEmpty { text += " " + splitParts.joined(separator: ". ") + "." }
-        if !rideParts.isEmpty { text += " " + rideParts.joined(separator: ". ") + "." }
+        // Build queue: header first, then each stat as a separate utterance
+        let header = "\(formatVoiceDistance(splitDistance)) split \(number)."
+        startStatQueue(header: header, parts: parts, mode: mode)
+    }
 
-        speak(text, mode: mode, category: "lap")
+    private func startStatQueue(header: String?, parts: [String], mode: AlertMode) {
+        // Cancel any in-progress stat announcement
+        statResumeWorkItem?.cancel()
+        statResumeWorkItem = nil
+        statInterruptedAtIndex = nil
+
+        statQueue = []
+        if let header { statQueue.append(header) }
+        statQueue.append(contentsOf: parts)
+        statQueueIndex = 0
+        statMode = mode
+        isStatAnnouncing = true
+        speakNextStat()
+    }
+
+    private func speakNextStat() {
+        guard isStatAnnouncing, statQueueIndex < statQueue.count, !isStopped else {
+            isStatAnnouncing = false
+            return
+        }
+        speak(statQueue[statQueueIndex], mode: statMode, category: "lap")
+    }
+
+    /// Called by the speech delegate when a stat utterance finishes.
+    /// Advances to the next stat with a brief pause.
+    fileprivate func advanceStatQueue() {
+        statQueueIndex += 1
+        if statQueueIndex < statQueue.count {
+            let item = DispatchWorkItem { [weak self] in
+                self?.speakNextStat()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+            statResumeWorkItem = item
+        } else {
+            isStatAnnouncing = false
+        }
+    }
+
+    /// Interrupts the stat queue (e.g. for a turn alert). Call before speaking the interrupting alert.
+    fileprivate func interruptStatQueue() {
+        guard isStatAnnouncing else { return }
+        statInterruptedAtIndex = statQueueIndex
+        isStatAnnouncing = false
+        statResumeWorkItem?.cancel()
+        statResumeWorkItem = nil
+    }
+
+    private func announceHalfway(distanceRemaining: Double, mode: AlertMode) {
+        let header = "Halfway point. \(formatVoiceDistance(distanceRemaining)) to go."
+
+        // If split stats are enabled, queue the halfway header + ride stats together
+        if let wm = workoutManager {
+            let splitPrefs = preferences.splitAlerts
+            if splitPrefs.enabled, !splitPrefs.metrics.isEmpty {
+                let rideStats = wm.currentRideStats()
+                let orderedMetrics = splitPrefs.metrics.sorted { a, _ in a.metric == .distance }
+                var parts: [String] = []
+                for config in orderedMetrics {
+                    if let rv = statText(for: config.metric, from: rideStats, label: "") {
+                        parts.append(rv)
+                    }
+                }
+                if !parts.isEmpty {
+                    startStatQueue(header: header, parts: parts, mode: mode)
+                    return
+                }
+            }
+        }
+
+        // No stats to read — just speak the header
+        speak(header, mode: mode, category: "halfway")
+    }
+
+    /// Schedules resume of the stat queue after an interruption.
+    /// Restarts from the stat that was interrupted.
+    fileprivate func scheduleStatResume() {
+        guard let resumeIdx = statInterruptedAtIndex else { return }
+        statInterruptedAtIndex = nil
+
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.isStopped else { return }
+            self.statQueueIndex = resumeIdx // re-read interrupted stat
+            self.isStatAnnouncing = true
+            self.speakNextStat()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: item)
+        statResumeWorkItem = item
     }
 
     private func statText(for metric: MetricType, from stats: SplitStats, label: String) -> String? {
@@ -453,6 +605,11 @@ class VoiceNavigator: NSObject, ObservableObject {
     private func speak(_ text: String, mode: AlertMode = .voiceAndHaptic, category: String? = nil) {
         guard !isStopped else { return }
 
+        // Interrupt stat queue for non-stat alerts (e.g. turn alerts)
+        if category != "lap" && isStatAnnouncing {
+            interruptStatQueue()
+        }
+
         lastAnnouncementTime = Date()
 
         if mode.includesHaptic {
@@ -463,13 +620,33 @@ class VoiceNavigator: NSObject, ObservableObject {
             scheduleWakeNotification(body: text)
         }
 
-        guard mode.includesVoice else { return }
+        guard mode.includesVoice else {
+            // Even without voice, advance stat queue if this was a stat utterance
+            if category == "lap" && isStatAnnouncing {
+                advanceStatQueue()
+            }
+            return
+        }
 
         if let wm = workoutManager {
             wm.sendSpeechToPhone(text, category: category) { [weak self] spoken in
                 guard let self, !self.isStopped else { return }
                 if !spoken {
                     self.speakLocally(text)
+                } else if self.isStatAnnouncing {
+                    // Phone handled speech — estimate duration and advance queue
+                    // (~80ms per character is a rough TTS estimate at 1.1x rate)
+                    let estimatedDuration = max(1.0, Double(text.count) * 0.06)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + estimatedDuration) {
+                        guard self.isStatAnnouncing else { return }
+                        self.advanceStatQueue()
+                    }
+                } else if self.statInterruptedAtIndex != nil {
+                    // Non-stat speech routed to phone, schedule stat resume
+                    let estimatedDuration = max(1.0, Double(text.count) * 0.06)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + estimatedDuration) {
+                        self.scheduleStatResume()
+                    }
                 }
             }
         } else {
@@ -540,6 +717,18 @@ extension VoiceNavigator: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         // Don't deactivate if we interrupted one utterance to start another
         guard !synthesizer.isSpeaking else { return }
+
+        // Advance stat queue if we're in the middle of a split/halfway readout
+        if isStatAnnouncing {
+            advanceStatQueue()
+            return
+        }
+
+        // If a stat queue was interrupted, schedule resume after idle
+        if statInterruptedAtIndex != nil {
+            scheduleStatResume()
+            return
+        }
 
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
