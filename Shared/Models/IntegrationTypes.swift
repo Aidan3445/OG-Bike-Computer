@@ -52,6 +52,24 @@ struct ServiceUploadRecord: Codable, Equatable, Identifiable {
     let remoteID: String
     let uploadedAt: Date
     let webURL: String?
+    let uploadId: Int?
+
+    init(service: IntegrationServiceID, remoteID: String, uploadedAt: Date, webURL: String?, uploadId: Int? = nil) {
+        self.service = service
+        self.remoteID = remoteID
+        self.uploadedAt = uploadedAt
+        self.webURL = webURL
+        self.uploadId = uploadId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        service = try c.decode(IntegrationServiceID.self, forKey: .service)
+        remoteID = try c.decode(String.self, forKey: .remoteID)
+        uploadedAt = try c.decode(Date.self, forKey: .uploadedAt)
+        webURL = try c.decodeIfPresent(String.self, forKey: .webURL)
+        uploadId = try c.decodeIfPresent(Int.self, forKey: .uploadId)
+    }
 }
 
 // MARK: - Integration Settings

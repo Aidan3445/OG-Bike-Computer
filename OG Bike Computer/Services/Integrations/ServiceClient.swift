@@ -19,7 +19,7 @@ protocol ServiceClient {
 
 protocol UploadableServiceClient: ServiceClient {
     /// Upload a ride recording (GPX data) and return the upload record
-    func uploadRide(gpxData: Data, name: String) async throws -> ServiceUploadRecord
+    func uploadRide(gpxData: Data, name: String, externalId: String) async throws -> ServiceUploadRecord
 }
 
 enum ServiceError: LocalizedError {

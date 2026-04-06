@@ -42,6 +42,12 @@ class UploadManager: ObservableObject {
     private func uploadToStrava(_ ride: RideSummary) async {
         guard let rideStore else { return }
 
+        // Already uploaded — skip
+        if ride.uploads?.contains(where: { $0.service == .strava }) == true {
+            logger.info("[UploadManager] Ride \(ride.name) already has Strava upload, skipping")
+            return
+        }
+
         let rideID = ride.id
         _ = await MainActor.run { pendingUploads.insert(rideID) }
         defer { Task { @MainActor in pendingUploads.remove(rideID) } }
@@ -53,7 +59,7 @@ class UploadManager: ObservableObject {
         }
 
         do {
-            let record = try await stravaClient.uploadRide(gpxData: gpxData, name: ride.name)
+            let record = try await stravaClient.uploadRide(gpxData: gpxData, name: ride.name, externalId: rideID.uuidString)
             logger.info("[UploadManager] Uploaded \(ride.name) to Strava: \(record.remoteID)")
 
             await MainActor.run {
@@ -74,7 +80,7 @@ class UploadManager: ObservableObject {
             throw ServiceError.noData
         }
 
-        let record = try await stravaClient.uploadRide(gpxData: gpxData, name: ride.name)
+        let record = try await stravaClient.uploadRide(gpxData: gpxData, name: ride.name, externalId: ride.id.uuidString)
 
         await MainActor.run {
             appendUploadRecord(record, to: ride.id)

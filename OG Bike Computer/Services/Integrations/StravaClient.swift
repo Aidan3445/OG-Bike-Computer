@@ -73,7 +73,7 @@ class StravaClient: ServiceClient, UploadableServiceClient {
 
     // MARK: - Upload
 
-    func uploadRide(gpxData: Data, name: String) async throws -> ServiceUploadRecord {
+    func uploadRide(gpxData: Data, name: String, externalId: String) async throws -> ServiceUploadRecord {
         let token = try await OAuthManager.shared.validToken(for: .strava)
 
         let boundary = UUID().uuidString
@@ -85,6 +85,8 @@ class StravaClient: ServiceClient, UploadableServiceClient {
         var body = Data()
         body.appendMultipart(name: "data_type", value: "gpx", boundary: boundary)
         body.appendMultipart(name: "name", value: name, boundary: boundary)
+        body.appendMultipart(name: "external_id", value: externalId, boundary: boundary)
+        body.appendMultipart(name: "description", value: "Recorded with Computa for Apple Watch", boundary: boundary)
 
         // GPX file attachment
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
@@ -107,7 +109,8 @@ class StravaClient: ServiceClient, UploadableServiceClient {
             service: .strava,
             remoteID: "\(activityID)",
             uploadedAt: Date(),
-            webURL: "https://www.strava.com/activities/\(activityID)"
+            webURL: "https://www.strava.com/activities/\(activityID)",
+            uploadId: uploadResponse.id
         )
     }
 
