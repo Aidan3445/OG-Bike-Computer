@@ -73,7 +73,8 @@ class StravaClient: ServiceClient, UploadableServiceClient {
 
     // MARK: - Upload
 
-    func uploadRide(gpxData: Data, name: String, externalId: String) async throws -> ServiceUploadRecord {
+    /// POST the GPX file to Strava. Returns the uploadId and a partial record (no activityID yet).
+    func startUpload(gpxData: Data, name: String, externalId: String) async throws -> (uploadId: Int, record: ServiceUploadRecord) {
         let token = try await OAuthManager.shared.validToken(for: .strava)
 
         let boundary = UUID().uuidString
@@ -103,23 +104,24 @@ class StravaClient: ServiceClient, UploadableServiceClient {
         let uploadResponse = try JSONDecoder().decode(StravaUploadResponse.self, from: data)
         logger.info("Upload started, id=\(uploadResponse.id)")
 
-        let activityID = try await pollUpload(uploadID: uploadResponse.id, token: token)
-
-        return ServiceUploadRecord(
+        let record = ServiceUploadRecord(
             service: .strava,
-            remoteID: "\(activityID)",
             uploadedAt: Date(),
-            webURL: "https://www.strava.com/activities/\(activityID)",
+            webURL: nil,
             uploadId: uploadResponse.id
         )
+        return (uploadResponse.id, record)
     }
 
-    private func pollUpload(uploadID: Int, token: String, attempts: Int = 0) async throws -> Int {
+    /// Poll Strava until the upload is processed and an activityID is available.
+    func pollUpload(uploadID: Int, attempts: Int = 0) async throws -> (activityID: Int, webURL: String) {
         if attempts >= 15 {
             throw ServiceError.uploadFailed("Upload processing timed out")
         }
 
         try await Task.sleep(nanoseconds: UInt64(min(2 + attempts * 2, 10)) * 1_000_000_000)
+
+        let token = try await OAuthManager.shared.validToken(for: .strava)
 
         var request = URLRequest(url: URL(string: "\(baseURL)/uploads/\(uploadID)")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -130,17 +132,34 @@ class StravaClient: ServiceClient, UploadableServiceClient {
         let status = try JSONDecoder().decode(StravaUploadStatus.self, from: data)
 
         if let activityID = status.activity_id {
-            return activityID
+            return (activityID, "https://www.strava.com/activities/\(activityID)")
         }
 
         if let error = status.error {
             if error.lowercased().contains("duplicate") {
+                // Strava sometimes includes activity_id even on duplicate
+                if let activityID = status.activity_id {
+                    return (activityID, "https://www.strava.com/activities/\(activityID)")
+                }
                 throw ServiceError.uploadFailed("Activity already exists on Strava (duplicate)")
             }
             throw ServiceError.uploadFailed(error)
         }
 
-        return try await pollUpload(uploadID: uploadID, token: token, attempts: attempts + 1)
+        return try await pollUpload(uploadID: uploadID, attempts: attempts + 1)
+    }
+
+    /// Single status check for an existing upload (non-recursive).
+    func checkUploadStatus(uploadID: Int) async throws -> StravaUploadStatus {
+        let token = try await OAuthManager.shared.validToken(for: .strava)
+
+        var request = URLRequest(url: URL(string: "\(baseURL)/uploads/\(uploadID)")!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateResponse(response)
+
+        return try JSONDecoder().decode(StravaUploadStatus.self, from: data)
     }
 
     // MARK: - Helpers

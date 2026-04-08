@@ -47,14 +47,20 @@ struct RouteSource: Codable, Equatable {
 // MARK: - Upload Record
 
 struct ServiceUploadRecord: Codable, Equatable, Identifiable {
-    var id: String { "\(service.rawValue)-\(remoteID)" }
+    var id: String {
+        if let remoteID { return "\(service.rawValue)-\(remoteID)" }
+        return "\(service.rawValue)-upload-\(uploadId ?? 0)"
+    }
     let service: IntegrationServiceID
-    let remoteID: String
-    let uploadedAt: Date
-    let webURL: String?
+    var remoteID: String?
+    var uploadedAt: Date
+    var webURL: String?
     let uploadId: Int?
 
-    init(service: IntegrationServiceID, remoteID: String, uploadedAt: Date, webURL: String?, uploadId: Int? = nil) {
+    /// Upload is complete when we have the remote activity ID
+    var isComplete: Bool { remoteID != nil }
+
+    init(service: IntegrationServiceID, remoteID: String? = nil, uploadedAt: Date, webURL: String?, uploadId: Int? = nil) {
         self.service = service
         self.remoteID = remoteID
         self.uploadedAt = uploadedAt
@@ -65,7 +71,7 @@ struct ServiceUploadRecord: Codable, Equatable, Identifiable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         service = try c.decode(IntegrationServiceID.self, forKey: .service)
-        remoteID = try c.decode(String.self, forKey: .remoteID)
+        remoteID = try c.decodeIfPresent(String.self, forKey: .remoteID)
         uploadedAt = try c.decode(Date.self, forKey: .uploadedAt)
         webURL = try c.decodeIfPresent(String.self, forKey: .webURL)
         uploadId = try c.decodeIfPresent(Int.self, forKey: .uploadId)

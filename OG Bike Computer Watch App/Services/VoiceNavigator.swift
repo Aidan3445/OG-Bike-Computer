@@ -480,7 +480,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             let item = DispatchWorkItem { [weak self] in
                 self?.speakNextStat()
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: item)
             statResumeWorkItem = item
         } else {
             isStatAnnouncing = false

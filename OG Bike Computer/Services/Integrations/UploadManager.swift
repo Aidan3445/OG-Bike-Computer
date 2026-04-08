@@ -25,6 +25,7 @@ class UploadManager: ObservableObject {
     func configure(rideStore: RideStore, integrationSettings: IntegrationSettingsStore) {
         self.rideStore = rideStore
         self.integrationSettings = integrationSettings
+        resumeInProgressUploads()
     }
 
     /// Called when a new ride arrives from the watch. Checks auto-upload settings and uploads.
@@ -41,14 +42,42 @@ class UploadManager: ObservableObject {
 
     private func uploadToStrava(_ ride: RideSummary) async {
         guard let rideStore else { return }
+        let rideID = ride.id
 
-        // Already uploaded — skip
-        if ride.uploads?.contains(where: { $0.service == .strava }) == true {
-            logger.info("[UploadManager] Ride \(ride.name) already has Strava upload, skipping")
+        // 1. In-memory lock: prevent concurrent uploads of the same ride
+        let alreadyPending = await MainActor.run { pendingUploads.contains(rideID) }
+        if alreadyPending {
+            logger.info("[UploadManager] Upload already in progress for \(ride.name), skipping")
             return
         }
 
-        let rideID = ride.id
+        // 2. Check for existing Strava upload record
+        if let existing = ride.uploads?.first(where: { $0.service == .strava }) {
+            if existing.isComplete {
+                logger.info("[UploadManager] Ride \(ride.name) already uploaded to Strava, skipping")
+                return
+            }
+
+            // 3. Resume in-progress upload (has uploadId but no activityID yet)
+            if let uploadId = existing.uploadId {
+                _ = await MainActor.run { pendingUploads.insert(rideID) }
+                defer { Task { @MainActor in pendingUploads.remove(rideID) } }
+
+                do {
+                    let result = try await stravaClient.pollUpload(uploadID: uploadId)
+                    await MainActor.run {
+                        completeUploadRecord(uploadId: uploadId, activityID: result.activityID, webURL: result.webURL, for: rideID)
+                    }
+                    logger.info("[UploadManager] Resumed upload for \(ride.name): \(result.activityID)")
+                } catch {
+                    logger.error("[UploadManager] Resume failed for \(ride.name): \(error.localizedDescription)")
+                    saveFailedUpload(rideID: rideID, service: .strava)
+                }
+                return
+            }
+        }
+
+        // 4. Fresh upload
         _ = await MainActor.run { pendingUploads.insert(rideID) }
         defer { Task { @MainActor in pendingUploads.remove(rideID) } }
 
@@ -59,12 +88,22 @@ class UploadManager: ObservableObject {
         }
 
         do {
-            let record = try await stravaClient.uploadRide(gpxData: gpxData, name: ride.name, externalId: rideID.uuidString)
-            logger.info("[UploadManager] Uploaded \(ride.name) to Strava: \(record.remoteID)")
+            // 4a. POST upload — get uploadId + partial record
+            let (uploadId, partialRecord) = try await stravaClient.startUpload(gpxData: gpxData, name: ride.name, externalId: rideID.uuidString)
 
+            // 4b. Persist partial record immediately (crash-safe)
             await MainActor.run {
-                appendUploadRecord(record, to: rideID)
+                appendUploadRecord(partialRecord, to: rideID)
             }
+
+            // 4c. Poll for completion
+            let result = try await stravaClient.pollUpload(uploadID: uploadId)
+
+            // 4d. Complete the record with activityID
+            await MainActor.run {
+                completeUploadRecord(uploadId: uploadId, activityID: result.activityID, webURL: result.webURL, for: rideID)
+            }
+            logger.info("[UploadManager] Uploaded \(ride.name) to Strava: \(result.activityID)")
         } catch {
             logger.error("[UploadManager] Strava upload failed for \(ride.name): \(error.localizedDescription)")
             saveFailedUpload(rideID: rideID, service: .strava)
@@ -74,19 +113,54 @@ class UploadManager: ObservableObject {
     /// Manually upload a ride to Strava (from the share menu)
     func manualUploadToStrava(_ ride: RideSummary) async throws -> ServiceUploadRecord {
         guard let rideStore else { throw ServiceError.noData }
+        let rideID = ride.id
 
+        // Check for existing complete upload
+        if let existing = ride.uploads?.first(where: { $0.service == .strava && $0.isComplete }) {
+            return existing
+        }
+
+        // Resume in-progress upload if one exists
+        if let existing = ride.uploads?.first(where: { $0.service == .strava }),
+           let uploadId = existing.uploadId {
+            let result = try await stravaClient.pollUpload(uploadID: uploadId)
+            await MainActor.run {
+                completeUploadRecord(uploadId: uploadId, activityID: result.activityID, webURL: result.webURL, for: rideID)
+            }
+            return ServiceUploadRecord(
+                service: .strava,
+                remoteID: "\(result.activityID)",
+                uploadedAt: Date(),
+                webURL: result.webURL,
+                uploadId: uploadId
+            )
+        }
+
+        // Fresh upload
         guard let gpxURL = rideStore.exportGPX(for: ride),
               let gpxData = try? Data(contentsOf: gpxURL) else {
             throw ServiceError.noData
         }
 
-        let record = try await stravaClient.uploadRide(gpxData: gpxData, name: ride.name, externalId: ride.id.uuidString)
+        let (uploadId, partialRecord) = try await stravaClient.startUpload(gpxData: gpxData, name: ride.name, externalId: rideID.uuidString)
 
         await MainActor.run {
-            appendUploadRecord(record, to: ride.id)
+            appendUploadRecord(partialRecord, to: rideID)
         }
 
-        return record
+        let result = try await stravaClient.pollUpload(uploadID: uploadId)
+
+        await MainActor.run {
+            completeUploadRecord(uploadId: uploadId, activityID: result.activityID, webURL: result.webURL, for: rideID)
+        }
+
+        return ServiceUploadRecord(
+            service: .strava,
+            remoteID: "\(result.activityID)",
+            uploadedAt: Date(),
+            webURL: result.webURL,
+            uploadId: uploadId
+        )
     }
 
     private func appendUploadRecord(_ record: ServiceUploadRecord, to rideID: UUID) {
@@ -95,17 +169,36 @@ class UploadManager: ObservableObject {
 
         var ride = rideStore.rides[index]
         var uploads = ride.uploads ?? []
-        // Don't duplicate
-        if !uploads.contains(where: { $0.service == record.service }) {
+        // Don't duplicate — match on service + uploadId
+        if !uploads.contains(where: { $0.service == record.service && $0.uploadId == record.uploadId }) {
             uploads.append(record)
             ride.uploads = uploads
             rideStore.rides[index] = ride
+            persistRide(ride, rideID: rideID)
+        }
+    }
 
-            // Persist to disk
-            let fileURL = rideStore.directory.appendingPathComponent("\(rideID.uuidString).json")
-            if let data = try? JSONEncoder().encode(ride) {
-                try? data.write(to: fileURL, options: .atomic)
-            }
+    private func completeUploadRecord(uploadId: Int, activityID: Int, webURL: String, for rideID: UUID) {
+        guard let rideStore,
+              let rideIndex = rideStore.rides.firstIndex(where: { $0.id == rideID }) else { return }
+
+        var ride = rideStore.rides[rideIndex]
+        guard var uploads = ride.uploads,
+              let uploadIndex = uploads.firstIndex(where: { $0.uploadId == uploadId && $0.service == .strava }) else { return }
+
+        uploads[uploadIndex].remoteID = "\(activityID)"
+        uploads[uploadIndex].webURL = webURL
+        uploads[uploadIndex].uploadedAt = Date()
+        ride.uploads = uploads
+        rideStore.rides[rideIndex] = ride
+        persistRide(ride, rideID: rideID)
+    }
+
+    private func persistRide(_ ride: RideSummary, rideID: UUID) {
+        guard let rideStore else { return }
+        let fileURL = rideStore.directory.appendingPathComponent("\(rideID.uuidString).json")
+        if let data = try? JSONEncoder().encode(ride) {
+            try? data.write(to: fileURL, options: .atomic)
         }
     }
 
@@ -141,14 +234,27 @@ class UploadManager: ObservableObject {
 
         for entry in failed {
             guard let ride = rideStore.rides.first(where: { $0.id == entry.rideID }) else { continue }
-            // Only retry if already uploaded records don't include this service
-            if ride.uploads?.contains(where: { $0.service == entry.service }) == true { continue }
+            // Only skip if a complete upload already exists for this service
+            if let existing = ride.uploads?.first(where: { $0.service == entry.service }),
+               existing.isComplete { continue }
 
             switch entry.service {
             case .strava:
                 Task { await uploadToStrava(ride) }
             case .rideWithGPS:
                 break // RWGPS doesn't support API uploads
+            }
+        }
+    }
+
+    /// Resume any uploads that were started (have uploadId) but not completed (no remoteID).
+    private func resumeInProgressUploads() {
+        guard let rideStore else { return }
+        for ride in rideStore.rides {
+            guard let uploads = ride.uploads else { continue }
+            let hasIncomplete = uploads.contains(where: { $0.service == .strava && !$0.isComplete && $0.uploadId != nil })
+            if hasIncomplete {
+                Task { await uploadToStrava(ride) }
             }
         }
     }
