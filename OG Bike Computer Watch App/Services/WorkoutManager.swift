@@ -75,7 +75,21 @@ class WorkoutManager: NSObject, ObservableObject {
     private var splitMaxSpeed: Double = 0
     private var splitHRSum: Double = 0
     private var splitHRCount: Int = 0
-    var navigationAlerts: NavigationAlertPreferences = .default
+    var navigationAlerts: NavigationAlertPreferences = .default {
+        didSet {
+            // When split distance changes mid-ride, reset accumulators so the next
+            // split is measured from the current position with current stats.
+            // Without this, changing e.g. 5mi → 0.5mi fires immediately using stale baselines.
+            guard isActive,
+                  navigationAlerts.splitAlerts.splitDistance != oldValue.splitAlerts.splitDistance else { return }
+            lastSplitDistance = totalDistance
+            splitStartDistance = totalDistance
+            splitStartMovingTime = movingTime
+            splitMaxSpeed = 0
+            splitHRSum = 0
+            splitHRCount = 0
+        }
+    }
 
     /// Set after ride ends, cleared when user dismisses summary screen
     @Published var completedRideSummary: WatchRideSummary?
