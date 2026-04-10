@@ -24,7 +24,9 @@ struct RideRow: View {
                 Text(ride.name)
                     .font(.headline)
                 if let uploads = ride.uploads, !uploads.isEmpty {
-                    ForEach(uploads) { upload in
+                    // Show one badge per service (deduplicate in case of retransmit duplicates)
+                    let uniqueServices = uploads.uniqueByService()
+                    ForEach(uniqueServices) { upload in
                         ServiceBadge(service: upload.service)
                     }
                 }

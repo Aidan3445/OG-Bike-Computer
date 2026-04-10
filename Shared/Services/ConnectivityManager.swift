@@ -625,14 +625,30 @@ private extension ConnectivityManager {
     func handleRideTransfer(_ file: WCSessionFile) {
         guard let summaryString = file.metadata?["summaryJSON"] as? String,
               let summaryData = summaryString.data(using: .utf8),
-              let summary = try? JSONDecoder().decode(RideSummary.self, from: summaryData) else {
+              var summary = try? JSONDecoder().decode(RideSummary.self, from: summaryData) else {
             print("Failed to decode ride summary")
             return
         }
 
-        // Save directly to the rides directory — works whether rideStore is attached or not
         let dir = Self.ridesDirectory
+        let summaryURL = dir.appendingPathComponent("\(summary.id.uuidString).json")
 
+        // Check if this ride already exists on disk (e.g. from a previous transfer)
+        // If so, preserve any upload records that were added after the first transfer
+        let isRetransmit: Bool
+        if let existingData = try? Data(contentsOf: summaryURL),
+           let existingSummary = try? JSONDecoder().decode(RideSummary.self, from: existingData) {
+            isRetransmit = true
+            // Preserve upload records from the existing version — the watch
+            // doesn't know about uploads, so its summary always has uploads: nil
+            if let existingUploads = existingSummary.uploads, !existingUploads.isEmpty {
+                summary.uploads = existingUploads
+            }
+        } else {
+            isRetransmit = false
+        }
+
+        // Save track file
         let destURL = dir.appendingPathComponent(summary.trackFilename)
         do {
             if FileManager.default.fileExists(atPath: destURL.path) {
@@ -644,9 +660,9 @@ private extension ConnectivityManager {
             return
         }
 
-        let summaryURL = dir.appendingPathComponent("\(summary.id.uuidString).json")
+        // Save summary (with preserved upload records if retransmit)
         if let data = try? JSONEncoder().encode(summary) {
-            try? data.write(to: summaryURL)
+            try? data.write(to: summaryURL, options: .atomic)
         }
 
         // If rideStore is attached, update in-memory immediately
@@ -655,10 +671,12 @@ private extension ConnectivityManager {
                !store.rides.contains(where: { $0.id == summary.id }) {
                 store.rides.insert(summary, at: 0)
             }
-            print("Ride received: \(summary.name)")
+            print("Ride received: \(summary.name)\(isRetransmit ? " (retransmit)" : "")")
 
-            // Trigger auto-upload to connected services
-            self.onRideReceived?(summary)
+            // Only trigger auto-upload for new rides, not retransmits
+            if !isRetransmit {
+                self.onRideReceived?(summary)
+            }
         }
 
         // Send acknowledgment back to watch so it can mark the ride as confirmed

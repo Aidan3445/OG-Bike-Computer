@@ -73,6 +73,10 @@ struct ContentView: View {
                 workout.ridePreferences = ridePrefs
                 workout.navigation.offRouteGraceSamples = ridePrefs.offRouteGraceSamples
             }
+            // Restore cached healthKitAutoUpload on boot
+            if UserDefaults.standard.object(forKey: "healthKitAutoUpload") != nil {
+                workout.healthKitAutoUpload = UserDefaults.standard.bool(forKey: "healthKitAutoUpload")
+            }
 
             ConnectivityManager.shared.onUserSettingsReceived = { data in
                 guard let settings = try? JSONDecoder().decode(UserSettings.self, from: data) else { return }
@@ -84,6 +88,7 @@ struct ContentView: View {
                 workout.navigation.offRouteThreshold = settings.navigationAlerts.navigationEvents.offRouteThreshold
                 workout.ridePreferences = settings.ridePreferences
                 workout.navigation.offRouteGraceSamples = settings.ridePreferences.offRouteGraceSamples
+                workout.healthKitAutoUpload = settings.healthKitAutoUpload
                 // Cache for next boot
                 if let encoded = try? JSONEncoder().encode(settings.unitPreferences) {
                     UserDefaults.standard.set(encoded, forKey: "unitPreferences")
@@ -94,6 +99,7 @@ struct ContentView: View {
                 if let encoded = try? JSONEncoder().encode(settings.ridePreferences) {
                     UserDefaults.standard.set(encoded, forKey: "ridePreferences")
                 }
+                UserDefaults.standard.set(settings.healthKitAutoUpload, forKey: "healthKitAutoUpload")
             }
 
             workout.onRideCompleted = { summary in
@@ -109,6 +115,18 @@ struct ContentView: View {
             }
         } message: {
             Text("This ride is under 1 minute. Do you want to save it anyway?")
+        }
+        .alert("Save to Apple Health?", isPresented: $workout.showHealthKitPrompt) {
+            Button("Save") {
+                workout.healthKitPromptHandler?(true)
+                workout.healthKitPromptHandler = nil
+            }
+            Button("Don't Save", role: .destructive) {
+                workout.healthKitPromptHandler?(false)
+                workout.healthKitPromptHandler = nil
+            }
+        } message: {
+            Text("Auto-upload to Apple Health is off. Save this workout to Apple Health anyway?")
         }
     }
 

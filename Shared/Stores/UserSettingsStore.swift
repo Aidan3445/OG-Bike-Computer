@@ -34,6 +34,7 @@ struct UserSettings: Codable, Equatable {
     var navigationAlerts: NavigationAlertPreferences
     var ridePreferences: RidePreferences
     var phoneAlerts: PhoneAlertPreferences
+    var healthKitAutoUpload: Bool
 
     /// Active bike weight, or a manual fallback
     var bikeWeight: Double {
@@ -62,14 +63,15 @@ struct UserSettings: Codable, Equatable {
         unitPreferences: .imperial,
         navigationAlerts: .default,
         ridePreferences: .default,
-        phoneAlerts: .default
+        phoneAlerts: .default,
+        healthKitAutoUpload: true
     )
 
     private enum CodingKeys: String, CodingKey {
-        case riderWeight, riderHeight, bikes, activeBikeID, unitPreferences, navigationAlerts, ridePreferences, phoneAlerts
+        case riderWeight, riderHeight, bikes, activeBikeID, unitPreferences, navigationAlerts, ridePreferences, phoneAlerts, healthKitAutoUpload
     }
 
-    init(riderWeight: Double, riderHeight: Double, bikes: [BikePreset], activeBikeID: UUID?, unitPreferences: UnitPreferences = .imperial, navigationAlerts: NavigationAlertPreferences = .default, ridePreferences: RidePreferences = .default, phoneAlerts: PhoneAlertPreferences = .default) {
+    init(riderWeight: Double, riderHeight: Double, bikes: [BikePreset], activeBikeID: UUID?, unitPreferences: UnitPreferences = .imperial, navigationAlerts: NavigationAlertPreferences = .default, ridePreferences: RidePreferences = .default, phoneAlerts: PhoneAlertPreferences = .default, healthKitAutoUpload: Bool = true) {
         self.riderWeight = riderWeight
         self.riderHeight = riderHeight
         self.bikes = bikes
@@ -78,6 +80,7 @@ struct UserSettings: Codable, Equatable {
         self.navigationAlerts = navigationAlerts
         self.ridePreferences = ridePreferences
         self.phoneAlerts = phoneAlerts
+        self.healthKitAutoUpload = healthKitAutoUpload
     }
 
     init(from decoder: Decoder) throws {
@@ -90,6 +93,7 @@ struct UserSettings: Codable, Equatable {
         navigationAlerts = try container.decodeIfPresent(NavigationAlertPreferences.self, forKey: .navigationAlerts) ?? .default
         ridePreferences = try container.decodeIfPresent(RidePreferences.self, forKey: .ridePreferences) ?? .default
         phoneAlerts = try container.decodeIfPresent(PhoneAlertPreferences.self, forKey: .phoneAlerts) ?? .default
+        healthKitAutoUpload = try container.decodeIfPresent(Bool.self, forKey: .healthKitAutoUpload) ?? true
     }
 }
 

@@ -297,6 +297,7 @@ struct OG_Bike_ComputerApp: App {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                     UnitState.shared.preferences = userSettings.settings.unitPreferences
                     userSettings.attachMetricStore(metricConfig)
+                    integrationSettings.migrateHealthKitSetting(to: userSettings)
                     cachePreferencesForAppDelegate()
                     UploadManager.shared.configure(rideStore: rideStore, integrationSettings: integrationSettings)
                     UploadManager.shared.retryFailedUploads()

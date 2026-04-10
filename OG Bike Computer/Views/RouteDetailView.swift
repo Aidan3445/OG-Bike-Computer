@@ -8,6 +8,7 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import Charts
 
 struct RouteDetailView: View {
     let route: Route
@@ -31,6 +32,8 @@ struct RouteDetailView: View {
     @State private var cachedCoordinates: [CLLocationCoordinate2D] = []
     @State private var cachedMileMarkers: [MileMarker] = []
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
+    @State private var cachedElevationData: [ProcessedPoint] = []
+    @State private var panelPage = 0
 
     var body: some View {
         let _ = unitState.preferences
@@ -129,27 +132,84 @@ struct RouteDetailView: View {
             VStack(spacing: 0) {
                 Spacer()
 
-                VStack(spacing: 12) {
+                VStack(spacing: 6) {
                     if panelState != .collapsed {
                         Capsule()
                             .fill(.secondary)
                             .frame(width: 36, height: 4)
-                            .padding(.top, 8)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 30)
+                            .contentShape(Rectangle())
                             .onTapGesture {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                     panelState = .collapsed
                                 }
                             }
+                            .gesture(
+                                DragGesture(minimumDistance: 10)
+                                    .onEnded { value in
+                                        guard abs(value.translation.height) > 10 else { return }
+                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                            if value.translation.height > 0 {
+                                                switch panelState {
+                                                case .expanded: panelState = .compact
+                                                case .compact: panelState = .collapsed
+                                                case .collapsed: break
+                                                }
+                                            } else {
+                                                switch panelState {
+                                                case .collapsed: panelState = .compact
+                                                case .compact: panelState = .expanded
+                                                case .expanded: break
+                                                }
+                                            }
+                                        }
+                                    }
+                            )
 
-                        LazyVGrid(columns: [
-                            GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
-                        ], spacing: 10) {
-                            StatItem(label: "Distance", value: formatDistance(route.distance))
-                            if route.elevationGain > 0 {
-                                StatItem(label: "Elev Gain", value: formatElevation(route.elevationGain))
+                        TabView(selection: $panelPage) {
+                            // Page 0: Stats
+                            VStack {
+                                LazyVGrid(columns: [
+                                    GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
+                                ], spacing: 10) {
+                                    StatItem(label: "Distance", value: formatDistance(route.distance))
+                                    if route.elevationGain > 0 {
+                                        StatItem(label: "Elev Gain", value: formatElevation(route.elevationGain))
+                                    }
+                                    if route.elevationLoss > 0 {
+                                        StatItem(label: "Elev Loss", value: formatElevation(route.elevationLoss))
+                                    }
+                                }
+                                Spacer(minLength: 0)
                             }
-                            if route.elevationLoss > 0 {
-                                StatItem(label: "Elev Loss", value: formatElevation(route.elevationLoss))
+                            .tag(0)
+
+                            // Page 1: Elevation Chart
+                            if !cachedElevationData.isEmpty {
+                                VStack {
+                                    RouteElevationChartView(points: cachedElevationData)
+                                    Spacer(minLength: 0)
+                                }
+                                .tag(1)
+                            }
+                        }
+                        .tabViewStyle(.page(indexDisplayMode: .never))
+                        .frame(height: panelState == .expanded ? 170 : (route.elevationGain > 0 ? 70 : 60))
+                        .onChange(of: panelPage) { _, newPage in
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                panelState = newPage == 1 ? .expanded : .compact
+                            }
+                        }
+
+                        // Page dots (only if chart data exists)
+                        if !cachedElevationData.isEmpty {
+                            HStack(spacing: 6) {
+                                ForEach(0..<2, id: \.self) { i in
+                                    Circle()
+                                        .fill(panelPage == i ? Color.primary : Color.secondary.opacity(0.4))
+                                        .frame(width: 6, height: 6)
+                                }
                             }
                         }
                     } else {
@@ -160,7 +220,7 @@ struct RouteDetailView: View {
                     }
                 }
                 .padding(.horizontal, panelState != .collapsed ? 16 : 0)
-                .padding(.bottom, panelState != .collapsed ? 16 : 8)
+                .padding(.bottom, panelState != .collapsed ? 8 : 8)
                 .frame(
                     maxWidth: panelState != .collapsed ? .infinity : nil,
                     alignment: panelState != .collapsed ? .center : .trailing
@@ -183,30 +243,6 @@ struct RouteDetailView: View {
                         }
                     }
                 }
-                .gesture(
-                    DragGesture(minimumDistance: 30)
-                        .onEnded { value in
-                            guard abs(value.translation.height) > 30,
-                                  abs(value.translation.height) > abs(value.translation.width) else { return }
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                if value.translation.height > 0 {
-                                    // Swipe down — collapse
-                                    switch panelState {
-                                    case .expanded: panelState = .compact
-                                    case .compact: panelState = .collapsed
-                                    case .collapsed: break
-                                    }
-                                } else {
-                                    // Swipe up — expand
-                                    switch panelState {
-                                    case .collapsed: panelState = .compact
-                                    case .compact: panelState = .expanded
-                                    case .expanded: break
-                                    }
-                                }
-                            }
-                        }
-                )
             }
         }
         .navigationTitle(route.name)
@@ -288,6 +324,9 @@ struct RouteDetailView: View {
            highElev - lowElev >= minElevDiff {
             cachedElevationExtremes = (highest, lowest)
         }
+
+        // Build chart data
+        cachedElevationData = buildRouteElevationData(from: route)
     }
 }
 

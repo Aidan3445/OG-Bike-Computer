@@ -63,6 +63,7 @@ class WorkoutManager: NSObject, ObservableObject {
     var totalMass: Double { riderMass + bikeMass }
 
     var ridePreferences: RidePreferences = .default
+    var healthKitAutoUpload: Bool = true
 
     // Route name captured at ride start (survives mid-ride route swaps)
     private var initialRouteName: String?
@@ -93,6 +94,10 @@ class WorkoutManager: NSObject, ObservableObject {
 
     /// Set after ride ends, cleared when user dismisses summary screen
     @Published var completedRideSummary: WatchRideSummary?
+    /// Set when healthKitAutoUpload is off — prompts the user to save or discard the HK workout
+    @Published var showHealthKitPrompt = false
+    /// Continuation called with `true` to save to HealthKit, `false` to discard
+    var healthKitPromptHandler: ((Bool) -> Void)?
 
     var onRideCompleted: ((RideSummary) -> Void)?
 
@@ -730,24 +735,51 @@ class WorkoutManager: NSObject, ObservableObject {
                         print("[stop] end collection error: \(error)")
                     }
 
-                    self.builder?.finishWorkout { [weak self] workout, error in
-                        guard let self = self, let workout = workout else {
-                            print("[stop] finish workout error: \(String(describing: error))")
-                            self?.exportAndTransferRide()
-                            self?.cleanup()
-                            return
-                        }
-
-                        print("[stop] workout saved, attaching route...")
-
-                        self.routeBuilder?.finishRoute(with: workout, metadata: nil) { route, error in
-                            if let error = error {
-                                print("[stop] finish route error: \(error)")
-                            } else {
-                                print("[stop] route attached successfully")
+                    let finishHealthKit = { [weak self] in
+                        guard let self = self else { return }
+                        self.builder?.finishWorkout { [weak self] workout, error in
+                            guard let self = self, let workout = workout else {
+                                print("[stop] finish workout error: \(String(describing: error))")
+                                self?.exportAndTransferRide(savedToHealthKit: false)
+                                self?.cleanup()
+                                return
                             }
-                            self.exportAndTransferRide()
-                            self.cleanup()
+
+                            print("[stop] workout saved, attaching route...")
+
+                            self.routeBuilder?.finishRoute(with: workout, metadata: nil) { route, error in
+                                if let error = error {
+                                    print("[stop] finish route error: \(error)")
+                                } else {
+                                    print("[stop] route attached successfully")
+                                }
+                                self.exportAndTransferRide(savedToHealthKit: true)
+                                self.cleanup()
+                            }
+                        }
+                    }
+
+                    let discardHealthKit = { [weak self] in
+                        guard let self = self else { return }
+                        print("[stop] discarding HealthKit workout")
+                        self.builder?.discardWorkout()
+                        self.exportAndTransferRide(savedToHealthKit: false)
+                        self.cleanup()
+                    }
+
+                    if self.healthKitAutoUpload {
+                        finishHealthKit()
+                    } else {
+                        // Prompt user whether to save to Apple Health
+                        self.healthKitPromptHandler = { saveToHealth in
+                            if saveToHealth {
+                                finishHealthKit()
+                            } else {
+                                discardHealthKit()
+                            }
+                        }
+                        DispatchQueue.main.async {
+                            self.showHealthKitPrompt = true
                         }
                     }
                 }
@@ -1038,7 +1070,7 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
-    private func exportAndTransferRide() {
+    private func exportAndTransferRide(savedToHealthKit: Bool = false) {
         let rideName: String
         if let routeName = initialRouteName {
             rideName = routeName
@@ -1112,7 +1144,7 @@ class WorkoutManager: NSObject, ObservableObject {
             return
         }
 
-        let summary = RideSummary(
+        var summary = RideSummary(
             id: UUID(),
             name: rideName,
             activityType: activity,
@@ -1133,6 +1165,17 @@ class WorkoutManager: NSObject, ObservableObject {
             maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
             highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
             lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil)
+
+        // If HealthKit workout was saved, mark it in the upload records
+        if savedToHealthKit {
+            let fitnessRecord = ServiceUploadRecord(
+                service: .fitness,
+                remoteID: "healthkit",
+                uploadedAt: Date(),
+                webURL: nil
+            )
+            summary.uploads = [fitnessRecord]
+        }
 
         DispatchQueue.main.async {
             self.onRideCompleted?(summary)

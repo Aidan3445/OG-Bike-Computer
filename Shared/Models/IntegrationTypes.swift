@@ -12,6 +12,7 @@ import Foundation
 enum IntegrationServiceID: String, Codable, CaseIterable, Identifiable {
     case rideWithGPS
     case strava
+    case fitness
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum IntegrationServiceID: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .rideWithGPS: return "Ride With GPS"
         case .strava: return "Strava"
+        case .fitness: return "Apple Fitness"
         }
     }
 
@@ -26,6 +28,7 @@ enum IntegrationServiceID: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .rideWithGPS: return "RWGPSIcon"
         case .strava: return "StravaIcon"
+        case .fitness: return "FitnessIcon"
         }
     }
 
@@ -33,7 +36,13 @@ enum IntegrationServiceID: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .rideWithGPS: return "rwgpsOrange"
         case .strava: return "stravaOrange"
+        case .fitness: return "fitnessPink"
         }
+    }
+
+    /// Services that use OAuth connections (shown in integration settings)
+    static var oauthServices: [IntegrationServiceID] {
+        [.rideWithGPS, .strava]
     }
 }
 
@@ -78,11 +87,30 @@ struct ServiceUploadRecord: Codable, Equatable, Identifiable {
     }
 }
 
+extension Array where Element == ServiceUploadRecord {
+    /// Returns one record per service, preferring complete uploads over incomplete ones.
+    func uniqueByService() -> [ServiceUploadRecord] {
+        var best: [IntegrationServiceID: ServiceUploadRecord] = [:]
+        for record in self {
+            if let existing = best[record.service] {
+                // Prefer the complete one
+                if !existing.isComplete && record.isComplete {
+                    best[record.service] = record
+                }
+            } else {
+                best[record.service] = record
+            }
+        }
+        return Array(best.values).sorted { $0.service.rawValue < $1.service.rawValue }
+    }
+}
+
 // MARK: - Integration Settings
 
 struct IntegrationSettings: Codable, Equatable {
     var services: [IntegrationServiceID: ServiceConfig]
-    var healthKitAutoUpload: Bool
+    // Legacy — migrated to UserSettings.healthKitAutoUpload for watch sync
+    var healthKitAutoUpload: Bool?
 
     struct ServiceConfig: Codable, Equatable {
         var isConnected: Bool
@@ -93,8 +121,7 @@ struct IntegrationSettings: Codable, Equatable {
     }
 
     static let `default` = IntegrationSettings(
-        services: [:],
-        healthKitAutoUpload: true
+        services: [:]
     )
 
     func config(for service: IntegrationServiceID) -> ServiceConfig {
@@ -106,20 +133,20 @@ struct IntegrationSettings: Codable, Equatable {
     }
 
     var connectedServices: [IntegrationServiceID] {
-        IntegrationServiceID.allCases.filter { config(for: $0).isConnected }
+        IntegrationServiceID.oauthServices.filter { config(for: $0).isConnected }
     }
 
     var autoUploadDestinations: [IntegrationServiceID] {
-        IntegrationServiceID.allCases.filter { config(for: $0).autoUpload }
+        IntegrationServiceID.oauthServices.filter { config(for: $0).autoUpload }
     }
 
     var importRouteServices: [IntegrationServiceID] {
-        IntegrationServiceID.allCases.filter { config(for: $0).isConnected && config(for: $0).importRoutes }
+        IntegrationServiceID.oauthServices.filter { config(for: $0).isConnected && config(for: $0).importRoutes }
     }
 
-    /// Count of auto-upload destinations including HealthKit
-    var totalAutoUploadCount: Int {
-        autoUploadDestinations.count + (healthKitAutoUpload ? 1 : 0)
+    /// Count of auto-upload destinations (OAuth services only)
+    var autoUploadCount: Int {
+        autoUploadDestinations.count
     }
 }
 

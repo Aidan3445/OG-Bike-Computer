@@ -9,13 +9,18 @@ import SwiftUI
 
 struct IntegrationsSettingsView: View {
     @ObservedObject var integrationSettings: IntegrationSettingsStore
+    @ObservedObject var userSettings: UserSettingsStore
     @State private var isConnecting: IntegrationServiceID?
     @State private var connectionError: String?
+
+    private var totalAutoUploadCount: Int {
+        integrationSettings.settings.autoUploadCount + (userSettings.settings.healthKitAutoUpload ? 1 : 0)
+    }
 
     var body: some View {
         List {
             // MARK: - Duplicate Warning
-            if integrationSettings.settings.totalAutoUploadCount >= 2 {
+            if totalAutoUploadCount >= 2 {
                 Section {
                     Label {
                         Text("Multiple services are set to auto-upload. If any of these services are also connected to each other (e.g. Strava auto-syncs to Apple Fitness), you may end up with duplicate activities.")
@@ -29,24 +34,34 @@ struct IntegrationsSettingsView: View {
 
             // MARK: - Apple Health
             Section {
-                Toggle(isOn: $integrationSettings.settings.healthKitAutoUpload) {
+                Toggle(isOn: $userSettings.settings.healthKitAutoUpload) {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Auto-Upload Workouts")
-                            Text("Save rides to Apple Health automatically")
+                            Text("Upload Workouts to Health")
+                            Text("Save rides to Apple Health and Fitness apps.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if !userSettings.settings.healthKitAutoUpload {
+                                Text("If disabled, you will be prompted to save each ride to Health after recording, and rides won't appear in the Fitness app automatically.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                            }
                         }
                     } icon: {
                         Image(systemName: "heart.fill")
                             .foregroundStyle(.red)
                     }
                 }
-                // TODO: Sync healthKitAutoUpload preference to watch via UserSettings
-                // so WorkoutManager can conditionally discard the HKWorkout after recording.
-                // Currently the toggle is stored but the watch always saves to HealthKit.
             } header: {
-                Text("Apple Health")
+                Label {
+                    Text("Apple Health")
+                } icon: {
+                    Image(.fitnessIcon)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
             }
 
             // MARK: - Ride With GPS
@@ -60,19 +75,6 @@ struct IntegrationsSettingsView: View {
                 service: .strava,
                 supportsAutoUpload: true
             )
-
-            // MARK: - Strava Attribution
-            if integrationSettings.settings.config(for: .strava).isConnected {
-                Section {
-                    HStack {
-                        Spacer()
-                        Text("Powered by Strava")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                }
-            }
         }
         .navigationTitle("Integrations")
         .alert("Connection Error", isPresented: .init(
@@ -188,6 +190,8 @@ struct IntegrationsSettingsView: View {
                     _ = try await OAuthManager.shared.authenticateRWGPS()
                 case .strava:
                     _ = try await OAuthManager.shared.authenticateStrava()
+                case .fitness:
+                    break // Not an OAuth service
                 }
 
                 await MainActor.run {
