@@ -195,6 +195,8 @@ class OAuthManager: NSObject, ObservableObject {
             case .rideWithGPS:
                 // RWGPS tokens don't expire in the same way
                 return tokens.accessToken
+            case .fitness:
+                return tokens.accessToken // Not an OAuth service
             }
         }
 
