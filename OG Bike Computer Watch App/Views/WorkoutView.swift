@@ -16,7 +16,7 @@ struct WorkoutView<ExtraTab: View>: View {
 
     @State private var voiceEnabled = true
     @State private var page = 2
-    @State private var tab = 2
+    @State private var tab = 1
     @State private var endCountdown: Double = 0
     @State private var endTimer: Timer?
     @State private var showNavOverlay = false
@@ -43,11 +43,8 @@ struct WorkoutView<ExtraTab: View>: View {
                 .tag(1)
 
             TabView(selection: $tab) {
-                navigationPage
-                    .tag(1)
-
                 RouteMapView(workout: workout)
-                    .tag(2)
+                    .tag(1)
 
                 // Dynamic metric pages from config
                 ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, metricPage in
@@ -56,7 +53,7 @@ struct WorkoutView<ExtraTab: View>: View {
                         metricPage: metricPage,
                         showOffRouteBanner: index == 0
                     )
-                    .tag(3 + index)
+                    .tag(2 + index)
                 }
             }
             .tabViewStyle(.verticalPage)
@@ -151,91 +148,6 @@ struct WorkoutView<ExtraTab: View>: View {
             navOverlayTask?.cancel()
             navOverlayTask = nil
             showNavOverlay = false
-        }
-    }
-
-    private var navigationPage: some View {
-        Group {
-            if workout.navigation.isOffRoute {
-                OffRouteView(workout: workout)
-            } else if workout.navigation.isRouteComplete {
-                VStack(spacing: 8) {
-                    Image(systemName: "flag.checkered")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.green)
-                    Text("Route Complete!")
-                        .font(.headline)
-
-                    Spacer()
-
-                    HStack {
-                        MiniStat(label: "DIST", value: formatDistance(workout.totalDistance))
-                        Spacer()
-                        MiniStat(label: "TIME", value: formatTime(workout.movingTime))
-                    }
-                    .padding(.horizontal, 4)
-                }
-                .padding(.horizontal, 8)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-            } else if let turn = workout.navigation.nextTurn {
-                VStack(spacing: 4) {
-                    Image(systemName: turn.direction.icon)
-                        .font(.system(size: 44, weight: .bold))
-                        .foregroundStyle(turnColor(workout.navigation.distanceToNextTurn))
-                    Text(formatTurnDistance(workout.navigation.distanceToNextTurn))
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-
-                    Text(turn.direction.label)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-
-                    if let desc = turn.description {
-                        Text(desc)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.center)
-                    }
-
-                    Spacer()
-
-                    HStack {
-                        MiniStat(label: "DIST", value: formatDistance(workout.totalDistance))
-                        Spacer()
-                        MiniStat(label: "TIME", value: formatTime(workout.movingTime))
-                        Spacer()
-                        MiniStat(label: "TO END", value: formatDistance(workout.navigation.distanceRemaining))
-                    }
-                    .padding(.horizontal, 4)
-                }
-                .padding(.horizontal, 8)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-            } else {
-                VStack(spacing: 4) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 44, weight: .bold))
-                        .foregroundStyle(.green)
-                    Text("On Route")
-                        .font(.headline)
-
-                    Spacer()
-
-                    HStack {
-                        MiniStat(label: "DIST", value: formatDistance(workout.totalDistance))
-                        Spacer()
-                        MiniStat(label: "TIME", value: formatTime(workout.movingTime))
-                        Spacer()
-                        MiniStat(label: "TO END", value: formatDistance(workout.navigation.distanceRemaining))
-                    }
-                    .padding(.horizontal, 4)
-                }
-                .padding(.horizontal, 8)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-            }
         }
     }
 

@@ -52,7 +52,11 @@ class UploadManager: ObservableObject {
         }
 
         // 2. Check for existing Strava upload record
-        if let existing = ride.uploads?.first(where: { $0.service == .strava }) {
+        // Use the latest state from the store (not the passed-in ride) to catch
+        // retransmits where the watch version has uploads: nil
+        let latestRide = await MainActor.run { rideStore.rides.first(where: { $0.id == rideID }) }
+        let uploads = latestRide?.uploads ?? ride.uploads
+        if let existing = uploads?.first(where: { $0.service == .strava }) {
             if existing.isComplete {
                 logger.info("[UploadManager] Ride \(ride.name) already uploaded to Strava, skipping")
                 return
@@ -241,8 +245,8 @@ class UploadManager: ObservableObject {
             switch entry.service {
             case .strava:
                 Task { await uploadToStrava(ride) }
-            case .rideWithGPS:
-                break // RWGPS doesn't support API uploads
+            case .rideWithGPS, .fitness:
+                break // No API upload support
             }
         }
     }

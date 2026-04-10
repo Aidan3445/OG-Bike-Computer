@@ -215,7 +215,7 @@ struct SettingsView: View {
             // MARK: - Integrations
             Section {
                 NavigationLink {
-                    IntegrationsSettingsView(integrationSettings: integrationSettings)
+                    IntegrationsSettingsView(integrationSettings: integrationSettings, userSettings: userSettings)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {

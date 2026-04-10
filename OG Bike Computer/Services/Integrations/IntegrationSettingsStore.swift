@@ -34,6 +34,14 @@ class IntegrationSettingsStore: ObservableObject {
             .store(in: &cancellables)
     }
 
+    /// Migrate healthKitAutoUpload from IntegrationSettings → UserSettings (one-time).
+    func migrateHealthKitSetting(to userSettings: UserSettingsStore) {
+        if let legacy = settings.healthKitAutoUpload {
+            userSettings.settings.healthKitAutoUpload = legacy
+            settings.healthKitAutoUpload = nil
+        }
+    }
+
     private func save() {
         if let data = try? JSONEncoder().encode(settings) {
             try? data.write(to: fileURL, options: .atomic)

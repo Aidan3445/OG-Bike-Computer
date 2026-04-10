@@ -95,7 +95,8 @@ struct RouteMapView: View {
             let span = MKCoordinateSpan(
                 latitudeDelta: (processed.maxLat - processed.minLat) * 1.3,
                 longitudeDelta: (processed.maxLon - processed.minLon) * 1.3)
-            Map(position: .constant(.region(MKCoordinateRegion(center: center, span: span)))) {}
+            Map(position: .constant(.region(MKCoordinateRegion(center: center, span: span))),
+                interactionModes: []) {}
             .mapStyle(.standard(pointsOfInterest: .excludingAll))
             .mapControlVisibility(.hidden)
             .allowsHitTesting(false)
@@ -110,7 +111,8 @@ struct RouteMapView: View {
                 let span = MKCoordinateSpan(
                     latitudeDelta: (lats.max()! - lats.min()!) * 1.3,
                     longitudeDelta: (lons.max()! - lons.min()!) * 1.3)
-                Map(position: .constant(.region(MKCoordinateRegion(center: center, span: span)))) {}
+                Map(position: .constant(.region(MKCoordinateRegion(center: center, span: span))),
+                    interactionModes: []) {}
                 .mapStyle(.standard(pointsOfInterest: .excludingAll))
                 .mapControlVisibility(.hidden)
                 .allowsHitTesting(false)
