@@ -85,6 +85,12 @@ class RideSessionManager: ObservableObject {
         appGroupDefaults?.set(isPaused, forKey: "isPaused")
     }
 
+    /// Write the current moving time to App Group so the widget's EndRideIntent
+    /// can decide whether to discard (short ride) or end normally.
+    func writeMovingTimeToAppGroup(_ movingTime: TimeInterval) {
+        appGroupDefaults?.set(movingTime, forKey: "movingTime")
+    }
+
     /// Read ride state from App Group (used by widget intents).
     static func readIsRideActive() -> Bool {
         UserDefaults(suiteName: "group.com.aidan3445.computa")?.bool(forKey: "isRideActive") ?? false
@@ -111,8 +117,11 @@ class RideSessionManager: ObservableObject {
             pauseRide()
         case "resume":
             resumeRide()
+        case "discard":
+            // Short ride — discard both HK workout and app recording
+            ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
         case "end":
-            // Check moving time for discard logic
+            // Normal end — check moving time as a safety net
             let movingTime = PhoneTelemetryStore.shared.movingTime
             if movingTime < 60 {
                 ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])

@@ -197,7 +197,7 @@ struct ContentView: View {
                     RideControlView(metricConfig: metricConfig, userSettings: userSettings)
                 }
                 .tabItem {
-                    Label("Ride", systemImage: "bicycle")
+                    Label("Ride", systemImage: "record.circle")
                 }
                 .tag(3)
             }

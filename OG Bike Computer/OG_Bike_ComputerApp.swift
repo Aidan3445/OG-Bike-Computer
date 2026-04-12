@@ -222,6 +222,9 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                 #if canImport(ActivityKit)
                 DispatchQueue.main.async {
                     LiveActivityManager.shared.update(from: payload)
+                    RideSessionManager.shared.writeMovingTimeToAppGroup(
+                        PhoneTelemetryStore.shared.movingTime
+                    )
                     RideSessionManager.shared.processPendingWidgetCommand()
                 }
                 #endif

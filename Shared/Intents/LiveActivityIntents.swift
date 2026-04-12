@@ -24,6 +24,10 @@ private enum RideCommandBridge {
         defaults?.bool(forKey: "isPaused") ?? false
     }
 
+    static func readMovingTime() -> TimeInterval {
+        defaults?.double(forKey: "movingTime") ?? 0
+    }
+
     static func send(_ command: String) {
         defaults?.set(command, forKey: "pendingRideCommand")
     }
@@ -49,7 +53,13 @@ struct EndRideIntent: LiveActivityIntent {
     static var description: IntentDescription = "Ends the current ride and saves it."
 
     func perform() async throws -> some IntentResult {
-        await RideCommandBridge.send("end")
+        let movingTime = await RideCommandBridge.readMovingTime()
+        if movingTime < 60 {
+            // Short ride — tell the app to discard both HK workout and app recording
+            await RideCommandBridge.send("discard")
+        } else {
+            await RideCommandBridge.send("end")
+        }
         return .result()
     }
 }

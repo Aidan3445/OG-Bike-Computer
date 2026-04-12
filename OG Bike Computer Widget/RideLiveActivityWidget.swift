@@ -129,12 +129,23 @@ private struct LockScreenView: View {
     private var state: RideActivityAttributes.ContentState { context.state }
     private var isImperial: Bool { context.attributes.isImperial }
     private var statSlots: [String] { context.attributes.statSlots }
+    private var hasNav: Bool { state.nextTurnDirection != nil || state.isOffRoute }
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Turn alert bar (only with route, hidden in dim mode)
+        VStack(spacing: 6) {
+            // Top bar: nav info (if route) with compact controls, or nothing
             if !isLuminanceReduced {
-                turnNavigationBar
+                if hasNav {
+                    // Nav bar with compact round buttons in trailing corner
+                    HStack(spacing: 0) {
+                        turnNavigationContent
+                        Spacer(minLength: 4)
+                        compactControls
+                    }
+                } else {
+                    // No nav — nothing up top, buttons at bottom
+                    EmptyView()
+                }
             }
 
             // Stats grid — configurable 2 rows of 3
@@ -153,8 +164,8 @@ private struct LockScreenView: View {
                 }
             }
 
-            // Control buttons (hidden in dim mode for always-on display)
-            if !isLuminanceReduced {
+            // Full-width pill buttons only when there's NO nav (plenty of space)
+            if !isLuminanceReduced && !hasNav {
                 HStack(spacing: 12) {
                     Button(intent: PauseResumeRideIntent()) {
                         Label(
@@ -179,10 +190,10 @@ private struct LockScreenView: View {
         .padding(12)
     }
 
-    // MARK: - Turn Navigation Bar
+    // MARK: - Turn Navigation Content (no outer wrapper)
 
     @ViewBuilder
-    private var turnNavigationBar: some View {
+    private var turnNavigationContent: some View {
         if let dir = state.nextTurnDirection {
             HStack(spacing: 6) {
                 Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
@@ -194,23 +205,18 @@ private struct LockScreenView: View {
                             .font(.subheadline.weight(.semibold))
                         if let dist = state.distanceToNextTurn {
                             Text("in \(formatDistance(dist, imperial: isImperial))")
-                                .font(.subheadline)
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
                     if let cue = state.nextTurnCue, !cue.isEmpty {
                         Text(cue)
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
-                Spacer()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.cyan.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
         } else if state.isOffRoute {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -218,13 +224,30 @@ private struct LockScreenView: View {
                 Text(state.offRouteMessage ?? "Off Route")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.orange)
-                Spacer()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.orange.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
+    }
+
+    // MARK: - Compact Round Controls (used when nav is active)
+
+    private var compactControls: some View {
+        HStack(spacing: 6) {
+            Button(intent: PauseResumeRideIntent()) {
+                Image(systemName: state.isPaused ? "play.fill" : "pause.fill")
+                    .font(.caption2.weight(.semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .tint(state.isPaused ? .green : .yellow)
+
+            Button(intent: EndRideIntent()) {
+                Image(systemName: "stop.fill")
+                    .font(.caption2.weight(.semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .tint(.red)
+        }
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.circle)
     }
 
     // MARK: - Configurable Stats Grid
