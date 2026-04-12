@@ -6,7 +6,9 @@
 //
 
 import Foundation
+#if canImport(HealthKit)
 import HealthKit
+#endif
 
 enum ActivityType: String, CaseIterable, Codable, Identifiable {
     case cycling
@@ -34,6 +36,7 @@ enum ActivityType: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    #if canImport(HealthKit)
     var hkType: HKWorkoutActivityType {
         switch self {
         case .cycling: return .cycling
@@ -49,6 +52,7 @@ enum ActivityType: String, CaseIterable, Codable, Identifiable {
         case .running, .walking, .hiking: return HKQuantityType(.distanceWalkingRunning)
         }
     }
+    #endif
 
     var speedLabel: String {
         switch self {
@@ -64,3 +68,4 @@ enum ActivityType: String, CaseIterable, Codable, Identifiable {
         }
     }
 }
+

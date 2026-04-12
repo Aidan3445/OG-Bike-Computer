@@ -67,6 +67,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             mirrorLogger.notice("[Mirroring] Received mirrored session, state: \(mirroredSession.state.rawValue)")
             // Set new session FIRST — makes the === check in delegates work
             self?.mirroredSession = mirroredSession
+            RideSessionManager.shared.mirroredSession = mirroredSession
             mirroredSession.delegate = self
             // AVSpeechSynthesizer is not thread-safe — reset on main
             DispatchQueue.main.async {
@@ -112,9 +113,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Start the new mode
         if newMode == .liveActivity {
             #if canImport(ActivityKit)
+            let phonePrefs = loadPhoneAlertPreferences()
             let unitPrefs = loadUnitPreferences()
             let isImperial = unitPrefs.distance == .miles
-            LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial)
+            let slots = phonePrefs.liveActivitySlots.map(\.metricType.rawValue)
+            LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial, statSlots: slots)
             #endif
         } else if newMode == .turnNotifications {
             TurnNotificationManager.shared.requestPermission()
@@ -140,6 +143,8 @@ extension AppDelegate: HKWorkoutSessionDelegate {
             return
         }
 
+        RideSessionManager.shared.handleSessionStateChange(to: toState)
+
         if toState == .ended || toState == .stopped {
             DispatchQueue.main.async {
                 PhoneSpeechPlayer.shared.stopImmediately()
@@ -162,6 +167,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
             mirrorLogger.info("[Mirroring] Ignoring disconnect from old session")
             return
         }
+        RideSessionManager.shared.mirroredSession = nil
         DispatchQueue.main.async {
             PhoneSpeechPlayer.shared.stopImmediately()
         }
@@ -212,9 +218,11 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                 }
 
             case "telemetry":
+                PhoneTelemetryStore.shared.update(from: payload)
                 #if canImport(ActivityKit)
                 DispatchQueue.main.async {
                     LiveActivityManager.shared.update(from: payload)
+                    RideSessionManager.shared.processPendingWidgetCommand()
                 }
                 #endif
 
@@ -240,9 +248,10 @@ extension AppDelegate: HKWorkoutSessionDelegate {
         if phonePrefs.mode == .liveActivity {
             let unitPrefs = loadUnitPreferences()
             let isImperial = unitPrefs.distance == .miles
+            let slots = phonePrefs.liveActivitySlots.map(\.metricType.rawValue)
             print("[AppDelegate] Starting Live Activity (imperial=\(isImperial))")
             // Route name not available here — telemetry will provide context
-            LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial)
+            LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial, statSlots: slots)
         }
         #else
         print("[AppDelegate] ActivityKit not available on this build")
@@ -289,10 +298,11 @@ struct OG_Bike_ComputerApp: App {
     @StateObject private var integrationSettings = IntegrationSettingsStore()
 
     @State private var importedFileURL: URL?
+    @State private var showRideControl = false
 
     var body: some Scene {
         WindowGroup {
-            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings)
+            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings, showRideControlFullScreen: $showRideControl)
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                     UnitState.shared.preferences = userSettings.settings.unitPreferences
@@ -317,7 +327,13 @@ struct OG_Bike_ComputerApp: App {
                     cachePreferencesForAppDelegate()
                 }
                 .onOpenURL { url in
-                    handleIncomingFile(url)
+                    if url.scheme == "ogbikecomputer" && url.host == "ridecontrol" {
+                        if RideSessionManager.shared.isRideActive {
+                            showRideControl = true
+                        }
+                    } else {
+                        handleIncomingFile(url)
+                    }
                 }
         }
     }

@@ -2,17 +2,7 @@
 //  AppIntent.swift
 //  OG Bike Computer Widget
 //
-//  Created by Aidan Weinberg on 3/29/26.
+//  Intentionally left minimal — Live Activity intents are defined in
+//  Shared/Intents/LiveActivityIntents.swift and included in both the
+//  iOS app and widget targets.
 //
-
-import WidgetKit
-import AppIntents
-
-struct ConfigurationAppIntent: WidgetConfigurationIntent {
-    static var title: LocalizedStringResource { "Configuration" }
-    static var description: IntentDescription { "This is an example widget." }
-
-    // An example configurable parameter.
-    @Parameter(title: "Favorite Emoji", default: "😃")
-    var favoriteEmoji: String
-}

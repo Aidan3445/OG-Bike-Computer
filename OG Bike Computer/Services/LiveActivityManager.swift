@@ -18,7 +18,7 @@ class LiveActivityManager {
 
     // MARK: - Lifecycle
 
-    func startActivity(routeName: String?, isImperial: Bool) {
+    func startActivity(routeName: String?, isImperial: Bool, statSlots: [String] = LiveActivitySlot.defaultSlots.map(\.metricType.rawValue)) {
         let authInfo = ActivityAuthorizationInfo()
         print("[LiveActivity] Authorization check: areActivitiesEnabled=\(authInfo.areActivitiesEnabled), frequentPushesEnabled=\(authInfo.frequentPushesEnabled)")
         guard authInfo.areActivitiesEnabled else {
@@ -40,7 +40,8 @@ class LiveActivityManager {
         let attributes = RideActivityAttributes(
             routeName: routeName,
             startTime: Date(),
-            isImperial: isImperial
+            isImperial: isImperial,
+            statSlots: statSlots
         )
 
         let initialState = RideActivityAttributes.ContentState(
@@ -50,11 +51,22 @@ class LiveActivityManager {
             averageSpeed: 0,
             currentSpeed: 0,
             heartRate: nil,
+            maxSpeed: nil,
+            averageHeartRate: nil,
+            maxHeartRate: nil,
+            activeCalories: nil,
+            currentElevation: nil,
+            elevationGain: nil,
+            elevationLoss: nil,
+            highestElevation: nil,
+            currentGrade: nil,
+            estimatedPower: nil,
             distanceToNextTurn: nil,
             nextTurnDirection: nil,
             nextTurnIcon: nil,
             nextTurnCue: nil,
             routeDistanceRemaining: nil,
+            isPaused: false,
             isOffRoute: false,
             offRouteMessage: nil,
             riderLatitude: nil,
@@ -85,11 +97,22 @@ class LiveActivityManager {
             averageSpeed: Double(telemetry["avgSpeed"] ?? "") ?? 0,
             currentSpeed: Double(telemetry["speed"] ?? "") ?? 0,
             heartRate: Double(telemetry["heartRate"] ?? ""),
+            maxSpeed: Double(telemetry["maxSpeed"] ?? ""),
+            averageHeartRate: Double(telemetry["avgHR"] ?? ""),
+            maxHeartRate: Double(telemetry["maxHR"] ?? ""),
+            activeCalories: Double(telemetry["calories"] ?? ""),
+            currentElevation: Double(telemetry["elevation"] ?? ""),
+            elevationGain: Double(telemetry["elevGain"] ?? ""),
+            elevationLoss: Double(telemetry["elevLoss"] ?? ""),
+            highestElevation: Double(telemetry["highElev"] ?? ""),
+            currentGrade: Double(telemetry["grade"] ?? ""),
+            estimatedPower: Double(telemetry["power"] ?? ""),
             distanceToNextTurn: Double(telemetry["distToTurn"] ?? ""),
             nextTurnDirection: telemetry["turnDir"],
             nextTurnIcon: telemetry["turnIcon"],
             nextTurnCue: telemetry["turnCue"],
             routeDistanceRemaining: Double(telemetry["routeRemaining"] ?? ""),
+            isPaused: telemetry["isPaused"] == "true",
             isOffRoute: telemetry["isOffRoute"] == "true",
             offRouteMessage: telemetry["offRouteMsg"],
             riderLatitude: Double(telemetry["lat"] ?? ""),

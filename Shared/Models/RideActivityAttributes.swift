@@ -14,6 +14,9 @@ struct RideActivityAttributes: ActivityAttributes {
     var routeName: String?
     var startTime: Date
     var isImperial: Bool
+    /// Which 6 metrics to show in the lock-screen stats grid (MetricType raw values).
+    /// Defaults to distance, moving time, avg speed, heart rate, elev gain, speed.
+    var statSlots: [String] = ["distance", "movingTime", "averageSpeed", "heartRate", "elevationGain", "speed"]
 
     /// Dynamic data updated throughout the ride
     struct ContentState: Codable, Hashable {
@@ -25,12 +28,27 @@ struct RideActivityAttributes: ActivityAttributes {
         var currentSpeed: Double     // m/s
         var heartRate: Double?
 
+        // Extended stats
+        var maxSpeed: Double?            // m/s
+        var averageHeartRate: Double?
+        var maxHeartRate: Double?
+        var activeCalories: Double?
+        var currentElevation: Double?    // meters
+        var elevationGain: Double?       // meters
+        var elevationLoss: Double?       // meters
+        var highestElevation: Double?    // meters
+        var currentGrade: Double?        // percent
+        var estimatedPower: Double?      // watts
+
         // Navigation (nil for free rides)
         var distanceToNextTurn: Double?   // meters
         var nextTurnDirection: String?    // e.g. "Left", "Sharp Right"
         var nextTurnIcon: String?         // SF Symbol name e.g. "arrow.turn.up.left"
         var nextTurnCue: String?          // e.g. "onto Main St"
         var routeDistanceRemaining: Double? // meters
+
+        // Ride state
+        var isPaused: Bool
 
         // Off-route
         var isOffRoute: Bool

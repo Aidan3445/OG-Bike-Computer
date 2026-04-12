@@ -32,6 +32,19 @@ struct PhoneAlertSettingsView: View {
 
                 if userSettings.settings.phoneAlerts.mode == .liveActivity {
                     Toggle("Show Map Preview", isOn: prefs.liveActivityShowMap)
+
+                    NavigationLink {
+                        LiveActivityCustomizationView(userSettings: userSettings)
+                    } label: {
+                        HStack {
+                            Text("Customize Stats")
+                            Spacer()
+                            Text(userSettings.settings.phoneAlerts.liveActivitySlots.prefix(3).map(\.metricType.label).joined(separator: ", "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
             } header: {
                 Text("Phone Alert Mode")

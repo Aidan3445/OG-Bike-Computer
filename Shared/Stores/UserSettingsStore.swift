@@ -313,4 +313,80 @@ class UserSettingsStore: ObservableObject {
             UserDefaults.standard.removeObject(forKey: "activePresetID")
         }
     }
+
+    // MARK: - Temporary Ride Setting Changes
+
+    /// Dictionary of original values keyed by setting name, persisted in UserDefaults
+    /// so it survives across Siri intent invocations during a ride.
+    @Published var rideSettingChanges: [String: String]? {
+        didSet { persistRideChanges() }
+    }
+
+    var hasUnsavedRideChanges: Bool {
+        guard let changes = rideSettingChanges else { return false }
+        return !changes.isEmpty
+    }
+
+    /// Record the original value before a mid-ride change (only first change per key is tracked).
+    func trackRideChange(key: String, original: Any) {
+        if rideSettingChanges == nil {
+            rideSettingChanges = [:]
+        }
+        // Only track the first change so we have the true original
+        if rideSettingChanges?[key] == nil {
+            rideSettingChanges?[key] = String(describing: original)
+        }
+    }
+
+    private func persistRideChanges() {
+        if let changes = rideSettingChanges,
+           let data = try? JSONEncoder().encode(changes) {
+            UserDefaults.standard.set(data, forKey: "rideSettingChanges")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "rideSettingChanges")
+        }
+    }
+
+    /// Load any persisted ride changes (call on init to restore state after app relaunch).
+    func loadPersistedRideChanges() {
+        if let data = UserDefaults.standard.data(forKey: "rideSettingChanges"),
+           let changes = try? JSONDecoder().decode([String: String].self, from: data) {
+            rideSettingChanges = changes
+        }
+    }
+
+    /// Revert all mid-ride changes to their original values and clear tracking.
+    func revertRideChanges() {
+        guard let changes = rideSettingChanges else { return }
+
+        for (key, originalValue) in changes {
+            switch key {
+            case "autoPause":
+                settings.ridePreferences.autoPause.enabled = (originalValue == "true")
+            case "mapRotation":
+                if let rotation = MapRotation(rawValue: originalValue) {
+                    settings.ridePreferences.mapRotation = rotation
+                }
+            case "units":
+                if originalValue == "miles" {
+                    settings.unitPreferences = .imperial
+                } else {
+                    settings.unitPreferences = .metric
+                }
+            case "voiceAlerts":
+                if let mode = AlertMode(rawValue: originalValue) {
+                    settings.navigationAlerts.turnAlerts.defaultMode = mode
+                }
+            default:
+                break
+            }
+        }
+
+        rideSettingChanges = nil
+    }
+
+    /// Clear tracking without reverting (user chose to keep changes).
+    func clearRideTracking() {
+        rideSettingChanges = nil
+    }
 }
