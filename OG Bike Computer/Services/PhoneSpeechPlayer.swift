@@ -5,6 +5,7 @@
 //  Created by Aidan Weinberg on 3/7/26.
 //
 
+#if !WIDGET_EXTENSION
 import AVFoundation
 #if os(iOS)
 import UIKit
@@ -118,3 +119,4 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         endBackgroundTask()
     }
 }
+#endif // !WIDGET_EXTENSION

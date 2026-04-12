@@ -33,6 +33,10 @@ class WorkoutManager: NSObject, ObservableObject {
     var hasRoute: Bool { navigation.processedRoute != nil }
     private var needsAnchor = false
 
+    /// Guards against the HK delegate double-handling local pause/resume/stop actions.
+    /// Set true before local session control calls, reset in the delegate callback.
+    private var isLocalStateChange = false
+
     // Extended metrics
     @Published var maxSpeed: Double = 0
     @Published var currentElevation: Double = 0
@@ -532,6 +536,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func pauseSession() {
+        isLocalStateChange = true
         session?.pause()
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
@@ -554,6 +559,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
     
     func resumeSession() {
+        isLocalStateChange = true
         session?.resume()
         timerStart = Date()
         startDisplayTimer()
@@ -661,6 +667,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func stop(save: Bool) {
+        isLocalStateChange = true
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
         }
@@ -1298,11 +1305,22 @@ class WorkoutManager: NSObject, ObservableObject {
             "distance": String(totalDistance),
             "avgSpeed": String(avgSpeed),
             "speed": String(speed),
+            "isPaused": String(isPaused),
         ]
 
         if heartRate > 0 {
             payload["heartRate"] = String(heartRate)
         }
+        if maxSpeed > 0 { payload["maxSpeed"] = String(maxSpeed) }
+        if averageHeartRate > 0 { payload["avgHR"] = String(averageHeartRate) }
+        if maxHeartRate > 0 { payload["maxHR"] = String(maxHeartRate) }
+        if activeCalories > 0 { payload["calories"] = String(activeCalories) }
+        if currentElevation != 0 { payload["elevation"] = String(currentElevation) }
+        if liveElevationGain > 0 { payload["elevGain"] = String(liveElevationGain) }
+        if liveElevationLoss > 0 { payload["elevLoss"] = String(liveElevationLoss) }
+        if highestElevation > -Double.greatestFiniteMagnitude { payload["highElev"] = String(highestElevation) }
+        if currentGrade != 0 { payload["grade"] = String(currentGrade) }
+        if estimatedPower > 0 { payload["power"] = String(estimatedPower) }
 
         if let loc = currentLocation {
             payload["lat"] = String(loc.coordinate.latitude)
@@ -1433,6 +1451,55 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                         from fromState: HKWorkoutSessionState,
                         date: Date) {
         print("Workout state: \(fromState.rawValue) → \(toState.rawValue)")
+
+        if isLocalStateChange {
+            // Local action (pause/resume/stop called on this device) —
+            // internal state is already synced, just reset the guard.
+            isLocalStateChange = false
+            return
+        }
+
+        // Remote state change (initiated from phone via mirrored session).
+        // Sync internal WorkoutManager state to match.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isActive else { return }
+
+            switch toState {
+            case .paused where fromState == .running:
+                print("[Remote] Pause received from phone")
+                // Sync timers and isPaused flag without re-calling session?.pause()
+                if let start = self.timerStart {
+                    self.timerAccumulated += Date().timeIntervalSince(start)
+                }
+                self.timerStart = nil
+                self.isPaused = true
+                self.locationManager.stopUpdatingLocation()
+                self.locationManager.stopUpdatingHeading()
+                if self.autoPauseState == .tentativeResume {
+                    self.clearTentativeBuffer()
+                }
+                self.autoPauseState = .moving
+
+            case .running where fromState == .paused:
+                print("[Remote] Resume received from phone")
+                self.timerStart = Date()
+                self.startDisplayTimer()
+                self.isPaused = false
+                self.skipNextDistanceGap = true
+                self.slowSampleCount = 0
+                self.autoPauseState = .moving
+                self.resumeGraceUntil = Date().addingTimeInterval(5)
+                self.locationManager.startUpdatingLocation()
+                self.locationManager.startUpdatingHeading()
+
+            case .ended, .stopped:
+                print("[Remote] End received from phone")
+                self.stop(save: true)
+
+            default:
+                break
+            }
+        }
     }
 
     func workoutSession(_ workoutSession: HKWorkoutSession,

@@ -7,6 +7,7 @@
 
 #if canImport(ActivityKit)
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -22,6 +23,7 @@ struct RideLiveActivity: Widget {
         ActivityConfiguration(for: RideActivityAttributes.self) { context in
             // Lock Screen / Banner
             LockScreenView(context: context)
+                .widgetURL(URL(string: "ogbikecomputer://ridecontrol"))
         } dynamicIsland: { context in
             DynamicIsland {
                 // Expanded
@@ -36,7 +38,7 @@ struct RideLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(formatDuration(context.state.movingTime))
+                        Text(formatDuration(context.state.movingTime, hideSeconds: false))
                             .font(.caption.weight(.semibold))
                             .monospacedDigit()
                         if let hr = context.state.heartRate, hr > 0 {
@@ -72,6 +74,20 @@ struct RideLiveActivity: Widget {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                    HStack(spacing: 8) {
+                        Button(intent: PauseResumeRideIntent()) {
+                            Image(systemName: context.state.isPaused ? "play.fill" : "pause.fill")
+                                .font(.caption2)
+                        }
+                        .tint(context.state.isPaused ? .green : .yellow)
+
+                        Button(intent: EndRideIntent()) {
+                            Image(systemName: "stop.fill")
+                                .font(.caption2)
+                        }
+                        .tint(.red)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             } compactLeading: {
                 if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
@@ -108,76 +124,24 @@ struct RideLiveActivity: Widget {
 
 private struct LockScreenView: View {
     let context: ActivityViewContext<RideActivityAttributes>
+    @Environment(\.isLuminanceReduced) var isLuminanceReduced
 
     private var state: RideActivityAttributes.ContentState { context.state }
     private var isImperial: Bool { context.attributes.isImperial }
+    private var statSlots: [String] { context.attributes.statSlots }
 
     var body: some View {
         VStack(spacing: 8) {
-            // Turn alert bar (only with route)
-            if let dir = state.nextTurnDirection {
-                HStack(spacing: 6) {
-                    Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
-                        .font(.body.weight(.bold))
-                        .foregroundStyle(.cyan)
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 4) {
-                            Text(dir.capitalized)
-                                .font(.subheadline.weight(.semibold))
-                            if let dist = state.distanceToNextTurn {
-                                Text("in \(formatDistance(dist, imperial: isImperial))")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        if let cue = state.nextTurnCue, !cue.isEmpty {
-                            Text(cue)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.cyan.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else if state.isOffRoute {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text(state.offRouteMessage ?? "Off Route")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.orange)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.orange.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            // Turn alert bar (only with route, hidden in dim mode)
+            if !isLuminanceReduced {
+                turnNavigationBar
             }
 
-            // Stats grid
-            HStack(spacing: 0) {
-                statCell(
-                    label: "Distance",
-                    value: formatDistance(state.totalDistance, imperial: isImperial)
-                )
-                Divider().frame(height: 32)
-                statCell(
-                    label: "Moving",
-                    value: formatDuration(state.movingTime)
-                )
-                Divider().frame(height: 32)
-                statCell(
-                    label: "Avg Speed",
-                    value: formatSpeed(state.averageSpeed, imperial: isImperial)
-                )
-            }
+            // Stats grid — configurable 2 rows of 3
+            statsGrid
 
-            // Route remaining (if navigating)
-            if let remaining = state.routeDistanceRemaining {
+            // Route remaining (if navigating, hidden in dim mode)
+            if !isLuminanceReduced, let remaining = state.routeDistanceRemaining {
                 HStack {
                     Image(systemName: "flag.checkered")
                         .font(.caption2)
@@ -188,12 +152,120 @@ private struct LockScreenView: View {
                     Spacer()
                 }
             }
+
+            // Control buttons (hidden in dim mode for always-on display)
+            if !isLuminanceReduced {
+                HStack(spacing: 12) {
+                    Button(intent: PauseResumeRideIntent()) {
+                        Label(
+                            state.isPaused ? "Resume" : "Pause",
+                            systemImage: state.isPaused ? "play.fill" : "pause.fill"
+                        )
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                    }
+                    .tint(state.isPaused ? .green : .yellow)
+
+                    Button(intent: EndRideIntent()) {
+                        Label("End", systemImage: "stop.fill")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .tint(.red)
+                }
+                .buttonStyle(.borderedProminent)
+            }
         }
         .padding(12)
     }
 
-    private func statCell(label: String, value: String) -> some View {
-        VStack(spacing: 2) {
+    // MARK: - Turn Navigation Bar
+
+    @ViewBuilder
+    private var turnNavigationBar: some View {
+        if let dir = state.nextTurnDirection {
+            HStack(spacing: 6) {
+                Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(.cyan)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(dir.capitalized)
+                            .font(.subheadline.weight(.semibold))
+                        if let dist = state.distanceToNextTurn {
+                            Text("in \(formatDistance(dist, imperial: isImperial))")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let cue = state.nextTurnCue, !cue.isEmpty {
+                        Text(cue)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.cyan.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else if state.isOffRoute {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(state.offRouteMessage ?? "Off Route")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.orange.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    // MARK: - Configurable Stats Grid
+
+    @ViewBuilder
+    private var statsGrid: some View {
+        let topRow = Array(statSlots.prefix(3))
+        let bottomRow = Array(statSlots.dropFirst(3).prefix(3))
+
+        VStack(spacing: 0) {
+            // Top row
+            HStack(spacing: 0) {
+                ForEach(Array(topRow.enumerated()), id: \.offset) { i, slot in
+                    statCell(for: slot)
+                    if i < topRow.count - 1 {
+                        Divider().frame(height: 32)
+                    }
+                }
+            }
+
+            if !bottomRow.isEmpty {
+                Divider().padding(.horizontal, 16)
+
+                // Bottom row
+                HStack(spacing: 0) {
+                    ForEach(Array(bottomRow.enumerated()), id: \.offset) { i, slot in
+                        statCell(for: slot)
+                        if i < bottomRow.count - 1 {
+                            Divider().frame(height: 32)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func statCell(for slotRawValue: String) -> some View {
+        let label = metricLabel(slotRawValue)
+        let value = resolveMetricValue(slotRawValue)
+
+        return VStack(spacing: 2) {
             Text(value)
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
@@ -202,6 +274,67 @@ private struct LockScreenView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Resolve a metric raw value to its display string from ContentState.
+    private func resolveMetricValue(_ rawValue: String) -> String {
+        let hideSeconds = isLuminanceReduced
+
+        switch rawValue {
+        case "speed":
+            return formatSpeed(state.currentSpeed, imperial: isImperial)
+        case "averageSpeed":
+            return formatSpeed(state.averageSpeed, imperial: isImperial)
+        case "maxSpeed":
+            guard let v = state.maxSpeed, v > 0 else { return "--" }
+            return formatSpeed(v, imperial: isImperial)
+        case "distance":
+            return formatDistance(state.totalDistance, imperial: isImperial)
+        case "distanceRemaining":
+            guard let v = state.routeDistanceRemaining else { return "--" }
+            return formatDistance(v, imperial: isImperial)
+        case "elapsedTime":
+            return formatDuration(state.elapsedTime, hideSeconds: hideSeconds)
+        case "movingTime":
+            return formatDuration(state.movingTime, hideSeconds: hideSeconds)
+        case "heartRate":
+            guard let v = state.heartRate, v > 0 else { return "--" }
+            return "\(Int(v))"
+        case "averageHeartRate":
+            guard let v = state.averageHeartRate, v > 0 else { return "--" }
+            return "\(Int(v))"
+        case "maxHeartRate":
+            guard let v = state.maxHeartRate, v > 0 else { return "--" }
+            return "\(Int(v))"
+        case "calories":
+            guard let v = state.activeCalories, v > 0 else { return "--" }
+            return "\(Int(v))"
+        case "currentElevation":
+            guard let v = state.currentElevation else { return "--" }
+            return formatElevation(v, imperial: isImperial)
+        case "elevationGain":
+            guard let v = state.elevationGain, v > 0 else { return "--" }
+            return formatElevation(v, imperial: isImperial)
+        case "elevationLoss":
+            guard let v = state.elevationLoss, v > 0 else { return "--" }
+            return formatElevation(v, imperial: isImperial)
+        case "highestElevation":
+            guard let v = state.highestElevation else { return "--" }
+            return formatElevation(v, imperial: isImperial)
+        case "grade":
+            guard let v = state.currentGrade, v != 0 else { return "--" }
+            return String(format: "%.1f%%", v)
+        case "powerEstimate":
+            guard let v = state.estimatedPower, v > 0 else { return "--" }
+            return "\(Int(v))W"
+        case "nextTurnDistance":
+            guard let v = state.distanceToNextTurn else { return "--" }
+            return formatDistance(v, imperial: isImperial)
+        case "nextTurnDirection":
+            return state.nextTurnDirection ?? "--"
+        default:
+            return "--"
+        }
     }
 }
 
@@ -246,14 +379,55 @@ private func formatSpeed(_ mps: Double, imperial: Bool) -> String {
     }
 }
 
-private func formatDuration(_ seconds: TimeInterval) -> String {
+private func formatDuration(_ seconds: TimeInterval, hideSeconds: Bool) -> String {
     let h = Int(seconds) / 3600
     let m = (Int(seconds) % 3600) / 60
     let s = Int(seconds) % 60
+    if hideSeconds {
+        // Always-on display dim mode: omit seconds
+        if h > 0 {
+            return String(format: "%d:%02d", h, m)
+        }
+        return "\(m) min"
+    }
     if h > 0 {
         return String(format: "%d:%02d:%02d", h, m, s)
     }
     return String(format: "%d:%02d", m, s)
+}
+
+private func formatElevation(_ meters: Double, imperial: Bool) -> String {
+    if imperial {
+        return "\(Int(meters * 3.28084)) ft"
+    }
+    return "\(Int(meters)) m"
+}
+
+/// Map MetricType raw values to display labels (avoids depending on MetricType in widget target).
+private func metricLabel(_ rawValue: String) -> String {
+    switch rawValue {
+    case "speed": return "SPEED"
+    case "averageSpeed": return "AVG SPEED"
+    case "maxSpeed": return "MAX SPEED"
+    case "distance": return "DISTANCE"
+    case "distanceRemaining": return "REMAINING"
+    case "elapsedTime": return "ELAPSED"
+    case "movingTime": return "MOVING"
+    case "heartRate": return "HR"
+    case "averageHeartRate": return "AVG HR"
+    case "maxHeartRate": return "MAX HR"
+    case "calories": return "CAL"
+    case "currentElevation": return "ELEVATION"
+    case "elevationGain": return "ELEV GAIN"
+    case "elevationLoss": return "ELEV LOSS"
+    case "highestElevation": return "HIGH ELEV"
+    case "grade": return "GRADE"
+    case "powerEstimate": return "POWER"
+    case "nextTurnDistance": return "NEXT TURN"
+    case "nextTurnDirection": return "TURN DIR"
+    case "heading": return "HEADING"
+    default: return rawValue.uppercased()
+    }
 }
 
 private func turnIcon(_ direction: String) -> String {

@@ -105,6 +105,44 @@ struct ContentView: View {
             workout.onRideCompleted = { summary in
                 rideStore.save(summary)
             }
+
+            // Handle ride commands from phone (Shortcuts/Siri)
+            ConnectivityManager.shared.onStartRideRequested = { (routeID: UUID?, activity: ActivityType) in
+                guard !workout.isActive else { return }
+                if let routeID = routeID,
+                   let route = store.routes.first(where: { $0.id == routeID }) {
+                    workout.loadRoute(route)
+                }
+                workout.start(activity: activity)
+            }
+
+            ConnectivityManager.shared.onChangeRouteRequested = { routeID in
+                guard workout.isActive,
+                      let route = store.routes.first(where: { $0.id == routeID }) else { return }
+                workout.loadRoute(route)
+            }
+
+            ConnectivityManager.shared.onDiscardRideRequested = {
+                guard workout.isActive else { return }
+                workout.discard()
+            }
+
+            ConnectivityManager.shared.onToggleVoiceRequested = {
+                VoiceNavigator.shared.isEnabled.toggle()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .actionButtonStartRide)) { notification in
+            guard !workout.isActive else { return }
+            let activity = notification.object as? ActivityType ?? .cycling
+            workout.start(activity: activity)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .actionButtonPauseRide)) { _ in
+            guard workout.isActive, !workout.isPaused else { return }
+            workout.pause()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .actionButtonResumeRide)) { _ in
+            guard workout.isActive, workout.isPaused else { return }
+            workout.resume()
         }
         .alert("Discard Ride?", isPresented: $showDiscardAlert) {
             Button("Discard", role: .destructive) {

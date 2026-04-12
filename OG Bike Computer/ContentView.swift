@@ -16,6 +16,7 @@ struct ContentView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject var integrationSettings: IntegrationSettingsStore
+    @Binding var showRideControlFullScreen: Bool
     @StateObject private var connectivity = ConnectivityManager.shared
 
     @State private var showFilePicker = false
@@ -25,6 +26,8 @@ struct ContentView: View {
     @State private var showQueuedAlert = false
     @State private var selectedRoute: Route?
     @State private var serviceRoutePickerService: IntegrationServiceID?
+
+    @StateObject private var rideSession = RideSessionManager.shared
 
     @State private var selectedTab = 0
     @State private var navigationPath = NavigationPath()
@@ -187,6 +190,29 @@ struct ContentView: View {
                 Label("Settings", systemImage: "gearshape")
             }
             .tag(2)
+
+            // Dynamic Ride tab — appears only during active rides
+            if rideSession.isRideActive {
+                NavigationStack {
+                    RideControlView(metricConfig: metricConfig, userSettings: userSettings)
+                }
+                .tabItem {
+                    Label("Ride", systemImage: "bicycle")
+                }
+                .tag(3)
+            }
+        }
+        .fullScreenCover(isPresented: $showRideControlFullScreen) {
+            NavigationStack {
+                RideControlView(metricConfig: metricConfig, userSettings: userSettings)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Done") {
+                                showRideControlFullScreen = false
+                            }
+                        }
+                    }
+            }
         }
     }
 

@@ -59,6 +59,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		DD1062B32F8AF841005DA7BC /* OG Bike Computer WidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "OG Bike Computer WidgetExtension.entitlements"; sourceTree = "<group>"; };
 		DD21F80A2F7984D10001B407 /* OG Bike Computer WidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "OG Bike Computer WidgetExtension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD21F80C2F7984D20001B407 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		DD21F80E2F7984D20001B407 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
@@ -68,6 +69,12 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		DD1062B22F8AF7C4005DA7BC /* Exceptions for "OG Bike Computer" folder in "OG Bike Computer WidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+			);
+			target = DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */;
+		};
 		DD21F81F2F7984D30001B407 /* Exceptions for "OG Bike Computer Widget" folder in "OG Bike Computer WidgetExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -78,9 +85,23 @@
 		DD21F8482F7987350001B407 /* Exceptions for "Shared" folder in "OG Bike Computer WidgetExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Entities/BikeEntity.swift,
+				Entities/RouteEntity.swift,
+				Entities/SettingsProfileEntity.swift,
+				Intents/ChangeSettingIntent.swift,
+				Intents/ProfileIntents.swift,
+				Intents/RideIntents.swift,
 				Models/SettingsPreset.swift,
 				Services/ConnectivityManager.swift,
+				Services/GPXExporter.swift,
+				Services/RouteProcessor.swift,
+				Services/TrackEncoder.swift,
+				Stores/MetricConfigStore.swift,
+				Stores/RideStore.swift,
+				Stores/RouteStore.swift,
 				Stores/UserSettingsStore.swift,
+				Utils/MetricResolver.swift,
+				Utils/MileMarkers.swift,
 			);
 			target = DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */;
 		};
@@ -102,6 +123,9 @@
 		};
 		DD5D2CC52F525E5900988CBB /* OG Bike Computer */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DD1062B22F8AF7C4005DA7BC /* Exceptions for "OG Bike Computer" folder in "OG Bike Computer WidgetExtension" target */,
+			);
 			path = "OG Bike Computer";
 			sourceTree = "<group>";
 		};
@@ -159,6 +183,7 @@
 		DD5D2CBA2F525E5900988CBB = {
 			isa = PBXGroup;
 			children = (
+				DD1062B32F8AF841005DA7BC /* OG Bike Computer WidgetExtension.entitlements */,
 				DD3C3B432F80DB800058DD87 /* ci_scripts */,
 				DDEEE97D2F7CF8440089CD3F /* Computa.png */,
 				DD9A560A2F535D64001156B1 /* Shared */,
@@ -368,6 +393,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = "OG Bike Computer WidgetExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
@@ -389,6 +415,7 @@
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG WIDGET_EXTENSION $(inherited)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -402,6 +429,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = "OG Bike Computer WidgetExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
@@ -423,6 +451,7 @@
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "WIDGET_EXTENSION $(inherited)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;

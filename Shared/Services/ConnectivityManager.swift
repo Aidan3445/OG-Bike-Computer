@@ -100,6 +100,18 @@ final class ConnectivityManager: NSObject, ObservableObject {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
+
+    /// Callback when a ride start command is received from the phone (watchOS only).
+    var onStartRideRequested: ((UUID?, ActivityType) -> Void)?
+
+    /// Callback when a route change command is received from the phone (watchOS only).
+    var onChangeRouteRequested: ((UUID) -> Void)?
+
+    /// Callback when a discard ride command is received from the phone (watchOS only).
+    var onDiscardRideRequested: (() -> Void)?
+
+    /// Callback when a voice toggle command is received from the phone (watchOS only).
+    var onToggleVoiceRequested: (() -> Void)?
 }
 
 // --- iOS ---
@@ -216,6 +228,24 @@ extension ConnectivityManager {
         }
     }
 
+    // MARK: - Ride Commands (iOS → Watch)
+    /// Send a ride control command to the watch (startRide, changeRoute, toggleVoice).
+    func sendRideCommand(_ message: [String: Any]) {
+        guard WCSession.default.activationState == .activated else { return }
+
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(message, replyHandler: { reply in
+                print("[RideCommand] Sent: \(message["type"] ?? "?"), reply: \(reply)")
+            }, errorHandler: { error in
+                print("[RideCommand] Failed: \(error). Queuing via userInfo.")
+                WCSession.default.transferUserInfo(message)
+            })
+        } else {
+            WCSession.default.transferUserInfo(message)
+            print("[RideCommand] Watch not reachable, queued via userInfo")
+        }
+    }
+    
     /// Send acknowledgment to watch that a ride was successfully received.
     func sendRideAck(rideID: UUID) {
         guard WCSession.default.activationState == .activated else { return }
@@ -579,9 +609,48 @@ extension ConnectivityManager: WCSessionDelegate {
             replyHandler(["cleared": true])
             return
         }
+
+        // Ride commands from phone
+        if let type = message["type"] as? String {
+            switch type {
+            case "startRide":
+                let routeIDStr = message["routeID"] as? String
+                let routeID = routeIDStr.flatMap { UUID(uuidString: $0) }
+                let activityStr = message["activity"] as? String ?? "cycling"
+                let activity = ActivityType(rawValue: activityStr) ?? .cycling
+                DispatchQueue.main.async {
+                    self.onStartRideRequested?(routeID, activity)
+                }
+                replyHandler(["started": true])
+                return
+            case "changeRoute":
+                if let idStr = message["routeID"] as? String,
+                   let routeID = UUID(uuidString: idStr) {
+                    DispatchQueue.main.async {
+                        self.onChangeRouteRequested?(routeID)
+                    }
+                }
+                replyHandler(["changed": true])
+                return
+            case "toggleVoice":
+                DispatchQueue.main.async {
+                    self.onToggleVoiceRequested?()
+                }
+                replyHandler(["toggled": true])
+                return
+            case "discardRide":
+                DispatchQueue.main.async {
+                    self.onDiscardRideRequested?()
+                }
+                replyHandler(["discarded": true])
+                return
+            default:
+                break
+            }
+        }
         #endif
 
-        #if os(iOS)
+        #if os(iOS) && !WIDGET_EXTENSION
         print("Received message: \(message.keys), \(message["type"] as? String ?? "no type")")
         if let type = message["type"] as? String,
            type == "speech",
