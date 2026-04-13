@@ -12,6 +12,12 @@
 
 import AppIntents
 import Foundation
+#if canImport(HealthKit)
+import HealthKit
+#endif
+import os
+
+private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "AppIntents")
 
 // MARK: - Start Ride
 
@@ -27,8 +33,17 @@ struct StartRideIntent: AppIntent {
     var activityType: ActivityTypeEnum
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        await logger.info("Start Ride Intent")
+
         #if os(iOS)
-        // Send start command to watch via WatchConnectivity
+        // Two-pronged approach:
+        // 1. Send route + start command via WC (fire-and-forget, may arrive late)
+        // 2. Launch watch app via HKHealthStore.startWatchApp (reliable foreground)
+        //
+        // The watch has handlers for both paths, guarded by !workout.isActive,
+        // so only the first to execute starts the ride.
+
+        // (1) WC message — carries route ID, best-effort
         var message: [String: Any] = [
             "type": "startRide",
             "activity": activityType.rawValue
@@ -37,12 +52,27 @@ struct StartRideIntent: AppIntent {
             message["routeID"] = route.id.uuidString
         }
         await ConnectivityManager.shared.sendRideCommand(message)
+
+        // (2) HKHealthStore.startWatchApp — guaranteed to launch + foreground watch
+        let config = HKWorkoutConfiguration()
+        config.activityType = await activityType.activityType.hkType
+        config.locationType = .outdoor
+
+        let healthStore = HKHealthStore()
+        healthStore.startWatchApp(with: config) {_,_ in
+            logger.info("Workout started from APP INTENT")
+        }
+
         let routeLabel = route?.name ?? "Free Ride"
         return .result(dialog: "Starting \(routeLabel).")
+
         #elseif os(watchOS)
-        // Directly start via WorkoutManager would go here,
-        // but the watch ContentView handles the start flow.
-        return .result(dialog: "Opening ride start.")
+        // On watchOS, Siri/Shortcuts routes through WatchStartWorkoutIntent
+        // (StartWorkoutIntent protocol) which has system-level foreground
+        // guarantees. This generic AppIntent shouldn't be the entry point,
+        // but handle it gracefully if it is.
+        await logger.warning("StartRideIntent invoked on watchOS — prefer WatchStartWorkoutIntent for foreground guarantees")
+        return .result(dialog: "Use the Start Ride shortcut for best results.")
         #endif
     }
 
