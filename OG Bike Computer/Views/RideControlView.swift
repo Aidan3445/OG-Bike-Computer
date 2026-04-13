@@ -22,6 +22,8 @@ struct RideControlView: View {
     @State private var showDiscardAlert = false
     @State private var showSettingsRevertPrompt = false
     @State private var selectedPage = 0
+    
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,6 +46,11 @@ struct RideControlView: View {
             controlBar
                 .padding(.horizontal)
                 .padding(.bottom, 16)
+        }
+        .onChange(of: session.isRideActive, initial: false) { isActive, _  in
+            if !isActive {
+                dismiss()
+            }
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle(session.isPaused ? "Paused" : "Riding")
@@ -85,6 +92,7 @@ struct RideControlView: View {
             Text("You changed some settings via Siri during this ride. Would you like to keep these changes?")
         }
     }
+    
 
     // MARK: - Navigation Bar
 

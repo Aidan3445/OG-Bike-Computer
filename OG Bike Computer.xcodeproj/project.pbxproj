@@ -69,12 +69,6 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		DD1062B22F8AF7C4005DA7BC /* Exceptions for "OG Bike Computer" folder in "OG Bike Computer WidgetExtension" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-			);
-			target = DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */;
-		};
 		DD21F81F2F7984D30001B407 /* Exceptions for "OG Bike Computer Widget" folder in "OG Bike Computer WidgetExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -123,9 +117,6 @@
 		};
 		DD5D2CC52F525E5900988CBB /* OG Bike Computer */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				DD1062B22F8AF7C4005DA7BC /* Exceptions for "OG Bike Computer" folder in "OG Bike Computer WidgetExtension" target */,
-			);
 			path = "OG Bike Computer";
 			sourceTree = "<group>";
 		};
