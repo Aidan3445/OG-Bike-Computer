@@ -11,6 +11,8 @@ struct MapCustomizationView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject private var unitState = UnitState.shared
     @State private var showProfileImport = false
+    
+    @Environment(\.colorScheme) var colorScheme
 
     private var config: Binding<MapScreenConfig> {
         $userSettings.settings.ridePreferences.mapScreen
@@ -248,14 +250,22 @@ struct MapCustomizationView: View {
                         ZStack {
                             Circle()
                                 .fill(color.color)
+                                .strokeBorder(
+                                    color == .white && colorScheme == .light ? .black : .clear,
+                                    lineWidth: 1,
+                                )
                                 .frame(width: 36, height: 36)
+                        
                             if userSettings.settings.ridePreferences.mapScreen.routeAheadColor == color {
                                 Circle()
-                                    .strokeBorder(.white, lineWidth: 3)
+                                    .strokeBorder(
+                                        color == .white || colorScheme == .light ? .black: .white,
+                                        lineWidth: 3
+                                    )
                                     .frame(width: 36, height: 36)
                                 Image(systemName: "checkmark")
                                     .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(color == .white ? .black : .white)
+                                    .foregroundStyle(color == .white || colorScheme == .light ? .black : .white)
                             }
                         }
                     }
