@@ -461,6 +461,7 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    /// Start a ride by creating a new local HKWorkoutSession (default path).
     func start(activity: ActivityType) {
         let config = HKWorkoutConfiguration()
         config.activityType = activity.hkType
@@ -483,14 +484,7 @@ class WorkoutManager: NSObject, ObservableObject {
         session?.delegate = self
         builder?.delegate = self
 
-        routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
-        startRouteInsertion()
-
-        // reset() THEN configureAudioSession() — order matters!
-        VoiceNavigator.shared.reset()
-        VoiceNavigator.shared.configureAudioSession()
-        VoiceNavigator.shared.workoutManager = self
-
+        // Watch-initiated ride → mirror to phone for telemetry/speech
         isMirroringReady = false
         session?.startMirroringToCompanionDevice { [weak self] success, error in
             print("[Mirroring] Start mirroring result: success=\(success), error=\(String(describing: error))")
@@ -508,6 +502,19 @@ class WorkoutManager: NSObject, ObservableObject {
                 print("Failed to begin collection: \(error)")
             }
         }
+
+        beginRideCommon()
+    }
+
+    /// Shared setup after session creation — location, timers, voice nav, state reset.
+    private func beginRideCommon() {
+        routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
+        startRouteInsertion()
+
+        // reset() THEN configureAudioSession() — order matters!
+        VoiceNavigator.shared.reset()
+        VoiceNavigator.shared.configureAudioSession()
+        VoiceNavigator.shared.workoutManager = self
 
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
