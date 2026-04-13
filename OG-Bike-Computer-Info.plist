@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key></key>
+	<string></string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -28,6 +30,21 @@
 			<array>
 				<string>ogbikecomputer</string>
 			</array>
+		</dict>
+	</array>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Computer</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>com pew tah</string>
+		</dict>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Computah</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>com pew tah</string>
 		</dict>
 	</array>
 	<key>UIBackgroundModes</key>
