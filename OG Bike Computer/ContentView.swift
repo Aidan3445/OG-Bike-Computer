@@ -44,6 +44,17 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
+            // Dynamic Ride tab — appears only during active rides
+            if rideSession.isRideActive {
+                NavigationStack {
+                    RideControlView(metricConfig: metricConfig, userSettings: userSettings)
+                }
+                .tabItem {
+                    Label("Ride", systemImage: "helmet.fill")
+                }
+                .tag(3)
+            }
+            
             NavigationStack(path: $navigationPath) {
                 Group {
                     if routeStore.routes.isEmpty {
@@ -171,7 +182,7 @@ struct ContentView: View {
                 }
             }
             .tabItem {
-                Label("Routes", systemImage: "map")
+                Label("Routes", systemImage: "point.topleft.down.to.point.bottomright.curvepath.fill")
             }
             .tag(0)
 
@@ -190,17 +201,6 @@ struct ContentView: View {
                 Label("Settings", systemImage: "gearshape")
             }
             .tag(2)
-
-            // Dynamic Ride tab — appears only during active rides
-            if rideSession.isRideActive {
-                NavigationStack {
-                    RideControlView(metricConfig: metricConfig, userSettings: userSettings)
-                }
-                .tabItem {
-                    Label("Ride", systemImage: "record.circle")
-                }
-                .tag(3)
-            }
         }
         .fullScreenCover(isPresented: $showRideControlFullScreen) {
             NavigationStack {

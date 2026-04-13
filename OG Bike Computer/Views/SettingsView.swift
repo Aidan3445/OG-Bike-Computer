@@ -189,7 +189,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     } icon: {
-                        Image(systemName: "bicycle")
+                        Image(systemName: "bicycle.circle")
                             .foregroundStyle(.indigo)
                     }
                 }
@@ -234,23 +234,6 @@ struct SettingsView: View {
             // MARK: - Data Management
             Section {
                 Button(role: .destructive) {
-                    showClearRides = true
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Clear All Rides")
-                            Text("\(rideStore.rides.count) rides on phone")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.red)
-                    }
-                }
-                .disabled(rideStore.rides.isEmpty)
-
-                Button(role: .destructive) {
                     showClearRoutes = true
                 } label: {
                     Label {
@@ -261,13 +244,40 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     } icon: {
-                        Image(systemName: "map")
+                        Image(systemName: "point.topleft.down.to.point.bottomright.curvepath.fill")
                             .foregroundStyle(.red)
                     }
                 }
                 .disabled(routeStore.routes.isEmpty)
+                
+                Button(role: .destructive) {
+                    showClearRides = true
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Clear All Rides")
+                            Text("\(rideStore.rides.count) rides on phone")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "bicycle")
+                            .foregroundStyle(.red)
+                    }
+                }
+                .disabled(rideStore.rides.isEmpty)
             } header: {
                 Text("Data Management")
+            } footer: {
+                // MARK: - App Version
+                let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+                let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+
+                let versionString = "Version \(version) (\(build))"
+                Text(versionString)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
 
 //            // MARK: - Support the Developer

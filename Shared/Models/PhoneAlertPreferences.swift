@@ -34,10 +34,10 @@ struct LiveActivitySlot: Codable, Equatable, Hashable, Identifiable {
     static let defaultSlots: [LiveActivitySlot] = [
         LiveActivitySlot(id: 0, metricType: .distance),
         LiveActivitySlot(id: 1, metricType: .movingTime),
-        LiveActivitySlot(id: 2, metricType: .averageSpeed),
+        LiveActivitySlot(id: 2, metricType: .speed),
         LiveActivitySlot(id: 3, metricType: .heartRate),
         LiveActivitySlot(id: 4, metricType: .elevationGain),
-        LiveActivitySlot(id: 5, metricType: .speed),
+        LiveActivitySlot(id: 5, metricType: .averageSpeed),
     ]
 }
 

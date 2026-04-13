@@ -41,13 +41,13 @@ struct LiveActivityCustomizationView: View {
             }
 
             Section {
-                ForEach(0..<6, id: \.self) { index in
+                ForEach(0..<3, id: \.self) { index in
                     let slotBinding = slots[index]
                     HStack {
                         Image(systemName: slotBinding.metricType.wrappedValue.icon)
                             .foregroundStyle(.secondary)
                             .frame(width: 24)
-                        Picker(slotLabel(index), selection: slotBinding.metricType) {
+                        Picker("", selection: slotBinding.metricType) {
                             ForEach(availableMetrics) { metric in
                                 Text(metric.label).tag(metric)
                             }
@@ -55,9 +55,27 @@ struct LiveActivityCustomizationView: View {
                     }
                 }
             } header: {
-                Text("Stats")
+                Text("Top Row")
+            }
+            
+            Section {
+                ForEach(3..<6, id: \.self) { index in
+                    let slotBinding = slots[index]
+                    HStack {
+                        Image(systemName: slotBinding.metricType.wrappedValue.icon)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24)
+                        Picker("", selection: slotBinding.metricType) {
+                            ForEach(availableMetrics) { metric in
+                                Text(metric.label).tag(metric)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Bottom Row")
             } footer: {
-                Text("Choose which metric appears in each slot. Row 1 is the top row, Row 2 is the bottom row.")
+                Text("Choose which metric appears in each row (from left to right).")
             }
 
             if userSettings.settings.phoneAlerts.liveActivitySlots != LiveActivitySlot.defaultSlots {
@@ -69,12 +87,6 @@ struct LiveActivityCustomizationView: View {
             }
         }
         .settingsPageTitle("Live Activity Stats", profile: userSettings.activeProfileName)
-    }
-
-    private func slotLabel(_ index: Int) -> String {
-        let row = (index / 3) + 1
-        let col = (index % 3) + 1
-        return "Row \(row), Slot \(col)"
     }
 }
 
