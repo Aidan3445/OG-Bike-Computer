@@ -28,12 +28,24 @@ class UploadManager: ObservableObject {
         resumeInProgressUploads()
     }
 
+    /// Minimum distance for Strava auto-upload (0.1 miles in meters).
+    /// Rides below this threshold are saved locally but not auto-uploaded.
+    /// The user can still upload manually from ride details.
+    private static let minAutoUploadDistance: Double = 0.1 * 1609.34 // ~161m
+
     /// Called when a new ride arrives from the watch. Checks auto-upload settings and uploads.
     func handleNewRide(_ ride: RideSummary) {
         guard let settings = integrationSettings?.settings else { return }
 
         // Only Strava supports auto-upload
         guard settings.config(for: .strava).autoUpload else { return }
+
+        // Skip auto-upload for very short rides (manual upload still available)
+        guard ride.distance >= Self.minAutoUploadDistance else {
+            logger.info("[UploadManager] Ride too short (\(String(format: "%.0f", ride.distance))m) for auto-upload, skipping Strava")
+            RideNotificationManager.shared.postShortRideSkipped(ride)
+            return
+        }
 
         Task {
             await uploadToStrava(ride)
