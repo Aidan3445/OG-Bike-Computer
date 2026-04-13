@@ -9,6 +9,7 @@
 
 #if os(watchOS)
 import AppIntents
+import WatchKit
 
 // MARK: - Workout Style Enum
 
@@ -55,6 +56,9 @@ struct WatchStartWorkoutIntent: StartWorkoutIntent {
     @Parameter(title: "Workout Style")
     var workoutStyle: WorkoutStyleEnum
 
+    @Parameter(title: "Route", optionsProvider: RouteOptionsProvider())
+    var route: RouteEntity?
+
     init() {
         workoutStyle = .cycling
     }
@@ -78,13 +82,28 @@ struct WatchStartWorkoutIntent: StartWorkoutIntent {
     }
 
     func perform() async throws -> some IntentResult {
+        // StartWorkoutIntent protocol guarantees the app is foregrounded.
+        // Access WorkoutManager directly via the app delegate — no notifications,
+        // no waiting for UI. This works even on cold launch.
         await MainActor.run {
-            NotificationCenter.default.post(
-                name: .actionButtonStartRide,
-                object: workoutStyle.activityType
-            )
+            guard let delegate = WKApplication.shared().delegate as? ExtensionDelegate else { return }
+            let workout = delegate.workout
+            guard !workout.isActive else { return }
+
+            if let route = route,
+               let match = delegate.store.routes.first(where: { $0.id == route.id }) {
+                workout.loadRoute(match)
+            }
+            workout.start(activity: workoutStyle.activityType)
         }
+
         return .result()
+    }
+
+    struct RouteOptionsProvider: DynamicOptionsProvider {
+        func results() async throws -> [RouteEntity] {
+            try await RouteEntityQuery().suggestedEntities()
+        }
     }
 }
 
@@ -95,10 +114,10 @@ struct WatchPauseWorkoutIntent: PauseWorkoutIntent {
 
     func perform() async throws -> some IntentResult {
         await MainActor.run {
-            NotificationCenter.default.post(
-                name: .actionButtonPauseRide,
-                object: nil
-            )
+            guard let delegate = WKApplication.shared().delegate as? ExtensionDelegate else { return }
+            let workout = delegate.workout
+            guard workout.isActive, !workout.isPaused else { return }
+            workout.pause()
         }
         return .result()
     }
@@ -111,20 +130,13 @@ struct WatchResumeWorkoutIntent: ResumeWorkoutIntent {
 
     func perform() async throws -> some IntentResult {
         await MainActor.run {
-            NotificationCenter.default.post(
-                name: .actionButtonResumeRide,
-                object: nil
-            )
+            guard let delegate = WKApplication.shared().delegate as? ExtensionDelegate else { return }
+            let workout = delegate.workout
+            guard workout.isActive, workout.isPaused else { return }
+            workout.resume()
         }
         return .result()
     }
 }
 
-// MARK: - Notification Names
-
-extension Notification.Name {
-    static let actionButtonStartRide = Notification.Name("actionButtonStartRide")
-    static let actionButtonPauseRide = Notification.Name("actionButtonPauseRide")
-    static let actionButtonResumeRide = Notification.Name("actionButtonResumeRide")
-}
 #endif
