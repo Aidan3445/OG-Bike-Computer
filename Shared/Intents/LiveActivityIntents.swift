@@ -38,6 +38,9 @@ private enum RideCommandBridge {
 struct PauseResumeRideIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Pause or Resume Ride"
     static var description: IntentDescription = "Toggles pause/resume on the current ride."
+    
+    // Hide from shortcuts/automations
+    static var isDiscoverable: Bool = false
 
     func perform() async throws -> some IntentResult {
         let isPaused = await RideCommandBridge.readIsPaused()
@@ -51,16 +54,20 @@ struct PauseResumeRideIntent: LiveActivityIntent {
 struct EndRideIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "End Ride"
     static var description: IntentDescription = "Ends the current ride and saves it."
+    
+    // Hide from shortcuts/automations
+    static var isDiscoverable: Bool = false
 
     func perform() async throws -> some IntentResult {
         let movingTime = await RideCommandBridge.readMovingTime()
         if movingTime < 60 {
             // Short ride — tell the app to discard both HK workout and app recording
             await RideCommandBridge.send("discard")
+            return .result(dialog: "Ride was under 1 minute and has been discarded.")
         } else {
             await RideCommandBridge.send("end")
+            return .result(dialog: "Ride ended and saved.")
         }
-        return .result()
     }
 }
 #endif
