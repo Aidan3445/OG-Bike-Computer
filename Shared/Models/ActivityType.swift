@@ -37,6 +37,16 @@ enum ActivityType: String, CaseIterable, Codable, Identifiable {
     }
 
     #if canImport(HealthKit)
+    init(hkType: HKWorkoutActivityType) {
+        switch hkType {
+        case .cycling: self = .cycling
+        case .running: self = .running
+        case .walking: self = .walking
+        case .hiking: self = .hiking
+        default: self = .cycling
+        }
+    }
+
     var hkType: HKWorkoutActivityType {
         switch self {
         case .cycling: return .cycling
