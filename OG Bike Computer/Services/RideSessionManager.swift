@@ -120,13 +120,16 @@ class RideSessionManager: ObservableObject {
         case "discard":
             // Short ride — discard both HK workout and app recording
             ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+            RideNotificationManager.shared.postRideDiscarded()
         case "end":
             // Normal end — check moving time as a safety net
             let movingTime = PhoneTelemetryStore.shared.movingTime
             if movingTime < 60 {
                 ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+                RideNotificationManager.shared.postRideDiscarded()
             } else {
                 endRide()
+                RideNotificationManager.shared.postRideEnded()
             }
         default:
             break
