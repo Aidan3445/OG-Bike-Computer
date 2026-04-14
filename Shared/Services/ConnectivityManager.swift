@@ -133,8 +133,21 @@ extension ConnectivityManager {
         }
     }
 
+    /// Send a route file to the watch.
+    ///
+    /// - Parameters:
+    ///   - route: The route to transfer.
+    ///   - pendingAction: Optional action the watch should execute immediately
+    ///     after saving the route. Supported values:
+    ///     - `"changeRoute"` — switch to this route mid-ride
+    ///     - `"startRide"`  — start a new ride with this route
+    ///   - activityType: Activity type string used when `pendingAction == "startRide"`.
+    ///     Defaults to `"cycling"` if omitted.
+    ///   - completion: Called on the calling queue after the transfer is queued.
     func sendRoute(
         _ route: Route,
+        pendingAction: String? = nil,
+        activityType: String? = nil,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         guard WCSession.default.activationState == .activated else {
@@ -152,8 +165,12 @@ extension ConnectivityManager {
 
         do {
             try data.write(to: tempURL)
-            WCSession.default.transferFile(tempURL, metadata: ["type": "route"])
-            print("Queued file transfer: \(route.name) (\(data.count) bytes)")
+            var metadata: [String: Any] = ["type": "route"]
+            if let action = pendingAction    { metadata["pendingAction"] = action }
+            if let activity = activityType   { metadata["activityType"] = activity }
+            WCSession.default.transferFile(tempURL, metadata: metadata)
+            print("Queued file transfer: \(route.name) (\(data.count) bytes)"
+                + (pendingAction.map { ", pendingAction=\($0)" } ?? ""))
         } catch {
             completion(.failure(error))
             return
@@ -475,12 +492,29 @@ extension ConnectivityManager: WCSessionDelegate {
         }
 
         #if os(watchOS)
+        let pendingAction  = file.metadata?["pendingAction"] as? String
+        let activityString = file.metadata?["activityType"]  as? String
+
         DispatchQueue.main.async {
             if let existing = self.routeStore?.routes.first(where: { $0.name == route.name }) {
                 self.routeStore?.delete(existing)
             }
             self.routeStore?.save(route)
             self.routeStore.map { self.reportRoutes($0.routes) }
+
+            // Execute any action that was bundled with the file transfer so
+            // the command is guaranteed to arrive *after* the route is saved.
+            switch pendingAction {
+            case "changeRoute":
+                print("[WC] File received with pendingAction=changeRoute → \(route.name)")
+                self.onChangeRouteRequested?(route.id)
+            case "startRide":
+                let activity = ActivityType(rawValue: activityString ?? "cycling") ?? .cycling
+                print("[WC] File received with pendingAction=startRide → \(route.name)")
+                self.onStartRideRequested?(route.id, activity)
+            default:
+                break
+            }
         }
         #endif
     }
