@@ -116,6 +116,7 @@ struct RideLiveActivity: Widget {
                         .foregroundStyle(.cyan)
                 }
             }
+            .widgetURL(URL(string: "ogbikecomputer://ridecontrol"))
         }
     }
 }

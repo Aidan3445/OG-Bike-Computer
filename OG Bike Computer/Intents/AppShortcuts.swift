@@ -115,6 +115,20 @@ struct AppShortcuts: AppShortcutsProvider {
             systemImageName: "gearshape.2"
         )
 
+        // Import GPX route
+        AppShortcut(
+            intent: ImportGPXIntent(),
+            phrases: [
+                "Import a GPX route in \(.applicationName)",
+                "Import a route in \(.applicationName)",
+
+                "Import a \(.applicationName) GPX route",
+                "Import a \(.applicationName) route",
+            ],
+            shortTitle: "Import GPX",
+            systemImageName: "arrow.down.doc"
+        )
+
         // Select bike
         AppShortcut(
             intent: SelectBikeIntent(),
