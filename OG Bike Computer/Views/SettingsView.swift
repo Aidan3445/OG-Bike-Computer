@@ -39,6 +39,7 @@ struct SettingsView: View {
     @State private var showSupportSafari = false
     @State private var showClearRides = false
     @State private var showClearRoutes = false
+    @StateObject private var connectivity = ConnectivityManager.shared
 
     private var navigationAlertsSummary: String {
         let alerts = userSettings.settings.navigationAlerts
@@ -239,7 +240,10 @@ struct SettingsView: View {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Clear All Routes")
-                            Text("\(routeStore.routes.count) routes on phone")
+                            Text("\($routeStore.routes.count) routes on phone")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("\(connectivity.routeNamesOnWatch.count) routes on watch")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -317,26 +321,24 @@ struct SettingsView: View {
 //                url: URL(string: "https://www.buymeacoffee.com/aidanweinberg")!
 //            )
 //        }
-        .confirmationDialog(
-            "Delete all \(rideStore.rides.count) rides?",
-            isPresented: $showClearRides,
-            titleVisibility: .visible
-        ) {
-            Button("Delete All Rides", role: .destructive) {
-                rideStore.deleteAll()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will permanently delete all ride history from your phone. This cannot be undone.")
-        }
         .sheet(isPresented: $showClearRoutes) {
             ClearRoutesSheet(
-                routeCount: routeStore.routes.count,
+                phoneRouteCount: $routeStore.routes.count,
+                watchRouteCount: connectivity.routeNamesOnWatch.count,
                 onConfirm: { alsoWatch in
                     routeStore.deleteAll()
                     if alsoWatch {
-                        ConnectivityManager.shared.sendClearAllRoutes()
+                        connectivity.sendClearAllRoutes()
                     }
+                }
+            )
+            .presentationDetents([.height(280)])
+        }
+        .sheet(isPresented: $showClearRides) {
+            ClearRidesSheet(
+                rideCount: rideStore.rides.count,
+                onConfirm: {
+                    rideStore.deleteAll()
                 }
             )
             .presentationDetents([.height(280)])
@@ -616,9 +618,11 @@ struct RiderProfileView: View {
 // MARK: - Clear Routes Sheet
 
 struct ClearRoutesSheet: View {
-    let routeCount: Int
+    let phoneRouteCount: Int
+    let watchRouteCount: Int
     let onConfirm: (Bool) -> Void
-    @State private var alsoDeleteFromWatch = false
+    @State private var deleteFromPhone = false
+    @State private var deleteFromWatch = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -628,7 +632,7 @@ struct ClearRoutesSheet: View {
                     .font(.system(size: 36))
                     .foregroundStyle(.red)
 
-                Text("Delete all \(routeCount) routes?")
+                Text("Delete all \((deleteFromPhone ? phoneRouteCount : 0) + (deleteFromWatch ? watchRouteCount : 0)) routes?")
                     .font(.headline)
 
                 Text("This will permanently delete all routes from your phone. This cannot be undone.")
@@ -636,36 +640,104 @@ struct ClearRoutesSheet: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
 
-                Toggle(isOn: $alsoDeleteFromWatch) {
+                Toggle(isOn: $deleteFromPhone) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Also delete from watch")
+                        Text("Delete from phone")
+                        Text("Removes all routes on this device")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+                .disabled(phoneRouteCount == 0)
+                
+                Toggle(isOn: $deleteFromWatch) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Delete from watch")
                         Text("Removes all routes synced to your Apple Watch")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
                 .padding(.horizontal)
+                .disabled(watchRouteCount == 0)
 
-                Spacer()
-
-                Button(role: .destructive) {
-                    onConfirm(alsoDeleteFromWatch)
-                    dismiss()
-                } label: {
-                    Text(alsoDeleteFromWatch ? "Delete from Phone & Watch" : "Delete from Phone")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
+                .safeAreaInset(edge: .bottom) {
+                    Button(role: .destructive) {
+                        onConfirm(deleteFromWatch)
+                        dismiss()
+                    } label: {
+                        let targets: [String] = [
+                            deleteFromPhone ? "Phone" : nil,
+                            deleteFromWatch ? "Watch" : nil
+                        ].compactMap { $0 }
+                        let deleteText = targets.count == 0
+                            ? "Select devices"
+                            : "Delete from \(targets.joined(separator: " & "))"
+                            
+                        Text(deleteText)
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .padding(.horizontal)
+                    .padding(.bottom, 20)
+                    .disabled(!(deleteFromPhone || deleteFromWatch))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .padding(.horizontal)
             }
             .padding()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Clear Rides Sheet
+struct ClearRidesSheet: View {
+    let rideCount: Int
+    let onConfirm: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 16) {
+
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(.red)
+
+            Text("Delete all \(rideCount) rides?")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+
+            Text("This will permanently delete all ride history from your phone. This cannot be undone.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Spacer()
+
+            Button(role: .destructive) {
+                onConfirm()
+                dismiss()
+            } label: {
+                Text("Delete All Rides")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+        }
+        .padding()
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
             }
         }
     }

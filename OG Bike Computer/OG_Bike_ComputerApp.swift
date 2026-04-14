@@ -307,6 +307,7 @@ struct OG_Bike_ComputerApp: App {
         WindowGroup {
             ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings, showRideControlFullScreen: $showRideControl)
                 .onAppear {
+                    RouteImportPipeline.shared.configure(routeStore: routeStore)
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                     UnitState.shared.preferences = userSettings.settings.unitPreferences
                     userSettings.attachMetricStore(metricConfig)
@@ -366,13 +367,10 @@ struct OG_Bike_ComputerApp: App {
             print("Could not read shared file: \(url)")
             return
         }
-        let parser = GPXParser()
-        let parsed = parser.parse(data: data)
-        for route in parsed {
-            routeStore.save(route)
-        }
-        if !parsed.isEmpty {
-            print("Imported \(parsed.count) route(s) from share sheet")
+        let routes = RouteImportPipeline.shared.importGPX(data: data)
+        if !routes.isEmpty {
+            print("Imported \(routes.count) route(s) from share sheet")
+            RouteImportCoordinator.shared.handle(routes)
         }
     }
 }

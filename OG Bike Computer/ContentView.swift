@@ -19,6 +19,8 @@ struct ContentView: View {
     @Binding var showRideControlFullScreen: Bool
     @StateObject private var connectivity = ConnectivityManager.shared
 
+    @ObservedObject private var importCoordinator = RouteImportCoordinator.shared
+
     @State private var showFilePicker = false
     @State private var importError: String?
     @State private var uploadingRouteID: UUID?
@@ -47,7 +49,7 @@ struct ContentView: View {
             // Dynamic Ride tab — appears only during active rides
             if rideSession.isRideActive {
                 NavigationStack {
-                    RideControlView(metricConfig: metricConfig, userSettings: userSettings)
+                    RideControlView(metricConfig: metricConfig, userSettings: userSettings, routeStore: routeStore)
                 }
                 .tabItem {
                     Label("Ride", systemImage: "helmet.fill")
@@ -97,10 +99,6 @@ struct ContentView: View {
                 .navigationTitle("Routes")
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
-                    routeStore.onImport = { route in
-                        selectedTab = 0
-                        navigationPath.append(route)
-                    }
                 }
                 .onReceive(connectivity.$routeNamesOnWatch) { _ in
                     uploadingRouteID = nil
@@ -202,9 +200,12 @@ struct ContentView: View {
             }
             .tag(2)
         }
+        .sheet(isPresented: $importCoordinator.showActionSheet) {
+            RouteImportActionSheet()
+        }
         .fullScreenCover(isPresented: $showRideControlFullScreen) {
             NavigationStack {
-                RideControlView(metricConfig: metricConfig, userSettings: userSettings)
+                RideControlView(metricConfig: metricConfig, userSettings: userSettings, routeStore: routeStore)
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
                             Button("Done") {
@@ -243,7 +244,7 @@ struct ContentView: View {
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            print(String(format: "Importing %d files", urls.count))
+            var allImported: [Route] = []
             for url in urls {
                 guard url.startAccessingSecurityScopedResource() else { continue }
                 defer { url.stopAccessingSecurityScopedResource() }
@@ -253,16 +254,15 @@ struct ContentView: View {
                     continue
                 }
 
-                let parser = GPXParser()
-                let parsed = parser.parse(data: data)
-
-                if parsed.isEmpty {
+                let routes = RouteImportPipeline.shared.importGPX(data: data)
+                if routes.isEmpty {
                     importError = "No routes found in \(url.lastPathComponent)"
                 } else {
-                    for route in parsed {
-                        routeStore.save(route)
-                    }
+                    allImported.append(contentsOf: routes)
                 }
+            }
+            if !allImported.isEmpty {
+                RouteImportCoordinator.shared.handle(allImported)
             }
         case .failure(let error):
             importError = error.localizedDescription
