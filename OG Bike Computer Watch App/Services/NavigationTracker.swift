@@ -70,6 +70,16 @@ class NavigationTracker: ObservableObject {
     private var lastSearchIndex: Int = 0
     private var endpointLocation: CLLocation?
 
+    // Early-ride start bias: for the first 60s, if the rider started near the
+    // route's first point, disallow positioning beyond 5 miles (8047m) into
+    // the route (prevents loop routes from snapping to the near-end instead
+    // of the start).
+    private static let startProximityThreshold: Double = 402   // 1/4 mile in metres
+    private static let startBiasDistance: Double = 8047        // 5 miles in metres
+    private static let startBiasDuration: Double = 60          // seconds
+    private var rideStartTime: Date?
+    private var startedNearRouteStart = false
+
     // Section jump confirmation: tracks sustained match to a different route section
     private var jumpCandidate: (segmentIndex: Int, sampleCount: Int)?
     private let jumpConfirmationThreshold = 4 // consecutive samples before jumping (~4s at 1Hz)
@@ -99,6 +109,8 @@ class NavigationTracker: ObservableObject {
         jumpCandidate = nil
         offRouteSampleCount = 0
         driftingSampleCount = 0
+        rideStartTime = Date()
+        startedNearRouteStart = false
 
         if let last = processedRoute.points.last {
             endpointLocation = CLLocation(
@@ -110,11 +122,25 @@ class NavigationTracker: ObservableObject {
     func anchorToLocation(_ location: CLLocation) {
         guard let route = route, route.points.count >= 2 else { return }
 
+        // Check whether the rider is starting near the route's first point.
+        let routeStart = CLLocation(
+            latitude: route.points[0].coordinate.latitude,
+            longitude: route.points[0].coordinate.longitude)
+        let distanceFromStart = location.distance(from: routeStart)
+        startedNearRouteStart = distanceFromStart <= NavigationTracker.startProximityThreshold
+
         var bestIndex = 0
         var bestDistance = Double.greatestFiniteMagnitude
 
         for i in 0..<route.points.count {
             let point = route.points[i]
+
+            // During anchor, if near the start, skip any point beyond the
+            // start-bias distance so we never initially land past 5 miles.
+            if startedNearRouteStart && point.distanceFromStart > NavigationTracker.startBiasDistance {
+                continue
+            }
+
             let pointLoc = CLLocation(
                 latitude: point.coordinate.latitude,
                 longitude: point.coordinate.longitude)
@@ -136,7 +162,8 @@ class NavigationTracker: ObservableObject {
 
         print("[Nav] Anchored to segment \(bestIndex) "
             + "(\(Int(distanceAlongRoute))m along, "
-            + "\(Int(bestDistance))m away)")
+            + "\(Int(bestDistance))m away)"
+            + (startedNearRouteStart ? " [start-bias active]" : ""))
     }
 
     func reset() {
@@ -167,6 +194,8 @@ class NavigationTracker: ObservableObject {
         jumpCandidate = nil
         offRouteSampleCount = 0
         driftingSampleCount = 0
+        rideStartTime = nil
+        startedNearRouteStart = false
     }
 
     func update(location: CLLocation, riderDistance: Double = 0) -> TurnAlert? {
@@ -398,6 +427,16 @@ class NavigationTracker: ObservableObject {
                 } else if point.distanceFromStart < currentRouteDist - 50 {
                     score += 10.0
                 }
+            }
+
+            // Start bias (heavy penalty): for the first 60s when the rider
+            // began near the route start, strongly prefer the early part of
+            // the route to prevent loop routes from snapping to the end.
+            if startedNearRouteStart,
+               let startTime = rideStartTime,
+               Date().timeIntervalSince(startTime) < NavigationTracker.startBiasDuration,
+               point.distanceFromStart > NavigationTracker.startBiasDistance {
+                score += 500.0
             }
 
             scored.append(ScoredCluster(

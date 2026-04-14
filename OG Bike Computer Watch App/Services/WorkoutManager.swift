@@ -1281,6 +1281,15 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func sendConnectionPing() {
+        guard isActive else { return }
+
+        // Re-arm the watch audio session — this is the primary goal: recover
+        // from AVAudioSession interruptions (phone calls, podcasts, etc.) that
+        // would otherwise silence all voice alerts for the remainder of the ride.
+        VoiceNavigator.shared.configureAudioSession()
+        print("[ConnectionCheck] Audio session re-armed")
+
+        // Also ping the phone if mirroring is up, to detect silent drops.
         guard isMirroringReady, let workoutSession = session else { return }
 
         let payload: [String: String] = [
