@@ -18,10 +18,17 @@ struct ServiceRoutePickerView: View {
     @State private var hasMore = true
     @State private var error: String?
     @State private var downloadingID: String?
+    @State private var showImportSheet = false
+
+    // Import by URL
+    @State private var importURL = ""
+    @State private var importedRoute: ServiceRoute?
+    @State private var isResolvingURL = false
+    @State private var urlError: String?
 
     // RWGPS only
     @State private var collections: [RWGPSCollection] = []
-    // RWGPS filters
+    // filters
     @State private var searchText = ""
     @State private var showFilters = false
     @State private var distanceMin: String = ""
@@ -48,6 +55,13 @@ struct ServiceRoutePickerView: View {
     private var distanceUnitLabel: String {
         isImperial ? "mi" : "km"
     }
+    
+    private var showError: Binding<Bool> {
+        Binding<Bool>(
+            get: { error != nil },
+            set: { if !$0 { error = nil } }
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -71,23 +85,11 @@ struct ServiceRoutePickerView: View {
                         if service == .rideWithGPS && !collections.isEmpty {
                             collectionsSection
                         }
-
-                        Section {
-                            ForEach(routes) { route in
-                                Button {
-                                    downloadRoute(route)
-                                } label: {
-                                    ServiceRouteRow(
-                                        route: route,
-                                        isDownloading: downloadingID == route.id
-                                    )
-                                }
-                                .disabled(downloadingID != nil)
-                            }
-                        } header: { 
-                            Text("Your Routes")
+                        
+                        if !routes.isEmpty {
+                            serviceRoutesSection
                         }
-
+                        
                         if hasMore {
                             Button {
                                 loadMore()
@@ -115,7 +117,7 @@ struct ServiceRoutePickerView: View {
             }
             .navigationTitle("From \(service.displayName)")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, prompt: "Search routes")
+            .searchable(text: $searchText, prompt: "Search your routes")
             .onSubmit(of: .search) {
                 applyFilters()
             }
@@ -134,14 +136,21 @@ struct ServiceRoutePickerView: View {
                         }
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showImportSheet = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
             }
             .sheet(isPresented: $showFilters) {
                 distanceFilterSheet
             }
-            .alert("Error", isPresented: .init(
-                get: { error != nil },
-                set: { if !$0 { error = nil } }
-            )) {
+            .sheet(isPresented: $showImportSheet) {
+                importByUrlSheet
+            }
+            .alert("Error", isPresented: showError) {
                 Button("OK") { error = nil }
             } message: {
                 Text(error ?? "")
@@ -155,7 +164,7 @@ struct ServiceRoutePickerView: View {
 
     private var stravaVisibilityNote: some View {
         Label {
-            Text("Only public routes appear here. To import a private route, set it to public on Strava first.")
+            Text("Only public routes you have created, saved, or duplicated appear here. To import a private route, set it to public on Strava first.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } icon: {
@@ -219,6 +228,100 @@ struct ServiceRoutePickerView: View {
         }
         .presentationDetents([.medium])
     }
+    
+    // MARK: - Import by URL
+
+    private var importByUrlSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("https://...", text: $importURL)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .onSubmit { resolveImportURL() }
+                        .onChange(of: importURL) {
+                            importedRoute = nil
+                            urlError = nil
+                        }
+                } header: {
+                    Text("Route URL")
+                }
+
+                if isResolvingURL {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                } else if let route = importedRoute {
+                    Section {
+                        Button {
+                            downloadRoute(route)
+                        } label: {
+                            ServiceRouteRow(route: route, isDownloading: downloadingID == route.id)
+                        }
+                        .disabled(downloadingID != nil)
+                    } header: {
+                        Text("Route Preview")
+                    }
+                } else if let err = urlError {
+                    Section {
+                        Text(err)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                    }
+                }
+            }
+            .navigationTitle("Import by URL")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showImportSheet = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Find") { resolveImportURL() }
+                        .disabled(importURL.isEmpty || isResolvingURL)
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func resolveImportURL() {
+        importedRoute = nil
+        urlError = nil
+        isResolvingURL = true
+
+        Task {
+            do {
+                let route: ServiceRoute
+                if service == .rideWithGPS {
+                    let rwgps = RWGPSClient()
+                    guard let id = rwgps.extractRouteID(from: importURL) else {
+                        throw ServiceError.invalidURL
+                    }
+                    route = try await rwgps.fetchRouteMetadata(id: id)
+                } else {
+                    let strava = StravaClient()
+                    guard let id = strava.extractRouteID(from: importURL) else {
+                        throw ServiceError.invalidURL
+                    }
+                    route = try await strava.fetchRouteMetadata(id: id)
+                }
+                await MainActor.run {
+                    importedRoute = route
+                    isResolvingURL = false
+                }
+            } catch {
+                await MainActor.run {
+                    urlError = error.localizedDescription
+                    isResolvingURL = false
+                }
+            }
+        }
+    }
+
 
     // MARK: - Filter Logic
 
@@ -304,7 +407,9 @@ struct ServiceRoutePickerView: View {
     @ViewBuilder
     private var collectionsSection: some View {
         Section {
-            let items = Array(collections.prefix(4))
+            // Pinned is always returned last but we want it first.
+            // Reorder and limit to 4 items total before showing "View All" option
+            let items = Array(collections.suffix(1)) + Array(collections.prefix(collections.count - 1).prefix(3))
 
             ForEach(items) { collection in
                 NavigationLink(destination: RWGPSCollectionView(
@@ -327,6 +432,25 @@ struct ServiceRoutePickerView: View {
             }
         } header: {
             Text("Collections")
+        }
+    }
+    
+    @ViewBuilder
+    private var serviceRoutesSection: some View {
+        Section {
+            ForEach(routes) { route in
+                Button {
+                    downloadRoute(route)
+                } label: {
+                    ServiceRouteRow(
+                        route: route,
+                        isDownloading: downloadingID == route.id
+                    )
+                }
+                .disabled(downloadingID != nil)
+            }
+        } header: {
+            Text("Your Routes")
         }
     }
 }
@@ -356,8 +480,7 @@ struct ServiceRouteRow: View {
             }
             .labelStyle(StatLabelStyle())
             .font(.caption)
-            .foregroundStyle(.primary)
-            .foregroundStyle(.opacity(80))
+            .foregroundStyle(.primary.opacity(0.8))
         }
         .padding(.vertical, 2)
     }

@@ -43,6 +43,37 @@ class StravaClient: ServiceClient, UploadableServiceClient {
         }
     }
 
+    func extractRouteID(from url: String) -> String? {
+        let pattern = #"strava\.com/routes/(\d+)"#
+        if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+            let range = NSRange(url.startIndex..<url.endIndex, in: url)
+            if let match = regex.firstMatch(in: url, options: [], range: range),
+               let idRange = Range(match.range(at: 1), in: url) {
+                return String(url[idRange])
+            }
+        }
+        return nil
+    }
+
+    func fetchRouteMetadata(id: String) async throws -> ServiceRoute {
+        let token = try await OAuthManager.shared.validToken(for: .strava)
+
+        var request = URLRequest(url: URL(string: "\(baseURL)/routes/\(id)")!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateResponse(response)
+
+        let route = try JSONDecoder().decode(StravaRoute.self, from: data)
+        return ServiceRoute(
+            id: "\(route.id)",
+            name: route.name,
+            distance: route.distance,
+            elevationGain: route.elevation_gain,
+            createdAt: route.created_at ?? Date()
+        )
+    }
+
     /// Downloads a route as GPX and parses it using the existing GPX parser.
     /// Strava route waypoints are POIs (not turn cues), so GPX export is the
     /// best source — our parser extracts any `<wpt>` turn directions present.

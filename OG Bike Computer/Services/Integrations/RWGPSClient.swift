@@ -120,11 +120,37 @@ class RWGPSClient: ServiceClient {
         }
     }
 
-    func fetchByURL(url: String) async throws -> Route {
-        guard let id = extractRouteID(from: url) else {
-            throw ServiceError.invalidURL
+    func fetchRouteMetadata(id: String) async throws -> ServiceRoute {
+        let token = try await OAuthManager.shared.validToken(for: .rideWithGPS)
+
+        var request = URLRequest(url: URL(string: "\(baseURL)/routes/\(id).json")!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateResponse(response)
+
+        logger.debug("Fetched metadata for route \(id)")
+
+        do {
+        let wrapper = try JSONDecoder().decode(RWGPSRouteDetailWrapper.self, from: data)
+        return ServiceRoute(
+            id: "\(wrapper.route.id ?? 0)",
+            name: wrapper.route.name ?? "Unnamed Route",
+            distance: wrapper.route.distance ?? 0,
+            elevationGain: wrapper.route.elevation_gain ?? 0,
+            createdAt: Date()
+        )
+        } catch {
+            logger.error("Route metadata response: \(String(data: data, encoding: .utf8) ?? "N/A")")
+            logger.error("Failed to decode route metadata for \(id): \(String(describing: error))")
+            let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("route_debug.json")
+
+            try? data.write(to: url)
+
+            logger.trace("Wrote raw JSON to: \(url.path)")
+            throw ServiceError.decodingError(error)
         }
-        return try await downloadRoute(id: id)
     }
 
     func extractRouteID(from url: String) -> String? {
@@ -276,17 +302,37 @@ struct RWGPSTrackPoint: Codable {
 
 /// Route course point (cue) — per RWGPS API docs
 struct RWGPSCoursePoint: Codable {
-    let x: Double   // longitude (degrees)
-    let y: Double   // latitude (degrees)
-    let d: Double?  // distance from start (meters)
-    let i: Int?     // cue track index into track_points
-    let t: String?  // cue type ("Left", "Right", "Straight", etc.)
-    let n: String?  // cue text ("Turn left onto Main St")
+    let x: Double
+    let y: Double
+    let d: Double?
+    let i: Int?
+    let t: String?
+    let n: String?
     let userEdited: Bool?
 
     enum CodingKeys: String, CodingKey {
         case x, y, d, i, t, n
         case userEdited = "_e"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        x = try container.decode(Double.self, forKey: .x)
+        y = try container.decode(Double.self, forKey: .y)
+        d = try container.decodeIfPresent(Double.self, forKey: .d)
+        i = try container.decodeIfPresent(Int.self, forKey: .i)
+        t = try container.decodeIfPresent(String.self, forKey: .t)
+        n = try container.decodeIfPresent(String.self, forKey: .n)
+
+        // 👇 flexible decoding
+        if let bool = try? container.decode(Bool.self, forKey: .userEdited) {
+            userEdited = bool
+        } else if let int = try? container.decode(Int.self, forKey: .userEdited) {
+            userEdited = int != 0
+        } else {
+            userEdited = nil
+        }
     }
 }
 
