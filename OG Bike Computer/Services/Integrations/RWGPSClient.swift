@@ -67,6 +67,56 @@ class RWGPSClient: ServiceClient {
         }
     }
 
+    func fetchCollections(page: Int) async throws -> [ServiceCollection] {
+        let token = try await OAuthManager.shared.validToken(for: .rideWithGPS)
+        var components = URLComponents(string: "\(baseURL)/collections.json")!
+        var queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "page", value: "1"),
+            URLQueryItem(name: "page_size", value: "20"),
+        ]
+
+        components.queryItems = queryItems
+
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateResponse(response)
+
+        let decoded = try JSONDecoder().decode(RWGPSCollectionListResponse.self, from: data)
+        logger.debug("Fetched \(decoded.collections.count) collections (page \page)")
+
+        return decoded.collections.map { col in
+            ServiceCollection(
+                id: "\(col.id)",
+                name: col.name ?? "Unnamed Collection",
+                routeCount: col.route_count ?? 0,
+                createdAt: col.created_at ?? Date()
+            )
+        }
+    }
+
+    func fetchByURL(url: string) async throws -> Route {
+        guard let id = extractRouteID(from: url) else {
+            throw ServiceError.invalidURL
+        }
+        return try await downloadRoute(id: id)
+    }
+
+    func extractRouteID(from url: String) -> String? {
+        // RWGPS route URLs look like: https://ridewithgps.com/routes/12345678
+        // there may be query parameters or fragments after the ID, so we just want to extract the number after /routes/
+        let pattern = #"ridewithgps\.com/routes/(\d+)"#
+        if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+            let range = NSRange(url.startIndex..<url.endIndex, in: url)
+            if let match = regex.firstMatch(in: url, options: [], range: range),
+               let idRange = Range(match.range(at: 1), in: url) {
+                return String(url[idRange])
+            }
+        }
+        return nil
+    }
+
     func downloadRoute(id: String) async throws -> Route {
         let token = try await OAuthManager.shared.validToken(for: .rideWithGPS)
 
@@ -223,4 +273,47 @@ struct RWGPSPointOfInterest: Codable {
     let lat: Double?
     let lng: Double?
     let type_name: String?
+}
+
+/// Collections API response models
+struct RWGPSCollectionListResponse: Codable {
+    let collections: [RWGPSCollectionListItem]
+    let meta: RWGPSMeta?
+}
+
+struct RWGPSCollectionListItem: Codable {
+    let id: Int
+    let name: String?
+    let route_count: Int?
+    let created_at: Date?
+    let routes: [RWGPSRouteListItem]?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, route_count, created_at, routes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        route_count = try container.decodeIfPresent(Int.self, forKey: .route_count)
+
+        if let dateString = try container.decodeIfPresent(String.self, forKey: .created_at) {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            created_at = formatter.date(from: dateString) ?? {
+                let f2 = ISO8601DateFormatter()
+                f2.formatOptions = [.withInternetDateTime]
+                return f2.date(from: dateString)
+            }()
+        } else {
+            created_at = nil
+        }
+
+        if let routesArray = try? container.decodeIfPresent([RWGPSRouteListItem].self, forKey: .routes) {
+            routes = routesArray
+        } else {
+            routes = nil
+        }
+    }
 }
