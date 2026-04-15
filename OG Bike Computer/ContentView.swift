@@ -33,7 +33,9 @@ struct ContentView: View {
 
     @State private var selectedTab = 0
     @State private var navigationPath = NavigationPath()
-
+    
+    @AppStorage("hasSeenSettingsRec") private var hasSeenSettingsRec = false
+    
     /// Whether the watch is paired and has the app installed
     private var canSendToWatch: Bool {
         connectivity.isPaired && connectivity.isWatchAppInstalled
@@ -68,27 +70,7 @@ struct ContentView: View {
                         List {
                             ForEach(routeSections, id: \.0) { section, routes in
                                 Section {
-                                    ForEach(routes) { route in
-                                        NavigationLink(value: route) {
-                                            RouteRow(
-                                                route: route,
-                                                isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
-                                                isUploading: uploadingRouteID == route.id,
-                                                isQueued: queuedRouteID == route.id,
-                                                isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
-                                                canSendToWatch: canSendToWatch,
-                                                onSend: { sendToWatch(route) },
-                                                onRename: { newName in
-                                                    routeStore.rename(route, to: newName)
-                                                }
-                                            )
-                                        }
-                                    }
-                                    .onDelete { indices in
-                                        for i in indices {
-                                            routeStore.delete(routes[i])
-                                        }
-                                    }
+                                    routeList(routes: routes)
                                 } header: {
                                     Text(section.title)
                                 }
@@ -203,6 +185,11 @@ struct ContentView: View {
         .sheet(isPresented: $importCoordinator.showActionSheet) {
             RouteImportActionSheet()
         }
+        .sheet(isPresented: $temp) {
+            SettingsRecommendationView {
+                hasSeenSettingsRec = true
+            }
+        }
         .fullScreenCover(isPresented: $showRideControlFullScreen) {
             NavigationStack {
                 RideControlView(metricConfig: metricConfig, userSettings: userSettings, routeStore: routeStore)
@@ -267,5 +254,35 @@ struct ContentView: View {
         case .failure(let error):
             importError = error.localizedDescription
         }
+    }
+}
+
+extension ContentView {
+    @ViewBuilder
+    func routeList(routes: [Route]) -> some View {
+        ForEach(routes) { route in
+            NavigationLink(value: route) {
+                RouteRow(
+                    route: route,
+                    isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                    isUploading: uploadingRouteID == route.id,
+                    isQueued: queuedRouteID == route.id,
+                    isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
+                    canSendToWatch: canSendToWatch,
+                    onSend: { sendToWatch(route) },
+                    onRename: { newName in
+                        routeStore.rename(route, to: newName)
+                    }
+                )
+            }
+        }
+        .onDelete { indices in
+            deleteRoutes(at: indices, from: routes)
+        }
+    }
+
+    func deleteRoutes(at offsets: IndexSet, from routes: [Route]) {
+        let toDelete = offsets.map { routes[$0] }
+        toDelete.forEach(routeStore.delete)
     }
 }

@@ -231,6 +231,25 @@ struct SettingsView: View {
                     }
                 }
             }
+            
+            // MARK: - Tips
+            Section {
+                NavigationLink {
+                    TipsView()
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tips")
+                            Text("Get the most out of Computa!")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "lightbulb.max")
+                            .foregroundStyle(.yellow)
+                    }
+                }
+            }
 
             // MARK: - Data Management
             Section {
