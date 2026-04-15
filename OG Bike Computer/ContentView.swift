@@ -185,7 +185,7 @@ struct ContentView: View {
         .sheet(isPresented: $importCoordinator.showActionSheet) {
             RouteImportActionSheet()
         }
-        .sheet(isPresented: $temp) {
+        .sheet(isPresented: .constant(!hasSeenSettingsRec)) {
             SettingsRecommendationView {
                 hasSeenSettingsRec = true
             }

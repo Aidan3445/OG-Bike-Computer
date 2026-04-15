@@ -19,7 +19,9 @@ struct ServiceRoutePickerView: View {
     @State private var error: String?
     @State private var downloadingID: String?
 
-    // RWGPS filter state
+    // RWGPS only
+    @State private var collections: [RWGPSCollection] = []
+    // RWGPS filters
     @State private var searchText = ""
     @State private var showFilters = false
     @State private var distanceMin: String = ""
@@ -66,16 +68,24 @@ struct ServiceRoutePickerView: View {
                     }
                 } else {
                     List {
-                        ForEach(routes) { route in
-                            Button {
-                                downloadRoute(route)
-                            } label: {
-                                ServiceRouteRow(
-                                    route: route,
-                                    isDownloading: downloadingID == route.id
-                                )
+                        if service == .rideWithGPS && !collections.isEmpty {
+                            collectionsSection
+                        }
+
+                        Section {
+                            ForEach(routes) { route in
+                                Button {
+                                    downloadRoute(route)
+                                } label: {
+                                    ServiceRouteRow(
+                                        route: route,
+                                        isDownloading: downloadingID == route.id
+                                    )
+                                }
+                                .disabled(downloadingID != nil)
                             }
-                            .disabled(downloadingID != nil)
+                        } header: { 
+                            Text("Your Routes")
                         }
 
                         if hasMore {
@@ -137,6 +147,7 @@ struct ServiceRoutePickerView: View {
                 Text(error ?? "")
             }
             .task {
+                await fetchCollections()
                 await fetchRoutes()
             }
         }
@@ -257,6 +268,16 @@ struct ServiceRoutePickerView: View {
         isLoading = false
     }
 
+    private func fetchCollections() async {
+        guard let rwgps = rwgpsClient else { return }
+        do {
+            collections = try await rwgps.fetchCollections(page: 1)
+        } catch {
+            // Silently ignore collection loading errors since they're not critical
+            print("Failed to load RWGPS collections: \(error)")
+        }
+    }
+
     private func loadMore() {
         currentPage += 1
         Task { await fetchRoutes() }
@@ -277,6 +298,33 @@ struct ServiceRoutePickerView: View {
                     downloadingID = nil
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var collectionsSection: some View {
+        Section {
+            let items = Array(collections.suffix(1)) + Array(collections.prefix(3))
+
+            ForEach(items) { collection in
+                HStack {
+                    Text(collection.name)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if collections.count > 4 {
+                HStack {
+                    Text("View All (+\(collections.count - 4))")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Collections")
         }
     }
 }

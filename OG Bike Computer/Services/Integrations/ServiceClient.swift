@@ -34,6 +34,7 @@ enum ServiceError: LocalizedError {
     case decodingError(Error)
     case uploadFailed(String)
     case noData
+    case invalidURL
 
     var errorDescription: String? {
         switch self {
@@ -45,6 +46,7 @@ enum ServiceError: LocalizedError {
         case .decodingError: return "Failed to parse response from server."
         case .uploadFailed(let msg): return "Upload failed: \(msg)"
         case .noData: return "No data received from server."
+        case .invalidURL: return "Unable to parse URL. Please check and try again."
         }
     }
 }

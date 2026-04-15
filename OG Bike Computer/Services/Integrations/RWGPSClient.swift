@@ -67,15 +67,9 @@ class RWGPSClient: ServiceClient {
         }
     }
 
-    func fetchCollections(page: Int) async throws -> [ServiceCollection] {
+    func fetchCollections(page: Int) async throws -> [RWGPSCollection] {
         let token = try await OAuthManager.shared.validToken(for: .rideWithGPS)
-        var components = URLComponents(string: "\(baseURL)/collections.json")!
-        var queryItems: [URLQueryItem] = [
-            URLQueryItem(name: "page", value: "1"),
-            URLQueryItem(name: "page_size", value: "20"),
-        ]
-
-        components.queryItems = queryItems
+        let components = URLComponents(string: "\(baseURL)/collections.json")!
 
         var request = URLRequest(url: components.url!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -84,19 +78,20 @@ class RWGPSClient: ServiceClient {
         try validateResponse(response)
 
         let decoded = try JSONDecoder().decode(RWGPSCollectionListResponse.self, from: data)
-        logger.debug("Fetched \(decoded.collections.count) collections (page \page)")
+        logger.debug("Fetched \(decoded.collections.count) collections (page \(page))")
+
 
         return decoded.collections.map { col in
-            ServiceCollection(
+            RWGPSCollection(
                 id: "\(col.id)",
-                name: col.name ?? "Unnamed Collection",
-                routeCount: col.route_count ?? 0,
-                createdAt: col.created_at ?? Date()
+                name: col.name?.localizedCapitalized ?? "Unnamed Collection",
+                createdAt: col.created_at ?? Date(),
+                routes: nil
             )
         }
     }
 
-    func fetchByURL(url: string) async throws -> Route {
+    func fetchByURL(url: String) async throws -> Route {
         guard let id = extractRouteID(from: url) else {
             throw ServiceError.invalidURL
         }
@@ -284,19 +279,17 @@ struct RWGPSCollectionListResponse: Codable {
 struct RWGPSCollectionListItem: Codable {
     let id: Int
     let name: String?
-    let route_count: Int?
     let created_at: Date?
     let routes: [RWGPSRouteListItem]?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, route_count, created_at, routes
+        case id, name, created_at, routes
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(Int.self, forKey: .id)
         name = try container.decodeIfPresent(String.self, forKey: .name)
-        route_count = try container.decodeIfPresent(Int.self, forKey: .route_count)
 
         if let dateString = try container.decodeIfPresent(String.self, forKey: .created_at) {
             let formatter = ISO8601DateFormatter()
@@ -316,4 +309,11 @@ struct RWGPSCollectionListItem: Codable {
             routes = nil
         }
     }
+}
+
+struct RWGPSCollection: Identifiable {
+    let id: String
+    let name: String
+    let createdAt: Date
+    let routes: [ServiceRoute]?
 }
