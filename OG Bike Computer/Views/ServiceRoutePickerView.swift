@@ -271,7 +271,7 @@ struct ServiceRoutePickerView: View {
     private func fetchCollections() async {
         guard let rwgps = rwgpsClient else { return }
         do {
-            collections = try await rwgps.fetchCollections(page: 1)
+            collections = try await rwgps.fetchCollections()
         } catch {
             // Silently ignore collection loading errors since they're not critical
             print("Failed to load RWGPS collections: \(error)")
@@ -304,22 +304,24 @@ struct ServiceRoutePickerView: View {
     @ViewBuilder
     private var collectionsSection: some View {
         Section {
-            let items = Array(collections.suffix(1)) + Array(collections.prefix(3))
+            let items = Array(collections.prefix(4))
 
             ForEach(items) { collection in
-                HStack {
+                NavigationLink(destination: RWGPSCollectionView(
+                    collections: collections,
+                    selectedCollection: collection,
+                    routeStore: routeStore
+                )) {
                     Text(collection.name)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(.secondary)
                 }
             }
             if collections.count > 4 {
-                HStack {
+                NavigationLink(destination: RWGPSCollectionView(
+                    collections: collections,
+                    selectedCollection: nil,
+                    routeStore: routeStore
+                )) {
                     Text("View All (+\(collections.count - 4))")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -329,7 +331,7 @@ struct ServiceRoutePickerView: View {
     }
 }
 
-private struct ServiceRouteRow: View {
+struct ServiceRouteRow: View {
     let route: ServiceRoute
     let isDownloading: Bool
     @ObservedObject private var unitState = UnitState.shared

@@ -67,7 +67,7 @@ class RWGPSClient: ServiceClient {
         }
     }
 
-    func fetchCollections(page: Int) async throws -> [RWGPSCollection] {
+    func fetchCollections() async throws -> [RWGPSCollection] {
         let token = try await OAuthManager.shared.validToken(for: .rideWithGPS)
         let components = URLComponents(string: "\(baseURL)/collections.json")!
 
@@ -78,7 +78,7 @@ class RWGPSClient: ServiceClient {
         try validateResponse(response)
 
         let decoded = try JSONDecoder().decode(RWGPSCollectionListResponse.self, from: data)
-        logger.debug("Fetched \(decoded.collections.count) collections (page \(page))")
+        logger.debug("Fetched \(decoded.collections.count) collections")
 
 
         return decoded.collections.map { col in
@@ -87,6 +87,35 @@ class RWGPSClient: ServiceClient {
                 name: col.name?.localizedCapitalized ?? "Unnamed Collection",
                 createdAt: col.created_at ?? Date(),
                 routes: nil
+            )
+        }
+    }
+
+    func fetchRoutesForCollection(id: String) async throws -> [ServiceRoute] {
+        let token = try await OAuthManager.shared.validToken(for: .rideWithGPS)
+
+        var request = URLRequest(url: URL(string: "\(baseURL)/collections/\(id).json")!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateResponse(response)
+
+        let decoded = try JSONDecoder().decode(RWGPSCollectionDetailResponse.self, from: data)
+        let routeCount = decoded.collection.routes?.count ?? 0
+
+        logger.debug("Fetched \(routeCount) routes for collection \(id)")
+
+        if routeCount == 0 {
+            return []
+        }
+
+        return decoded.collection.routes!.map { route in
+            ServiceRoute(
+                id: "\(route.id)",
+                name: route.name ?? "Unnamed Route",
+                distance: route.distance ?? 0,
+                elevationGain: route.elevation_gain ?? 0,
+                createdAt: route.created_at ?? Date()
             )
         }
     }
@@ -309,6 +338,10 @@ struct RWGPSCollectionListItem: Codable {
             routes = nil
         }
     }
+}
+
+struct RWGPSCollectionDetailResponse: Codable {
+    let collection: RWGPSCollectionListItem
 }
 
 struct RWGPSCollection: Identifiable {
