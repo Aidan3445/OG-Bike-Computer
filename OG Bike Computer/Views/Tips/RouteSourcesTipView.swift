@@ -35,16 +35,16 @@ struct RouteSourcesTipView: View {
                         detail: "Using the built-in RWGPS route selector automatically pulls in the cue sheet, giving you street names and precise turn points."
                     )
                     TipRow(
-                        icon: "checkmark.seal.fill",
+                        icon: "arrowshape.left.arrowshape.right.fill",
                         color: .green,
                         title: "GPX with embedded cues from RWGPS",
-                        detail: "On the RWGPS website (not the mobile app), choose \"Embed cues as waypoints\" when exporting a GPX file. Importing that file gives you full turn-by-turn with street names."
+                        detail: "On the RWGPS website (not the mobile app), choose \"Include cues as waypoints\" when exporting a GPX file. Importing that file gives you full turn-by-turn with street names."
                     )
                     TipRow(
                         icon: "pencil.and.ruler.fill",
                         color: .green,
                         title: "Use the RWGPS Route Tracing Tool",
-                        detail: "Routes created with the tracing tool on RWGPS produce the best cue sheets. For planned rides, this is the recommended starting point."
+                        detail: "The RWGPS route planner tracing tool produces the best automated cue sheets. This works for routes created in the RWGPS route planner as well as any GPX or other route file type uploaded to the planner."
                     )
                 }
 

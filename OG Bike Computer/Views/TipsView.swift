@@ -76,5 +76,6 @@ struct TipsView: View {
                 }
             }
         }
+        .navigationTitle("Tips")
     }
 }
