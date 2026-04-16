@@ -67,5 +67,14 @@ struct PhoneAlertSettingsView: View {
             }
         }
         .settingsPageTitle("Phone Alerts", profile: userSettings.activeProfileName)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
+                }
+            }
+        }
     }
 }

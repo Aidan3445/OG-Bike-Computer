@@ -37,6 +37,15 @@ struct NavigationAlertSettingsView: View {
             }
         }
         .settingsPageTitle("Navigation Alerts", profile: userSettings.activeProfileName)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
+                }
+            }
+        }
     }
 
     // MARK: - Turn Alerts
@@ -193,7 +202,7 @@ struct NavigationAlertSettingsView: View {
                 SplitDistancePicker(meters: prefs.splitAlerts.splitDistance)
 
                 NavigationLink {
-                    SplitMetricPickerView(metrics: prefs.splitAlerts.metrics)
+                    SplitMetricPickerView(metrics: prefs.splitAlerts.metrics, userSettings: userSettings)
                 } label: {
                     HStack {
                         Text("Stats to Read")

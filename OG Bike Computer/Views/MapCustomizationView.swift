@@ -50,6 +50,13 @@ struct MapCustomizationView: View {
                     }
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
+                }
+            }
         }
         .sheet(isPresented: $showProfileImport) {
             MapConfigImportSheet(

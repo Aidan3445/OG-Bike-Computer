@@ -7,13 +7,12 @@
 
 import SwiftUI
 
-// MARK: - Top-level: Carousel of page previews
+// MARK: - Top-level: Grid of page previews
 
 struct MetricCustomizationView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
     var profileName: String = ""
-    @State private var selectedPage: Int = 0
     @State private var showAddPage = false
     @State private var newPageName = ""
     @State private var showResetConfirm = false
@@ -36,159 +35,127 @@ struct MetricCustomizationView: View {
             }
     }
 
-    /// Total number of carousel items: pages + 1 "Add Page" card + other profile pages
-    private var totalItems: Int { metricConfig.config.pages.count + 1 + otherProfilePages.count }
-
     var body: some View {
         ScrollView {
-            VStack(spacing: 0) {
-                // Carousel of watch previews
-                TabView(selection: $selectedPage) {
-                    ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, page in
-                        NavigationLink {
-                            MetricPageEditor(
-                                metricConfig: metricConfig,
-                                pageIndex: index
-                            )
-                        } label: {
-                            WatchPagePreview(page: page)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button {
-                                editingPageIndex = index
-                            } label: {
-                                Label("Edit Page", systemImage: "slider.horizontal.3")
-                            }
-                            if metricConfig.config.pages.count > 1 {
-                                Button(role: .destructive) {
-                                    withAnimation {
-                                        metricConfig.removePage(at: index)
-                                        selectedPage = max(0, min(selectedPage, metricConfig.config.pages.count - 1))
-                                        syncToWatch()
-                                    }
-                                } label: {
-                                    Label("Delete Page", systemImage: "trash")
-                                }
-                            }
-                        }
-                        .tag(index)
-                        .padding(.horizontal, 32)
-                    }
-
-                    // "Add Page" card
-                    Button {
-                        showAddPage = true
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+                // Existing pages
+                ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, page in
+                    NavigationLink {
+                        MetricPageEditor(
+                            metricConfig: metricConfig,
+                            userSettings: userSettings,
+                            pageIndex: index
+                        )
                     } label: {
-                        AddPageCard()
+                        VStack(spacing: 6) {
+                            WatchPagePreview(page: page)
+                            Text(page.name)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                            Text("\(page.slots.count)/\(MetricPage.maxSlots) metrics")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .buttonStyle(.plain)
-                    .tag(metricConfig.config.pages.count)
-                    .padding(.horizontal, 32)
-
-                    // Pages from other profiles
-                    ForEach(Array(otherProfilePages.enumerated()), id: \.element.page.id) { index, item in
+                    .contextMenu {
                         Button {
-                            importPage(item.page)
+                            editingPageIndex = index
                         } label: {
-                            ProfilePageCard(page: item.page, profileName: item.profileName)
+                            Label("Edit Page", systemImage: "slider.horizontal.3")
                         }
-                        .buttonStyle(.plain)
-                        .tag(metricConfig.config.pages.count + 1 + index)
-                        .padding(.horizontal, 32)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(height: 240)
-
-                // Page dots
-                HStack(spacing: 6) {
-                    ForEach(0..<totalItems, id: \.self) { i in
-                        if i < metricConfig.config.pages.count {
-                            Circle()
-                                .fill(i == selectedPage ? Color.primary : Color.secondary.opacity(0.4))
-                                .frame(width: i == selectedPage ? 8 : 6, height: i == selectedPage ? 8 : 6)
-                        } else if i == metricConfig.config.pages.count {
-                            // "Add" dot
-                            Image(systemName: "plus")
-                                .font(.system(size: 6, weight: .bold))
-                                .foregroundStyle(i == selectedPage ? Color.primary : Color.secondary.opacity(0.5))
-                        } else {
-                            // Other profile page dot
-                            Circle()
-                                .fill(i == selectedPage ? Color.secondary : Color.secondary.opacity(0.2))
-                                .frame(width: i == selectedPage ? 7 : 5, height: i == selectedPage ? 7 : 5)
+                        if metricConfig.config.pages.count > 1 {
+                            Button(role: .destructive) {
+                                withAnimation {
+                                    metricConfig.removePage(at: index)
+                                    syncToWatch()
+                                }
+                            } label: {
+                                Label("Delete Page", systemImage: "trash")
+                            }
                         }
                     }
                 }
-                .animation(.spring(response: 0.2), value: selectedPage)
-                .padding(.top, 6)
-                .padding(.bottom, 4)
 
-                // Page label
-                if metricConfig.config.pages.indices.contains(selectedPage) {
-                    let page = metricConfig.config.pages[selectedPage]
-                    Text(page.name)
-                        .font(.headline)
-                        .padding(.bottom, 2)
-                    Text("\(page.slots.count)/\(MetricPage.maxSlots) metrics")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("Tap/Hold to manage")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 2)
-                } else if selectedPage == metricConfig.config.pages.count {
-                    Text("Add a new page")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    let profileIdx = selectedPage - metricConfig.config.pages.count - 1
-                    if otherProfilePages.indices.contains(profileIdx) {
-                        let item = otherProfilePages[profileIdx]
-                        Text(item.page.name)
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                            .padding(.bottom, 2)
-                        Text("From \(item.profileName) · Tap to import")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
+                // "Add Page" card
                 Button {
-                    showResetConfirm = true
+                    showAddPage = true
                 } label: {
-                    Text("Reset to Defaults")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    VStack(spacing: 6) {
+                        AddPageCard()
+                        Text("Add Page")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                // Pages from other profiles
+                ForEach(Array(otherProfilePages.enumerated()), id: \.element.page.id) { index, item in
+                    Button {
+                        importPage(item.page)
+                    } label: {
+                        VStack(spacing: 6) {
+                            ProfilePageCard(page: item.page, profileName: item.profileName)
+                            Text(item.page.name)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Text("From \(item.profileName)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .padding(.top, 8)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            Button("Reset to Defaults", role: .destructive) {
+                showResetConfirm = true
+            }
             .padding(.bottom, 16)
         }
         .settingsPageTitle("Customize Metrics", profile: profileName)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
+                }
+            }
+        }
         .alert("New Page", isPresented: $showAddPage) {
             TextField("Page Name", text: $newPageName)
             Button("Add") {
                 let name = newPageName.isEmpty ? "Page \(metricConfig.config.pages.count + 1)" : newPageName
                 metricConfig.addPage(MetricPage(name: name, metrics: [.speed, .distance]))
                 newPageName = ""
-                selectedPage = metricConfig.config.pages.count - 1
                 syncToWatch()
             }
             Button("Cancel", role: .cancel) { newPageName = "" }
         }
-        .confirmationDialog("Reset all metric pages to defaults?", isPresented: $showResetConfirm, titleVisibility: .visible) {
-            Button("Reset to Defaults", role: .destructive) {
-                metricConfig.resetToDefault()
-                selectedPage = 0
-                syncToWatch()
+        .sheet(isPresented: $showResetConfirm) {
+            VStack(spacing: 20) {
+                Text("Reset to Defaults")
+                    .font(.headline)
+                Text("This will remove all custom metric pages and restore the defaults.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Reset to Defaults", role: .destructive) {
+                    metricConfig.resetToDefault()
+                    syncToWatch()
+                    showResetConfirm = false
+                }
+                .buttonStyle(.bordered)
+                Button("Cancel") { showResetConfirm = false }
+                    .foregroundStyle(.secondary)
             }
-            Button("Cancel", role: .cancel) {}
-        }
-        .onChange(of: metricConfig.config.pages.count) { _, count in
-            if selectedPage >= count + 1 { selectedPage = max(0, count) }
+            .padding(32)
+            .presentationDetents([.height(240)])
         }
         // NavigationLink destination triggered by context menu "Edit"
         .navigationDestination(isPresented: Binding(
@@ -196,7 +163,7 @@ struct MetricCustomizationView: View {
             set: { if !$0 { editingPageIndex = nil } }
         )) {
             if let idx = editingPageIndex, metricConfig.config.pages.indices.contains(idx) {
-                MetricPageEditor(metricConfig: metricConfig, pageIndex: idx)
+                MetricPageEditor(metricConfig: metricConfig, userSettings: userSettings, pageIndex: idx)
             }
         }
     }
@@ -206,7 +173,6 @@ struct MetricCustomizationView: View {
         var imported = page
         imported.id = UUID()
         metricConfig.addPage(imported)
-        selectedPage = metricConfig.config.pages.count - 1
         syncToWatch()
     }
 
@@ -291,6 +257,7 @@ private struct AddPageCard: View {
 
 struct MetricPageEditor: View {
     @ObservedObject var metricConfig: MetricConfigStore
+    @ObservedObject var userSettings: UserSettingsStore
     let pageIndex: Int
     @State private var showMetricPicker = false
     @State private var replacingSlotIndex: Int?
@@ -415,14 +382,33 @@ struct MetricPageEditor: View {
                 }
                 .disabled(metricConfig.config.pages.count <= 1)
             }
-        }
-        .confirmationDialog("Delete \"\(page.name)\"?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-            Button("Delete Page", role: .destructive) {
-                metricConfig.removePage(at: pageIndex)
-                syncToWatch()
-                dismiss()
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
+                }
             }
-            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showDeleteConfirm) {
+            VStack(spacing: 20) {
+                Text("Delete \"\(page.name)\"?")
+                    .font(.headline)
+                Text("This page and all its metrics will be permanently removed.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Delete Page", role: .destructive) {
+                    metricConfig.removePage(at: pageIndex)
+                    syncToWatch()
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+                Button("Cancel") { showDeleteConfirm = false }
+                    .foregroundStyle(.secondary)
+            }
+            .padding(32)
+            .presentationDetents([.height(230)])
         }
         .sheet(isPresented: $showMetricPicker) {
             MetricPickerSheet(

@@ -607,6 +607,13 @@ struct RiderProfileView: View {
                 Spacer()
                 Button("Done") { isFieldFocused = false }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
+                }
+            }
         }
         .alert("Add Bike", isPresented: $showAddBike) {
             TextField("Name (e.g. Road Bike)", text: $newBikeName)

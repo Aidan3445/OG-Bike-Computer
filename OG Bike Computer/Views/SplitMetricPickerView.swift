@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SplitMetricPickerView: View {
     @Binding var metrics: [SplitMetricConfig]
+    @ObservedObject var userSettings: UserSettingsStore
 
     private let maxSelection = 5
 
@@ -100,5 +101,14 @@ struct SplitMetricPickerView: View {
             }
         }
         .navigationTitle("Split Stats")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
+                }
+            }
+        }
     }
 }

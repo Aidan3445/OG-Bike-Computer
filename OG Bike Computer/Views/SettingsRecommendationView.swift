@@ -27,7 +27,7 @@ struct SettingsRecommendationView: View {
             if let windowSize = UIApplication.shared.connectedScenes.first as? UIWindowScene {
                 Image("settingsRec")
                     .resizable()
-                    .frame(width: windowSize.screen.bounds.width/2, height: windowSize.screen.bounds.height/2)
+                    .frame(width: windowSize.screen.bounds.width/2.5, height: windowSize.screen.bounds.height/2.5)
                     .aspectRatio(contentMode: .fit)
                     .clipShape(.rect(cornerRadius: 30))
                     .overlay {

@@ -76,5 +76,14 @@ struct UnitsSettingsView: View {
             }
         }
         .settingsPageTitle("Units", profile: userSettings.activeProfileName)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsPresetsView(userSettings: userSettings)
+                } label: {
+                    Image(systemName: "slider.horizontal.2.gobackward")
+                }
+            }
+        }
     }
 }

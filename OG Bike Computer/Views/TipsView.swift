@@ -18,15 +18,61 @@ struct TipsView: View {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Watch Settings")
-                        Text(
-                            "Keep watch app open before and during a ride."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Text("Keep watch app open before and during a ride.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 } icon: {
                     Image(systemName: "exclamationmark.applewatch")
                         .foregroundStyle(.green)
+                }
+            }
+
+            NavigationLink {
+                LiveSettingsTipView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Live Settings")
+                        Text("All settings update instantly, even mid-ride.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "slider.horizontal.3")
+                        .foregroundStyle(.accent)
+                }
+            }
+
+            NavigationLink {
+                RouteImportTipView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Importing Routes")
+                        Text("How to get routes from Strava and RideWithGPS.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "arrow.down.doc")
+                        .foregroundStyle(.blue)
+                }
+            }
+
+            NavigationLink {
+                RouteSourcesTipView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Route Sources & Navigation")
+                        Text("How your route source affects turn-by-turn accuracy.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "location.north.line")
+                        .foregroundStyle(.orange)
                 }
             }
         }
