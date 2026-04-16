@@ -32,6 +32,9 @@ class RideSessionManager: ObservableObject {
 
     private let appGroupDefaults = UserDefaults(suiteName: "group.com.aidan3445.computa")
 
+    /// Pending fallback resync task — cancelled when a real HK state callback arrives.
+    private var pendingResyncTask: Task<Void, Never>?
+
     private init() {}
 
     // MARK: - Ride Control
@@ -53,10 +56,90 @@ class RideSessionManager: ObservableObject {
         session.end()
     }
 
+    // MARK: - Optimistic Updates
+
+    /// Immediately flips `isPaused` to show feedback, issues the real pause command,
+    /// then schedules a resync after 4 s as a fallback if the watch doesn't respond.
+    func optimisticPause() {
+        guard mirroredSession != nil else { return }
+        DispatchQueue.main.async {
+            self.isPaused = true
+            self.writeStateToAppGroup()
+        }
+        pauseRide()
+        scheduleResync()
+    }
+
+    /// Immediately flips `isPaused` to show feedback, issues the real resume command,
+    /// then schedules a resync after 4 s as a fallback if the watch doesn't respond.
+    func optimisticResume() {
+        guard mirroredSession != nil else { return }
+        DispatchQueue.main.async {
+            self.isPaused = false
+            self.writeStateToAppGroup()
+        }
+        resumeRide()
+        scheduleResync()
+    }
+
+    /// Immediately marks the ride as inactive, issues the real end command,
+    /// then schedules a resync after 4 s as a fallback.
+    func optimisticEnd() {
+        guard mirroredSession != nil else { return }
+        DispatchQueue.main.async {
+            self.isRideActive = false
+            self.isPaused = false
+            self.writeStateToAppGroup()
+        }
+        endRide()
+        scheduleResync()
+    }
+
+    // MARK: - Resync
+
+    /// Cancels any pending resync and schedules a new one 4 s from now.
+    private func scheduleResync() {
+        pendingResyncTask?.cancel()
+        pendingResyncTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.syncFromSession() }
+        }
+    }
+
+    /// Reconciles published state with the actual HK session state.
+    /// Called by the fallback resync and can be called early when the real callback arrives.
+    private func syncFromSession() {
+        guard let state = mirroredSession?.state else {
+            // Session gone — ride over
+            isRideActive = false
+            isPaused = false
+            writeStateToAppGroup()
+            return
+        }
+        switch state {
+        case .running:
+            isRideActive = true
+            isPaused = false
+        case .paused:
+            isRideActive = true
+            isPaused = true
+        case .ended, .stopped:
+            isRideActive = false
+            isPaused = false
+        default:
+            break
+        }
+        writeStateToAppGroup()
+    }
+
     // MARK: - State Updates
 
     /// Called by AppDelegate when the mirrored session state changes.
     func handleSessionStateChange(to state: HKWorkoutSessionState) {
+        // Real confirmation arrived — cancel the fallback resync
+        pendingResyncTask?.cancel()
+        pendingResyncTask = nil
         DispatchQueue.main.async {
             switch state {
             case .running:

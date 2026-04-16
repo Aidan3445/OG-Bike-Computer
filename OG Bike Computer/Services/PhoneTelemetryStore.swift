@@ -22,6 +22,7 @@ class PhoneTelemetryStore: ObservableObject {
     @Published var currentSpeed: Double = 0        // m/s
     @Published var heartRate: Double = 0
     @Published var isPaused = false
+    @Published var isAutoPaused = false
 
     // Extended stats
     @Published var maxSpeed: Double = 0            // m/s
@@ -44,7 +45,7 @@ class PhoneTelemetryStore: ObservableObject {
 
     // Off-route
     @Published var isOffRoute = false
-    @Published var offRouteMessage: String?
+    @Published var distanceOffRoute: Double?
 
     // Location
     @Published var riderLatitude: Double?
@@ -62,6 +63,7 @@ class PhoneTelemetryStore: ObservableObject {
             currentSpeed = Double(telemetry["speed"] ?? "") ?? currentSpeed
             heartRate = Double(telemetry["heartRate"] ?? "") ?? heartRate
             isPaused = telemetry["isPaused"] == "true"
+            isAutoPaused = telemetry["isAutoPaused"] == "true"
 
             // Extended stats
             maxSpeed = Double(telemetry["maxSpeed"] ?? "") ?? maxSpeed
@@ -82,7 +84,7 @@ class PhoneTelemetryStore: ObservableObject {
             routeDistanceRemaining = Double(telemetry["routeRemaining"] ?? "")
 
             isOffRoute = telemetry["isOffRoute"] == "true"
-            offRouteMessage = telemetry["offRouteMsg"]
+            distanceOffRoute = Double(telemetry["distOffRoute"] ?? "")
 
             riderLatitude = Double(telemetry["lat"] ?? "")
             riderLongitude = Double(telemetry["lon"] ?? "")
@@ -132,6 +134,7 @@ class PhoneTelemetryStore: ObservableObject {
         currentSpeed = 0
         heartRate = 0
         isPaused = false
+        isAutoPaused = false
         maxSpeed = 0
         averageHeartRate = 0
         maxHeartRate = 0
@@ -148,7 +151,7 @@ class PhoneTelemetryStore: ObservableObject {
         nextTurnCue = nil
         routeDistanceRemaining = nil
         isOffRoute = false
-        offRouteMessage = nil
+        distanceOffRoute = nil
         riderLatitude = nil
         riderLongitude = nil
     }

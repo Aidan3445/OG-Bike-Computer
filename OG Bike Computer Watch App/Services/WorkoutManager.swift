@@ -1322,6 +1322,7 @@ class WorkoutManager: NSObject, ObservableObject {
             "avgSpeed": String(avgSpeed),
             "speed": String(speed),
             "isPaused": String(isPaused),
+            "isAutoPaused": String(isAutoPaused),
         ]
 
         if heartRate > 0 {
@@ -1348,6 +1349,9 @@ class WorkoutManager: NSObject, ObservableObject {
             payload["distToTurn"] = String(navigation.distanceToNextTurn)
             payload["routeRemaining"] = String(navigation.distanceRemaining)
             payload["isOffRoute"] = String(navigation.isOffRoute)
+            if navigation.isOffRoute {
+                payload["distOffRoute"] = String(navigation.nearestRouteDistance)
+            }
 
             if let turn = navigation.nextTurn {
                 payload["turnDir"] = turn.direction.label
@@ -1357,10 +1361,6 @@ class WorkoutManager: NSObject, ObservableObject {
                 }
             }
 
-            if navigation.isOffRoute {
-                let distMiles = totalDistance / 1609.34
-                payload["offRouteMsg"] = String(format: "Off route near mile %.1f", distMiles)
-            }
         }
 
         guard let data = try? JSONEncoder().encode(payload) else { return }

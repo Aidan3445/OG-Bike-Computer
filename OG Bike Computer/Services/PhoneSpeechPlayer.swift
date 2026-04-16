@@ -69,6 +69,7 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         } catch {
             logger.error("[PhoneSpeechPlayer] deactivate error: \(error.localizedDescription)")
         }
+        isSessionConfigured = false
         endBackgroundTask()
         // Fresh synthesizer for next session
         synthesizer = AVSpeechSynthesizer()
@@ -79,7 +80,7 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         guard !isSessionConfigured else { return }
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
+            try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .allowBluetoothA2DP])
             isSessionConfigured = true
             logger.notice("[PhoneSpeechPlayer] Audio session configured")
         } catch {

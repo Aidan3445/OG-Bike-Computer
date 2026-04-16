@@ -255,7 +255,7 @@ enum RouteDestinationEnum: String, AppEnum {
 struct SendRouteToWatchIntent: AppIntent {
     static var title: LocalizedStringResource = "Send Route to Watch"
     static var description: IntentDescription = IntentDescription(
-        "Sends a route from the phone to the Apple Watch, optionally starting a ride.",
+        "Sends a route from the phone to your watch, optionally starting a ride.",
         categoryName: "Route"
     )
 

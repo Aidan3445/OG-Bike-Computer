@@ -49,10 +49,11 @@ struct RideActivityAttributes: ActivityAttributes {
 
         // Ride state
         var isPaused: Bool
+        var isAutoPaused: Bool
 
         // Off-route
         var isOffRoute: Bool
-        var offRouteMessage: String?
+        var distanceOffRoute: Double?   // meters from nearest route point
 
         // Rider location for potential map rendering
         var riderLatitude: Double?

@@ -13,6 +13,7 @@
 
 #if canImport(ActivityKit)
 import AppIntents
+import ActivityKit
 import Foundation
 
 /// Helpers that read/write App Group defaults on the calling thread,
@@ -31,6 +32,21 @@ private enum RideCommandBridge {
     static func send(_ command: String) {
         defaults?.set(command, forKey: "pendingRideCommand")
     }
+
+    /// Write optimistic state so the widget extension's next render reflects
+    /// the action immediately (before the main app processes the command).
+    static func writeOptimisticIsPaused(_ isPaused: Bool) {
+        defaults?.set(isPaused, forKey: "isPaused")
+    }
+}
+
+/// Push an optimistic `isPaused` flip to the live activity so the widget
+/// updates instantly without waiting for the main app round-trip.
+private func optimisticallyUpdateLiveActivity(isPaused: Bool) async {
+    guard let activity = Activity<RideActivityAttributes>.activities.first else { return }
+    var newState = activity.contentState
+    newState.isPaused = isPaused
+    await activity.update(ActivityContent(state: newState, staleDate: nil))
 }
 
 // MARK: - Pause / Resume Toggle
@@ -44,6 +60,11 @@ struct PauseResumeRideIntent: LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         let isPaused = await RideCommandBridge.readIsPaused()
+        let nowPaused = !isPaused
+        // Optimistic: update shared state and live activity immediately
+        await RideCommandBridge.writeOptimisticIsPaused(nowPaused)
+        await optimisticallyUpdateLiveActivity(isPaused: nowPaused)
+        // Queue the command for the main app to execute
         await RideCommandBridge.send(isPaused ? "resume" : "pause")
         return .result()
     }

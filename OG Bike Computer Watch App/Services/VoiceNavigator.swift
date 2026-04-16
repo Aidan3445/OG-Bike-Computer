@@ -116,7 +116,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             // Same options as PhoneSpeechPlayer — duckOthers is required for
             // background activation (implicitly sets mixWithOthers).
             // interruptSpokenAudioAndMixWithOthers pauses podcasts.
-            try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
+            try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
         } catch {
             print("VoiceNavigator audio session config error: \(error)")
         }

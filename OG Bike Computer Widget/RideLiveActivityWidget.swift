@@ -62,9 +62,18 @@ struct RideLiveActivity: Widget {
                             }
                         }
                     } else if context.state.isOffRoute {
-                        Label("Off Route", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                            Text("Off Route")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.red)
+                            if let dist = context.state.distanceOffRoute {
+                                Text("+\(formatDistance(dist, imperial: context.attributes.isImperial))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.red.opacity(0.8))
+                            }
+                        }
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
@@ -152,16 +161,23 @@ private struct LockScreenView: View {
             // Stats grid — configurable 2 rows of 3
             statsGrid
 
-            // Route remaining (if navigating, hidden in dim mode)
-            if !isLuminanceReduced, let remaining = state.routeDistanceRemaining {
+            // Route remaining / auto-pause row (hidden in dim mode)
+            if !isLuminanceReduced, state.routeDistanceRemaining != nil || state.isAutoPaused {
                 HStack {
-                    Image(systemName: "flag.checkered")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text("\(formatDistance(remaining, imperial: isImperial)) remaining")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let remaining = state.routeDistanceRemaining {
+                        Image(systemName: "flag.checkered")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("\(formatDistance(remaining, imperial: isImperial)) remaining")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
+                    if state.isAutoPaused {
+                        Label("Auto", systemImage: "pause.circle.fill")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.yellow)
+                    }
                 }
             }
 
@@ -221,10 +237,18 @@ private struct LockScreenView: View {
         } else if state.isOffRoute {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text(state.offRouteMessage ?? "Off Route")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Off Route")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.red)
+                    if let dist = state.distanceOffRoute {
+                        Text("+\(formatDistance(dist, imperial: isImperial)) from route")
+                            .font(.caption2)
+                            .foregroundStyle(.red.opacity(0.75))
+                    }
+                }
             }
         }
     }

@@ -56,7 +56,7 @@ struct RideControlView: View {
                 dismiss()
             }
         }
-        .background(Color(.systemGroupedBackground))
+        .background(telemetry.isOffRoute ? Color(red: 0.12, green: 0.02, blue: 0.02) : Color(.systemGroupedBackground))
         .navigationTitle(session.isPaused ? "Paused" : "Riding")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Discard Ride?", isPresented: $showDiscardAlert) {
@@ -67,7 +67,7 @@ struct RideControlView: View {
                 userSettings.clearRideTracking()
             }
             Button("Save Anyway") {
-                session.endRide()
+                session.optimisticEnd()
                 checkSettingsRevert()
                 dismiss()
             }
@@ -76,7 +76,7 @@ struct RideControlView: View {
         }
         .alert("End Ride?", isPresented: $showEndConfirmation) {
             Button("End & Save", role: .destructive) {
-                session.endRide()
+                session.optimisticEnd()
                 checkSettingsRevert()
                 dismiss()
             }
@@ -134,14 +134,22 @@ struct RideControlView: View {
         } else if telemetry.isOffRoute {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text(telemetry.offRouteMessage ?? "Off Route")
-                    .font(.headline)
-                    .foregroundStyle(.orange)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Off Route")
+                        .font(.headline)
+                        .foregroundStyle(.red)
+                    if let dist = telemetry.distanceOffRoute {
+                        Text("+\(formatDistance(dist)) from route")
+                            .font(.subheadline)
+                            .foregroundStyle(.red.opacity(0.75))
+                    }
+                }
                 Spacer()
             }
             .padding(12)
-            .background(.orange.opacity(0.12))
+            .background(.red.opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 12))
         } else if let remaining = telemetry.routeDistanceRemaining {
             HStack {
@@ -204,14 +212,35 @@ struct RideControlView: View {
                 }
             }
 
+            // Remaining distance / auto-pause row
+            if telemetry.routeDistanceRemaining != nil || telemetry.isAutoPaused {
+                HStack {
+                    if let remaining = telemetry.routeDistanceRemaining {
+                        Image(systemName: "flag.checkered")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("\(formatDistance(remaining)) remaining")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if telemetry.isAutoPaused {
+                        Label("Auto-Paused", systemImage: "pause.circle.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.yellow)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+
             // Action buttons
             HStack(spacing: 12) {
                 // Pause / Resume
                 Button {
                     if session.isPaused {
-                        session.resumeRide()
+                        session.optimisticResume()
                     } else {
-                        session.pauseRide()
+                        session.optimisticPause()
                     }
                 } label: {
                     Label(

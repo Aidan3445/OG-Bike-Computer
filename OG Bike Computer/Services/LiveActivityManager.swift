@@ -67,8 +67,9 @@ class LiveActivityManager {
             nextTurnCue: nil,
             routeDistanceRemaining: nil,
             isPaused: false,
+            isAutoPaused: false,
             isOffRoute: false,
-            offRouteMessage: nil,
+            distanceOffRoute: nil,
             riderLatitude: nil,
             riderLongitude: nil
         )
@@ -113,8 +114,9 @@ class LiveActivityManager {
             nextTurnCue: telemetry["turnCue"],
             routeDistanceRemaining: Double(telemetry["routeRemaining"] ?? ""),
             isPaused: telemetry["isPaused"] == "true",
+            isAutoPaused: telemetry["isAutoPaused"] == "true",
             isOffRoute: telemetry["isOffRoute"] == "true",
-            offRouteMessage: telemetry["offRouteMsg"],
+            distanceOffRoute: Double(telemetry["distOffRoute"] ?? ""),
             riderLatitude: Double(telemetry["lat"] ?? ""),
             riderLongitude: Double(telemetry["lon"] ?? "")
         )

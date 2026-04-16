@@ -41,7 +41,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // causes a full interruption to the music app instead of a duck.
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            try audioSession.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
+            try audioSession.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .allowBluetoothA2DP])
         } catch {
             print("[Audio] session config error: \(error)")
         }
