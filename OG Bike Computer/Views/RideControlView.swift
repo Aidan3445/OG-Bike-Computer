@@ -104,7 +104,27 @@ struct RideControlView: View {
 
     @ViewBuilder
     private var navigationBar: some View {
-        if let dir = telemetry.nextTurnDirection {
+        if telemetry.isOffRoute {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Off Route")
+                        .font(.headline)
+                        .foregroundStyle(.red)
+                    if let dist = telemetry.distanceOffRoute {
+                        Text("+\(formatDistance(dist)) from route")
+                            .font(.subheadline)
+                            .foregroundStyle(.red.opacity(0.75))
+                    }
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(.red.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        } else if let dir = telemetry.nextTurnDirection {
             HStack(spacing: 6) {
                 Image(systemName: telemetry.nextTurnIcon ?? "arrow.triangle.turn.up.right.diamond")
                     .font(.title3.weight(.bold))
@@ -130,26 +150,6 @@ struct RideControlView: View {
             }
             .padding(12)
             .background(.cyan.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        } else if telemetry.isOffRoute {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.red)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Off Route")
-                        .font(.headline)
-                        .foregroundStyle(.red)
-                    if let dist = telemetry.distanceOffRoute {
-                        Text("+\(formatDistance(dist)) from route")
-                            .font(.subheadline)
-                            .foregroundStyle(.red.opacity(0.75))
-                    }
-                }
-                Spacer()
-            }
-            .padding(12)
-            .background(.red.opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 12))
         } else if let remaining = telemetry.routeDistanceRemaining {
             HStack {

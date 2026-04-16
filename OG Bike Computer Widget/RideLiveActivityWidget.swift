@@ -49,19 +49,7 @@ struct RideLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    if let dir = context.state.nextTurnDirection {
-                        HStack(spacing: 4) {
-                            Image(systemName: context.state.nextTurnIcon ?? turnIcon(dir))
-                                .font(.caption.weight(.bold))
-                            Text(dir)
-                                .font(.caption.weight(.medium))
-                            if let dist = context.state.distanceToNextTurn {
-                                Text("in \(formatDistance(dist, imperial: context.attributes.isImperial))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } else if context.state.isOffRoute {
+                    if context.state.isOffRoute {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.red)
@@ -72,6 +60,18 @@ struct RideLiveActivity: Widget {
                                 Text("+\(formatDistance(dist, imperial: context.attributes.isImperial))")
                                     .font(.caption2)
                                     .foregroundStyle(.red.opacity(0.8))
+                            }
+                        }
+                    } else if let dir = context.state.nextTurnDirection {
+                        HStack(spacing: 4) {
+                            Image(systemName: context.state.nextTurnIcon ?? turnIcon(dir))
+                                .font(.caption.weight(.bold))
+                            Text(dir)
+                                .font(.caption.weight(.medium))
+                            if let dist = context.state.distanceToNextTurn {
+                                Text("in \(formatDistance(dist, imperial: context.attributes.isImperial))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -211,7 +211,23 @@ private struct LockScreenView: View {
 
     @ViewBuilder
     private var turnNavigationContent: some View {
-        if let dir = state.nextTurnDirection {
+        if state.isOffRoute {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Off Route")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.red)
+                    if let dist = state.distanceOffRoute {
+                        Text("+\(formatDistance(dist, imperial: isImperial)) from route")
+                            .font(.caption2)
+                            .foregroundStyle(.red.opacity(0.75))
+                    }
+                }
+            }
+        } else if let dir = state.nextTurnDirection {
             HStack(spacing: 6) {
                 Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
                     .font(.body.weight(.bold))
@@ -231,22 +247,6 @@ private struct LockScreenView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                    }
-                }
-            }
-        } else if state.isOffRoute {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.body.weight(.bold))
-                    .foregroundStyle(.red)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Off Route")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.red)
-                    if let dist = state.distanceOffRoute {
-                        Text("+\(formatDistance(dist, imperial: isImperial)) from route")
-                            .font(.caption2)
-                            .foregroundStyle(.red.opacity(0.75))
                     }
                 }
             }
