@@ -35,10 +35,12 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         }
 
         ConnectivityManager.shared.onChangeRouteRequested = { [weak self] routeID in
-            guard let self = self,
-                  self.workout.isActive,
-                  let route = self.store.routes.first(where: { $0.id == routeID }) else { return }
-            self.workout.loadRoute(route)
+            guard let self = self, self.workout.isActive else { return }
+            if let routeID, let route = self.store.routes.first(where: { $0.id == routeID }) {
+                self.workout.loadRoute(route)
+            } else {
+                self.workout.clearRoute()
+            }
         }
 
         ConnectivityManager.shared.onDiscardRideRequested = { [weak self] in

@@ -56,6 +56,10 @@ struct RideControlView: View {
                 dismiss()
             }
         }
+        // Sync active route whenever the watch reports a different route ID
+        .onChange(of: telemetry.activeRouteID, initial: true) { _, newID in
+            activeRoute = newID.flatMap { id in routeStore.routes.first { $0.id == id } }
+        }
         .background(telemetry.isOffRoute ? Color(red: 0.12, green: 0.02, blue: 0.02) : Color(.systemGroupedBackground))
         .navigationTitle(session.isPaused ? "Paused" : "Riding")
         .navigationBarTitleDisplayMode(.inline)

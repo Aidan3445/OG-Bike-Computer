@@ -105,7 +105,7 @@ final class ConnectivityManager: NSObject, ObservableObject {
     var onStartRideRequested: ((UUID?, ActivityType) -> Void)?
 
     /// Callback when a route change command is received from the phone (watchOS only).
-    var onChangeRouteRequested: ((UUID) -> Void)?
+    var onChangeRouteRequested: ((UUID?) -> Void)?
 
     /// Callback when a discard ride command is received from the phone (watchOS only).
     var onDiscardRideRequested: (() -> Void)?
@@ -658,11 +658,9 @@ extension ConnectivityManager: WCSessionDelegate {
                 replyHandler(["started": true])
                 return
             case "changeRoute":
-                if let idStr = message["routeID"] as? String,
-                   let routeID = UUID(uuidString: idStr) {
-                    DispatchQueue.main.async {
-                        self.onChangeRouteRequested?(routeID)
-                    }
+                let routeID = (message["routeID"] as? String).flatMap { UUID(uuidString: $0) }
+                DispatchQueue.main.async {
+                    self.onChangeRouteRequested?(routeID)
                 }
                 replyHandler(["changed": true])
                 return

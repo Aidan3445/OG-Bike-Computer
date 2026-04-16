@@ -43,6 +43,9 @@ class PhoneTelemetryStore: ObservableObject {
     @Published var nextTurnCue: String?
     @Published var routeDistanceRemaining: Double?
 
+    // Active route
+    @Published var activeRouteID: UUID?
+
     // Off-route
     @Published var isOffRoute = false
     @Published var distanceOffRoute: Double?
@@ -83,6 +86,7 @@ class PhoneTelemetryStore: ObservableObject {
             nextTurnCue = telemetry["turnCue"]
             routeDistanceRemaining = Double(telemetry["routeRemaining"] ?? "")
 
+            activeRouteID = (telemetry["activeRouteID"]).flatMap { UUID(uuidString: $0) }
             isOffRoute = telemetry["isOffRoute"] == "true"
             distanceOffRoute = Double(telemetry["distOffRoute"] ?? "")
 
@@ -150,6 +154,7 @@ class PhoneTelemetryStore: ObservableObject {
         nextTurnIcon = nil
         nextTurnCue = nil
         routeDistanceRemaining = nil
+        activeRouteID = nil
         isOffRoute = false
         distanceOffRoute = nil
         riderLatitude = nil

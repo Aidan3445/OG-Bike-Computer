@@ -13,28 +13,38 @@ struct RouteEntity: AppEntity {
 
     static var defaultQuery = RouteEntityQuery()
 
+    /// Sentinel ID representing "no route / free ride".
+    static let freeRideID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    static let freeRide   = RouteEntity(id: freeRideID, name: "Free Ride", distance: -1)
+
     var id: UUID
     var name: String
     var distance: Double // meters
 
+    var isFreeRide: Bool { id == RouteEntity.freeRideID }
+
     var displayRepresentation: DisplayRepresentation {
+        if isFreeRide {
+            return DisplayRepresentation(title: "Free Ride", subtitle: "No route")
+        }
         let distStr = distance > 0
             ? String(format: " (%.1f mi)", distance / 1609.34)
             : ""
-        return DisplayRepresentation(
-            title: "\(name)",
-            subtitle: "\(distStr)"
-        )
+        return DisplayRepresentation(title: "\(name)", subtitle: "\(distStr)")
     }
 }
 
 struct RouteEntityQuery: EntityQuery {
     func entities(for identifiers: [UUID]) async throws -> [RouteEntity] {
-        await loadRouteEntities().filter { identifiers.contains($0.id) }
+        let all = [RouteEntity.freeRide] + (await loadRouteEntities())
+        return all.filter { identifiers.contains($0.id) }
     }
 
     func suggestedEntities() async throws -> [RouteEntity] {
-        await loadRouteEntities()
+        let routes = await loadRouteEntities()
+        // No saved routes — return empty so optional route params are skipped entirely.
+        guard !routes.isEmpty else { return [] }
+        return [RouteEntity.freeRide] + routes
     }
 
     func defaultResult() async -> RouteEntity? {
@@ -44,7 +54,9 @@ struct RouteEntityQuery: EntityQuery {
 
 extension RouteEntityQuery: EntityStringQuery {
     func entities(matching string: String) async throws -> [RouteEntity] {
-        let all = await loadRouteEntities()
+        let routes = await loadRouteEntities()
+        guard !routes.isEmpty else { return [] }
+        let all = [RouteEntity.freeRide] + routes
         guard !string.isEmpty else { return all }
         return all.filter { $0.name.localizedCaseInsensitiveContains(string) }
     }

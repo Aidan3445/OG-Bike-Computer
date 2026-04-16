@@ -52,16 +52,17 @@ struct StartRideIntent: AppIntent {
             message["routeID"] = route.id.uuidString
         }
         
-        if let routeName = route?.name, let routeId = route?.id {
+        // Non-nil, non-free-ride route: ensure it's on the watch before starting.
+        if let route, !route.isFreeRide {
             let onWatch = await MainActor.run {
-                ConnectivityManager.shared.routeNamesOnWatch.contains(routeName)
+                ConnectivityManager.shared.routeNamesOnWatch.contains(route.name)
             }
-            
+
             if !onWatch {
-                guard let fullRoute = await loadRoute(id: routeId) else {
-                    return .result(dialog: "Could not load route \"\(routeName)\".")
+                guard let fullRoute = await loadRoute(id: route.id) else {
+                    return .result(dialog: "Could not load route \"\(route.name)\".")
                 }
-                
+
                 await withCheckedContinuation { continuation in
                     Task { @MainActor in
                         ConnectivityManager.shared.sendRoute(
@@ -69,7 +70,7 @@ struct StartRideIntent: AppIntent {
                             pendingAction: "changeRoute"
                         ) { _ in
                             ConnectivityManager.shared.sendRideCommand(message)
-                            
+
                             continuation.resume()
                         }
                     }
@@ -77,7 +78,9 @@ struct StartRideIntent: AppIntent {
             }
         }
         
-        await ConnectivityManager.shared.sendRideCommand(message)
+        await MainActor.run {
+            ConnectivityManager.shared.sendRideCommand(message)
+        }
 
         // (2) HKHealthStore.startWatchApp — guaranteed to launch + foreground watch
         let config = HKWorkoutConfiguration()
@@ -177,17 +180,26 @@ struct ChangeRouteIntent: AppIntent {
     static var title: LocalizedStringResource = "Change Route"
     static var description: IntentDescription = "Switches to a different route mid-ride."
 
-    @Parameter(title: "Route")
+    @Parameter(title: "Route", optionsProvider: RouteOptionsProvider())
     var route: RouteEntity
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         #if os(iOS)
-        
+
+        // Free ride sentinel = clear route
+        guard !route.isFreeRide else {
+            let message: [String: Any] = ["type": "changeRoute"]
+            await MainActor.run {
+                ConnectivityManager.shared.sendRideCommand(message)
+            }
+            return .result(dialog: "Switching to Free Ride.")
+        }
+
         let message: [String: Any] = [
             "type": "changeRoute",
             "routeID": route.id.uuidString
         ]
-        
+
         let onWatch = await MainActor.run {
             ConnectivityManager.shared.routeNamesOnWatch.contains(route.name)
         }
@@ -200,7 +212,7 @@ struct ChangeRouteIntent: AppIntent {
             guard let fullRoute = await loadRoute(id: route.id) else {
                 return .result(dialog: "Could not load route \"\(route.name)\".")
             }
-            
+
             await withCheckedContinuation { continuation in
                 Task { @MainActor in
                     ConnectivityManager.shared.sendRoute(
@@ -208,20 +220,26 @@ struct ChangeRouteIntent: AppIntent {
                         pendingAction: "changeRoute"
                     ) { _ in
                         ConnectivityManager.shared.sendRideCommand(message)
-                        
+
                         continuation.resume()
                     }
                 }
             }
-            
+
             return .result(dialog: "Sent route \"\(route.name)\" to watch.")
         }
 
         return .result(dialog: "Switching to \(route.name).")
 
         #elseif os(watchOS)
-        return .result(dialog: "Switching to \(route.name).")
+        return .result(dialog: "Switching to \(route.isFreeRide ? "Free Ride" : route.name).")
         #endif
+    }
+
+    struct RouteOptionsProvider: DynamicOptionsProvider {
+        func results() async throws -> [RouteEntity] {
+            try await RouteEntityQuery().suggestedEntities()
+        }
     }
 }
 

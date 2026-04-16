@@ -72,6 +72,9 @@ class WorkoutManager: NSObject, ObservableObject {
     // Route name captured at ride start (survives mid-ride route swaps)
     private var initialRouteName: String?
 
+    // Currently loaded route (nil for free ride)
+    private(set) var activeRoute: Route?
+
     // Split tracking
     private var lastSplitDistance: Double = 0
     @Published var currentSplitNumber: Int = 0
@@ -1026,6 +1029,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func loadRoute(_ route: Route) {
+        activeRoute = route
         let processed = RouteProcessor.process(route)
         navigation.load(processed)
 
@@ -1040,6 +1044,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func clearRoute() {
+        activeRoute = nil
         navigation.reset()
         needsAnchor = false
         VoiceNavigator.shared.resetForRouteSwap()
@@ -1349,6 +1354,9 @@ class WorkoutManager: NSObject, ObservableObject {
             payload["distToTurn"] = String(navigation.distanceToNextTurn)
             payload["routeRemaining"] = String(navigation.distanceRemaining)
             payload["isOffRoute"] = String(navigation.isOffRoute)
+            if let routeID = activeRoute?.id {
+                payload["activeRouteID"] = routeID.uuidString
+            }
             if navigation.isOffRoute {
                 payload["distOffRoute"] = String(navigation.nearestRouteDistance)
             }
