@@ -40,7 +40,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "slider.horizontal.3")
-                        .foregroundStyle(.accent)
+                        .foregroundStyle(.purple)
                 }
             }
 
@@ -73,6 +73,22 @@ struct TipsView: View {
                 } icon: {
                     Image(systemName: "location.north.line")
                         .foregroundStyle(.orange)
+                }
+            }
+
+            NavigationLink {
+                SiriShortcutsTipView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Siri, Shortcuts & Automations")
+                        Text("Control rides hands-free and automate with the Shortcuts app.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "waveform")
+                        .foregroundStyle(.red)
                 }
             }
         }
