@@ -283,13 +283,10 @@ class VoiceNavigator: NSObject, ObservableObject {
     /// Build voice text for a turn, including street name from description when available.
     /// Uses the description's own phrasing when possible (e.g. "Keep right onto Navy Pier Flyover")
     /// so that turns like "keep right" aren't awkwardly converted to "slight right".
-    /// When `updateStreetTracking` is true (primary turn announcements), updates the last announced
-    /// street name for "stay on" detection. Pass false for grouped "then" turns.
-    private func voiceText(for turn: TurnPoint, updateStreetTracking: Bool = true) -> String {
+    private func voiceText(for turn: TurnPoint) -> String {
         let currentStreet = extractStreetName(from: turn.description)
 
         guard let desc = turn.description, !desc.isEmpty else {
-            if updateStreetTracking { lastAnnouncedStreetName = currentStreet }
             return turn.direction.voiceLabel
         }
 
@@ -305,20 +302,10 @@ class VoiceNavigator: NSObject, ObservableObject {
             baseText = desc.lowercased()
         }
 
-        // "Stay on" detection: if the street matches the last announced street,
-        // replace "onto X" with "to stay on X"
-        if let street = currentStreet,
-           let lastStreet = lastAnnouncedStreetName,
-           street.lowercased() == lastStreet.lowercased(),
-           let ontoRange = baseText.range(of: "onto \(street.lowercased())", options: .caseInsensitive) {
-            baseText = baseText.replacingCharacters(in: ontoRange, with: "to stay on \(street.lowercased())")
-        }
-
-        if updateStreetTracking { lastAnnouncedStreetName = currentStreet }
         return baseText
     }
 
-    
+
     private func fireDistanceAlert(
         distance: Double,
         speed: Double,
