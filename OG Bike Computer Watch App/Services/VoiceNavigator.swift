@@ -577,7 +577,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     }
 
     private func speak(_ text: String, mode: AlertMode = .voiceAndHaptic, category: String? = nil) {
-        guard !isStopped else { return }
+        guard isEnabled, !isStopped else { return }
 
         // Interrupt stat queue for non-stat alerts (e.g. turn alerts)
         if category != "lap" && isStatAnnouncing {
