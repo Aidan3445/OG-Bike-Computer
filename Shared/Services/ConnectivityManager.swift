@@ -112,6 +112,15 @@ final class ConnectivityManager: NSObject, ObservableObject {
 
     /// Callback when a voice toggle command is received from the phone (watchOS only).
     var onToggleVoiceRequested: (() -> Void)?
+
+    /// Callback when the phone requests to hold the current ride (watchOS only).
+    var onHoldRideRequested: (() -> Void)?
+
+    /// Callback when the phone requests to continue a held ride (watchOS only).
+    var onContinueHeldRideRequested: ((UUID) -> Void)?
+
+    /// Callback when the phone requests to finalize a held ride (watchOS only).
+    var onFinalizeHeldRideRequested: ((UUID) -> Void)?
 }
 
 // --- iOS ---
@@ -263,6 +272,18 @@ extension ConnectivityManager {
         }
     }
     
+    func sendHoldRide() {
+        sendRideCommand(["type": "holdRide"])
+    }
+
+    func sendContinueHeldRide(rideID: UUID) {
+        sendRideCommand(["type": "continueHeldRide", "rideID": rideID.uuidString])
+    }
+
+    func sendFinalizeHeldRide(rideID: UUID) {
+        sendRideCommand(["type": "finalizeHeldRide", "rideID": rideID.uuidString])
+    }
+
     /// Send acknowledgment to watch that a ride was successfully received.
     func sendRideAck(rideID: UUID) {
         guard WCSession.default.activationState == .activated else { return }
@@ -676,6 +697,28 @@ extension ConnectivityManager: WCSessionDelegate {
                 }
                 replyHandler(["discarded": true])
                 return
+            case "holdRide":
+                DispatchQueue.main.async {
+                    self.onHoldRideRequested?()
+                }
+                replyHandler(["held": true])
+                return
+            case "continueHeldRide":
+                if let idStr = message["rideID"] as? String, let rideID = UUID(uuidString: idStr) {
+                    DispatchQueue.main.async {
+                        self.onContinueHeldRideRequested?(rideID)
+                    }
+                }
+                replyHandler(["continuing": true])
+                return
+            case "finalizeHeldRide":
+                if let idStr = message["rideID"] as? String, let rideID = UUID(uuidString: idStr) {
+                    DispatchQueue.main.async {
+                        self.onFinalizeHeldRideRequested?(rideID)
+                    }
+                }
+                replyHandler(["finalized": true])
+                return
             default:
                 break
             }
@@ -768,9 +811,12 @@ private extension ConnectivityManager {
 
         // If rideStore is attached, update in-memory immediately
         DispatchQueue.main.async {
-            if let store = self.rideStore,
-               !store.rides.contains(where: { $0.id == summary.id }) {
-                store.rides.insert(summary, at: 0)
+            if let store = self.rideStore {
+                if let idx = store.rides.firstIndex(where: { $0.id == summary.id }) {
+                    store.rides[idx] = summary  // update existing (e.g. held → completed)
+                } else {
+                    store.rides.insert(summary, at: 0)
+                }
             }
             print("Ride received: \(summary.name)\(isRetransmit ? " (retransmit)" : "")")
 

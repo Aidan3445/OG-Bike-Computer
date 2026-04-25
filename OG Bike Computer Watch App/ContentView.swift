@@ -37,9 +37,9 @@ struct ContentView: View {
                 }
             } else {
                 #if DEBUG
-                RouteList(store: store, workout: workout, simulator: simulator)
+                RouteList(store: store, rideStore: rideStore, workout: workout, simulator: simulator)
                 #else
-                RouteList(store: store, workout: workout)
+                RouteList(store: store, rideStore: rideStore, workout: workout)
                 #endif
             }
         }
@@ -119,6 +119,16 @@ struct ContentView: View {
             }
         } message: {
             Text("This ride is under 1 minute. Do you want to save it anyway?")
+        }
+        .alert("Ride Recovered", isPresented: Binding(
+            get: { workout.recoveredRideSummary != nil },
+            set: { if !$0 { workout.recoveredRideSummary = nil } }
+        )) {
+            Button("OK") { workout.recoveredRideSummary = nil }
+        } message: {
+            if let ride = workout.recoveredRideSummary {
+                Text("\"\(ride.name)\" was saved as a held ride — tap it in the route list to continue or finish.")
+            }
         }
         .alert("Save to Apple Health?", isPresented: $workout.showHealthKitPrompt) {
             Button("Save") {

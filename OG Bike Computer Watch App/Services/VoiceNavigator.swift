@@ -41,7 +41,6 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var announcedOffRoute = false
 
     private var wasOffRoute = false
-    private var lastAnnouncedStreetName: String?
     private var lastAnnouncementTime: Date = .distantPast
     private var lastTurnAlertTime: Date = .distantPast  // for minimum gap enforcement
 
@@ -76,7 +75,6 @@ class VoiceNavigator: NSObject, ObservableObject {
         announcedOffRoute = false
 
         wasOffRoute = false
-        lastAnnouncedStreetName = nil
         lastAnnouncementTime = .distantPast
         lastTurnAlertTime = .distantPast
         statQueue.removeAll()
@@ -105,7 +103,6 @@ class VoiceNavigator: NSObject, ObservableObject {
         announcedOffRoute = false
 
         wasOffRoute = false
-        lastAnnouncedStreetName = nil
         lastAnnouncementTime = .distantPast
         lastTurnAlertTime = .distantPast
     }
@@ -271,21 +268,11 @@ class VoiceNavigator: NSObject, ObservableObject {
             }
         }
     }
-    
-    /// Extract street name from a turn description (e.g. "Turn right onto Main St" → "Main St")
-    private func extractStreetName(from description: String?) -> String? {
-        guard let desc = description,
-              let range = desc.range(of: " onto ", options: .caseInsensitive) else { return nil }
-        let street = String(desc[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-        return street.isEmpty ? nil : street
-    }
 
     /// Build voice text for a turn, including street name from description when available.
     /// Uses the description's own phrasing when possible (e.g. "Keep right onto Navy Pier Flyover")
     /// so that turns like "keep right" aren't awkwardly converted to "slight right".
     private func voiceText(for turn: TurnPoint) -> String {
-        let currentStreet = extractStreetName(from: turn.description)
-
         guard let desc = turn.description, !desc.isEmpty else {
             return turn.direction.voiceLabel
         }

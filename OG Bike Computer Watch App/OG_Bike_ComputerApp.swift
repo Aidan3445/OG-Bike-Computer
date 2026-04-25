@@ -21,6 +21,8 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         ConnectivityManager.shared.activate()
         ConnectivityManager.shared.attachStores(routeStore: store, rideStore: rideStore)
 
+        workout.rideStore = rideStore
+
         // Wire up WC ride command handlers immediately so they're ready
         // even before ContentView loads. This handles the case where iOS
         // sends a startRide WC message alongside startWatchApp.
@@ -47,6 +49,25 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             guard let self = self, self.workout.isActive else { return }
             self.workout.discard()
         }
+
+        ConnectivityManager.shared.onHoldRideRequested = { [weak self] in
+            guard let self = self, self.workout.isActive else { return }
+            self.workout.holdRide()
+        }
+
+        ConnectivityManager.shared.onContinueHeldRideRequested = { [weak self] rideID in
+            guard let self = self, !self.workout.isActive else { return }
+            guard let held = self.rideStore.heldRide, held.id == rideID else { return }
+            self.workout.continueHeldRide(summary: held)
+        }
+
+        ConnectivityManager.shared.onFinalizeHeldRideRequested = { [weak self] rideID in
+            guard let self = self, !self.workout.isActive else { return }
+            guard let held = self.rideStore.heldRide, held.id == rideID else { return }
+            self.workout.finalizeHeldRide(summary: held)
+        }
+
+        workout.recoverCheckpointIfNeeded()
     }
 
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {

@@ -22,6 +22,7 @@ struct RideSettingsView: View {
             displaySection
             alertsSection
             privacySection
+            checkpointSection
             phoneAlertsSection
 
             if userSettings.settings.ridePreferences != .default {
@@ -128,6 +129,23 @@ struct RideSettingsView: View {
             Label("Privacy", systemImage: "eye.slash")
         } footer: {
             Text("Removes approximately 200m from the start and end of your recorded track to hide your home location.")
+        }
+    }
+
+    // MARK: - Checkpoint Caching
+
+    @ViewBuilder
+    private var checkpointSection: some View {
+        Section {
+            Picker("Save Interval", selection: prefs.checkpointInterval) {
+                ForEach(CheckpointInterval.allCases, id: \.self) { interval in
+                    Text(interval.label).tag(interval)
+                }
+            }
+        } header: {
+            Label("Crash Recovery", systemImage: "externaldrive.badge.checkmark")
+        } footer: {
+            Text("Periodically saves ride data to disk. If the app crashes, data up to the last checkpoint is recovered on next launch as a held ride you can continue or save.")
         }
     }
 

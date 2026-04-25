@@ -10,8 +10,16 @@ import SwiftUI
 struct RideHistoryView: View {
     @ObservedObject var rideStore: RideStore
 
+    private var heldRides: [RideSummary] {
+        rideStore.rides.filter { $0.onHold }
+    }
+
+    private var completedRides: [RideSummary] {
+        rideStore.rides.filter { !$0.onHold }
+    }
+
     private var sections: [(DateSection, [RideSummary])] {
-        DateSection.group(rideStore.rides, by: \.date)
+        DateSection.group(completedRides, by: \.date)
     }
 
     var body: some View {
@@ -23,6 +31,21 @@ struct RideHistoryView: View {
                     description: Text("Completed rides from your watch will appear here."))
             } else {
                 List {
+                    if !heldRides.isEmpty {
+                        Section {
+                            ForEach(heldRides) { ride in
+                                NavigationLink {
+                                    RideDetailView(ride: ride, rideStore: rideStore)
+                                } label: {
+                                    HeldRideRow(ride: ride)
+                                }
+                            }
+                        } header: {
+                            Label("On Hold", systemImage: "hand.raised.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+
                     ForEach(sections, id: \.0) { section, rides in
                         Section {
                             ForEach(rides) { ride in

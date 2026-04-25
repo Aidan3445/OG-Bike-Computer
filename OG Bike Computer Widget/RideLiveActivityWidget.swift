@@ -90,6 +90,12 @@ struct RideLiveActivity: Widget {
                         }
                         .tint(context.state.isPaused ? .green : .yellow)
 
+                        Button(intent: HoldRideIntent()) {
+                            Image(systemName: "hand.raised.fill")
+                                .font(.caption2)
+                        }
+                        .tint(.orange)
+
                         Button(intent: EndRideIntent()) {
                             Image(systemName: "stop.fill")
                                 .font(.caption2)

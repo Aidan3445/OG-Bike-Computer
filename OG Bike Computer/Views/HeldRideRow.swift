@@ -1,41 +1,22 @@
 //
-//  RideRow.swift
+//  HeldRideRow.swift
 //  OG Bike Computer
-//
-//  Created by Aidan Weinberg on 3/5/26.
 //
 
 import SwiftUI
 
-struct RideRow: View {
+struct HeldRideRow: View {
     let ride: RideSummary
-    let onRename: (String) -> Void
     @ObservedObject private var unitState = UnitState.shared
-
-    @State private var showRenameSheet = false
-    @State private var editedName = ""
 
     var body: some View {
         let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top) {
-                Image(systemName: ride.activityType.icon)
-                    .foregroundStyle(.secondary)
+                Image(systemName: "hand.raised.fill")
+                    .foregroundStyle(.orange)
                 Text(ride.name)
                     .font(.headline)
-                if let uploads = ride.uploads, !uploads.isEmpty {
-                    // Show one badge per service (deduplicate in case of retransmit duplicates)
-                    let uniqueServices = uploads.uniqueByService()
-                    ForEach(uniqueServices) { upload in
-                        ServiceBadge(service: upload.service)
-                    }
-                }
-                if ride.wasAutoFinalized == true {
-                    Image(systemName: "exclamationmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .help("Auto-saved when a new ride started")
-                }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 0) {
                     Text(ride.date, style: .date)
@@ -64,24 +45,5 @@ struct RideRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-        .swipeActions(edge: .leading) {
-            Button {
-                editedName = ride.name
-                showRenameSheet = true
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            .tint(.orange)
-        }
-        .alert("Rename Ride", isPresented: $showRenameSheet) {
-            TextField("Ride name", text: $editedName)
-            Button("Save") {
-                let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    onRename(trimmed)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
     }
 }

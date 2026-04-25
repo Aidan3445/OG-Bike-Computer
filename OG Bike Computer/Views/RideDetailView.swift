@@ -24,6 +24,7 @@ struct RideDetailView: View {
     @State private var panelState: PanelState = .collapsed
     @State private var showShareSheet = false
     @State private var isUploadingToStrava = false
+    @State private var showFinalizeConfirm = false
     @State private var uploadError: String?
     @State private var coloredSegments: [ColoredSegment] = []
     @State private var startCoord: CLLocationCoordinate2D?
@@ -261,6 +262,40 @@ struct RideDetailView: View {
                         }
                     }
                 }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if ride.onHold {
+                VStack(spacing: 8) {
+                    Button {
+                        ConnectivityManager.shared.sendContinueHeldRide(rideID: ride.id)
+                    } label: {
+                        Label("Continue Ride", systemImage: "hand.raised.fill")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+
+                    Button {
+                        showFinalizeConfirm = true
+                    } label: {
+                        Label("End & Save", systemImage: "checkmark.circle")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .confirmationDialog("Save this ride?", isPresented: $showFinalizeConfirm, titleVisibility: .visible) {
+                        Button("Save Ride") {
+                            ConnectivityManager.shared.sendFinalizeHeldRide(rideID: ride.id)
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("The ride will be saved as complete and you can upload it to Strava.")
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+                .background(.regularMaterial)
             }
         }
         .navigationTitle(ride.name)

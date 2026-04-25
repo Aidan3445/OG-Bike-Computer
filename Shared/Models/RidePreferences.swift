@@ -197,6 +197,32 @@ enum TelemetryRate: String, Codable, CaseIterable, Hashable {
     }
 }
 
+// MARK: - Checkpoint Interval
+
+enum CheckpointInterval: String, Codable, CaseIterable, Hashable {
+    case disabled, fiveMin, tenMin, fifteenMin, thirtyMin
+
+    var interval: TimeInterval? {
+        switch self {
+        case .disabled:   return nil
+        case .fiveMin:    return 5 * 60
+        case .tenMin:     return 10 * 60
+        case .fifteenMin: return 15 * 60
+        case .thirtyMin:  return 30 * 60
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .disabled:   return "Disabled"
+        case .fiveMin:    return "Every 5 min"
+        case .tenMin:     return "Every 10 min"
+        case .fifteenMin: return "Every 15 min"
+        case .thirtyMin:  return "Every 30 min"
+        }
+    }
+}
+
 // MARK: - Top-Level Ride Preferences
 
 struct RidePreferences: Codable, Equatable, Hashable {
@@ -212,6 +238,7 @@ struct RidePreferences: Codable, Equatable, Hashable {
     var telemetryRate: TelemetryRate
     var offRouteGraceSamples: Int
     var mapScreen: MapScreenConfig
+    var checkpointInterval: CheckpointInterval
 
     static let `default` = RidePreferences(
         autoPause: .default,
@@ -225,7 +252,8 @@ struct RidePreferences: Codable, Equatable, Hashable {
         dynamicGPSOptimization: true,
         telemetryRate: .standard,
         offRouteGraceSamples: 3,
-        mapScreen: .default
+        mapScreen: .default,
+        checkpointInterval: .tenMin
     )
 
     init(
@@ -240,7 +268,8 @@ struct RidePreferences: Codable, Equatable, Hashable {
         dynamicGPSOptimization: Bool = true,
         telemetryRate: TelemetryRate = .standard,
         offRouteGraceSamples: Int = 3,
-        mapScreen: MapScreenConfig = .default
+        mapScreen: MapScreenConfig = .default,
+        checkpointInterval: CheckpointInterval = .tenMin
     ) {
         self.autoPause = autoPause
         self.autoLap = autoLap
@@ -254,6 +283,7 @@ struct RidePreferences: Codable, Equatable, Hashable {
         self.telemetryRate = telemetryRate
         self.offRouteGraceSamples = offRouteGraceSamples
         self.mapScreen = mapScreen
+        self.checkpointInterval = checkpointInterval
     }
 
     init(from decoder: Decoder) throws {
@@ -270,5 +300,6 @@ struct RidePreferences: Codable, Equatable, Hashable {
         telemetryRate = try c.decodeIfPresent(TelemetryRate.self, forKey: .telemetryRate) ?? .standard
         offRouteGraceSamples = try c.decodeIfPresent(Int.self, forKey: .offRouteGraceSamples) ?? 3
         mapScreen = try c.decodeIfPresent(MapScreenConfig.self, forKey: .mapScreen) ?? .default
+        checkpointInterval = try c.decodeIfPresent(CheckpointInterval.self, forKey: .checkpointInterval) ?? .tenMin
     }
 }

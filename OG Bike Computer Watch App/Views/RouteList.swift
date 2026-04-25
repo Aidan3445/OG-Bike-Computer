@@ -9,11 +9,14 @@ import SwiftUI
 
 struct RouteList: View {
     @ObservedObject var store: RouteStore
+    @ObservedObject var rideStore: RideStore
     @ObservedObject var workout: WorkoutManager
     #if DEBUG
     @ObservedObject var simulator: RideSimulator
     #endif
     @ObservedObject private var unitState = UnitState.shared
+
+    @State private var showHeldRideAlert = false
 
     var body: some View {
         let _ = unitState.preferences // register dependency so list re-renders on unit change
@@ -21,6 +24,11 @@ struct RouteList: View {
             Group {
                 if store.routes.isEmpty {
                     VStack(spacing: 8) {
+                        if let held = rideStore.heldRide {
+                            heldRideButton(held)
+                            Divider().padding(.vertical, 4)
+                        }
+
                         Image(systemName: "arrow.down.circle")
                             .font(.largeTitle)
                             .foregroundStyle(.secondary)
@@ -44,6 +52,10 @@ struct RouteList: View {
                     .padding()
                 } else {
                     List {
+                        if let held = rideStore.heldRide {
+                            heldRideButton(held)
+                        }
+
                         NavigationLink {
                             StartRideView(route: nil, workout: workout)
                         } label: {
@@ -91,6 +103,23 @@ struct RouteList: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func heldRideButton(_ held: RideSummary) -> some View {
+        Button {
+            showHeldRideAlert = true
+        } label: {
+            Label("Resume Ride", systemImage: "hand.raised.fill")
+                .foregroundStyle(.orange)
+        }
+        .alert("Held Ride", isPresented: $showHeldRideAlert) {
+            Button("Continue") { workout.continueHeldRide(summary: held) }
+            Button("End & Save", role: .destructive) { workout.finalizeHeldRide(summary: held) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(held.name) • \(formatDistance(held.distance))")
         }
     }
 }

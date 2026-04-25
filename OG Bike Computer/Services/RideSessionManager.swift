@@ -56,6 +56,10 @@ class RideSessionManager: ObservableObject {
         session.end()
     }
 
+    func holdRide() {
+        ConnectivityManager.shared.sendHoldRide()
+    }
+
     // MARK: - Optimistic Updates
 
     /// Immediately flips `isPaused` to show feedback, issues the real pause command,
@@ -214,6 +218,8 @@ class RideSessionManager: ObservableObject {
                 endRide()
                 RideNotificationManager.shared.postRideEnded()
             }
+        case "hold":
+            holdRide()
         default:
             break
         }

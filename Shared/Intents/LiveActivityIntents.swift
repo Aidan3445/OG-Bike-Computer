@@ -70,6 +70,21 @@ struct PauseResumeRideIntent: LiveActivityIntent {
     }
 }
 
+// MARK: - Hold Ride
+
+struct HoldRideIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Hold Ride"
+    static var description: IntentDescription = "Puts the current ride on hold to continue later."
+
+    // Hide from shortcuts/automations
+    static var isDiscoverable: Bool = false
+
+    func perform() async throws -> some IntentResult {
+        await RideCommandBridge.send("hold")
+        return .result(dialog: "Ride on hold. Resume it later from the app or ride list.")
+    }
+}
+
 // MARK: - End Ride
 
 struct EndRideIntent: LiveActivityIntent {

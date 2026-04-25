@@ -160,7 +160,7 @@ struct WorkoutView<ExtraTab: View>: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
 
-            HStack(spacing: 16) {
+            HStack(spacing: 10) {
                 if workout.isPaused || workout.isAutoPaused {
                     Button {
                         cancelEndCountdown()
@@ -169,7 +169,7 @@ struct WorkoutView<ExtraTab: View>: View {
                     } label: {
                         Image(systemName: "play.fill")
                             .font(.title2)
-                            .frame(width: 52, height: 52)
+                            .frame(width: 48, height: 48)
                             .background(Color.green, in: Circle())
                     }
                     .buttonStyle(.plain)
@@ -180,12 +180,23 @@ struct WorkoutView<ExtraTab: View>: View {
                     } label: {
                         Image(systemName: "pause.fill")
                             .font(.title2)
-                            .frame(width: 52, height: 52)
+                            .frame(width: 48, height: 48)
                             .background(Color.yellow, in: Circle())
                             .foregroundStyle(.black)
                     }
                     .buttonStyle(.plain)
                 }
+
+                Button {
+                    cancelEndCountdown()
+                    workout.holdRide()
+                } label: {
+                    Image(systemName: "hand.raised.fill")
+                        .font(.title2)
+                        .frame(width: 48, height: 48)
+                        .background(Color.orange, in: Circle())
+                }
+                .buttonStyle(.plain)
 
                 ZStack {
                     if endCountdown > 0 {
@@ -195,7 +206,7 @@ struct WorkoutView<ExtraTab: View>: View {
                                     .trim(from: 0, to: endCountdown / 3.0)
                                     .stroke(.red, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                                     .rotationEffect(.degrees(-90))
-                                    .frame(width: 52, height: 52)
+                                    .frame(width: 48, height: 48)
                                 Text(String(Int(ceil(3.0 - endCountdown))))
                                     .font(.system(size: 18, weight: .bold, design: .rounded))
                                     .monospacedDigit()
@@ -207,7 +218,7 @@ struct WorkoutView<ExtraTab: View>: View {
                         Button { startEndCountdown() } label: {
                             Image(systemName: "stop.fill")
                                 .font(.title2)
-                                .frame(width: 52, height: 52)
+                                .frame(width: 48, height: 48)
                                 .background(Color.red, in: Circle())
                         }
                         .buttonStyle(.plain)
