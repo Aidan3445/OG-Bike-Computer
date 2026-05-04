@@ -271,7 +271,7 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
                 }
-                .disabled(routeStore.routes.isEmpty)
+                .disabled(routeStore.routes.isEmpty && connectivity.routeNamesOnWatch.isEmpty)
                 
                 Button(role: .destructive) {
                     showClearRides = true
@@ -788,9 +788,17 @@ struct SafariView: UIViewControllerRepresentable {
 
 extension View {
     func settingsPageTitle(_ title: String, profile: String) -> some View {
-        self
-            .navigationTitle(title)
-            .navigationSubtitle(profile)
+        if #available(iOS 26.0, *) {
+            AnyView(
+                self
+                    .navigationTitle(title)
+                    .navigationSubtitle(profile)
+            )
+        } else {
+            AnyView(
+                self
+                    .navigationTitle(title)
+            )
+        }
     }
 }
-

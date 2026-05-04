@@ -78,8 +78,9 @@ struct StartRideIntent: AppIntent {
             }
         }
         
+        let finalMessage = message
         await MainActor.run {
-            ConnectivityManager.shared.sendRideCommand(message)
+            ConnectivityManager.shared.sendRideCommand(finalMessage)
         }
 
         // (2) HKHealthStore.startWatchApp — guaranteed to launch + foreground watch
@@ -347,7 +348,7 @@ struct ContinueHeldRideIntent: AppIntent {
         // Same two-pronged approach as StartRideIntent:
         // 1. WC message (delivers immediately if reachable, or queued via userInfo)
         // 2. startWatchApp — guarantees the watch app is foregrounded so the WC message lands
-        guard let held = loadHeldRide() else {
+        guard let held = await loadHeldRide() else {
             return .result(dialog: "No held ride found.")
         }
 
@@ -356,7 +357,7 @@ struct ContinueHeldRideIntent: AppIntent {
         }
 
         let config = HKWorkoutConfiguration()
-        config.activityType = held.activityType.hkType
+        config.activityType = await held.activityType.hkType
         config.locationType = .outdoor
         HKHealthStore().startWatchApp(with: config) { _, _ in
             logger.info("[ContinueHeldRide] startWatchApp returned")

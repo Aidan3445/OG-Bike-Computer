@@ -122,13 +122,13 @@ struct WorkoutView<ExtraTab: View>: View {
                     navOverlayTask?.cancel()
                 }
             }
-            .onChange(of: workout.hasRoute) { _, hasRoute in
-                    if hasRoute && tab >= 3 {
-                        // Loaded a route mid-ride — switch to map
+            .onChange(of: workout.hasRoute) { hadRoute, hasRoute in
+                    // Only switch to map when a route is freshly loaded (nil → route).
+                    // Swapping routes briefly makes hasRoute false then true; ignoring
+                    // the false→true transition here prevents the tab from jumping
+                    // to map unexpectedly when the rider is on a metrics page.
+                    if hasRoute && !hadRoute && tab >= 3 {
                         withAnimation { tab = 2 }
-                    } else if !hasRoute {
-                        // Cleared route — go to first metrics page
-                        withAnimation { tab = 3 }
                     }
                 }
             .onChange(of: metricConfig.config.pages.count) { _, count in
@@ -394,6 +394,8 @@ struct DynamicMetricsPage: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .safeAreaPadding(.top)
     }
 }

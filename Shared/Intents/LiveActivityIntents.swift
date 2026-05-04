@@ -18,6 +18,7 @@ import Foundation
 
 /// Helpers that read/write App Group defaults on the calling thread,
 /// avoiding Sendable warnings from the global `UserDefaults` instance.
+@MainActor
 private enum RideCommandBridge {
     private static let defaults = UserDefaults(suiteName: "group.com.aidan3445.computa")
 

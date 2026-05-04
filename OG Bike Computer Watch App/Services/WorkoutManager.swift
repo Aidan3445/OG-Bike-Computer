@@ -19,7 +19,7 @@ enum AutoPauseState {
     case tentativeResume
 }
 
-private struct CheckpointMeta: Codable {
+private struct CheckpointMeta: Codable, Sendable {
     let rideID: UUID
     let startDate: Date
     let name: String
@@ -39,6 +39,10 @@ private struct CheckpointMeta: Codable {
     let highestElevation: Double?
     let lowestElevation: Double?
     let pointCount: Int
+}
+
+private func decodeCheckpointMeta(_ data: Data) -> CheckpointMeta? {
+    try? JSONDecoder().decode(CheckpointMeta.self, from: data)
 }
 
 class WorkoutManager: NSObject, ObservableObject {
@@ -297,17 +301,6 @@ class WorkoutManager: NSObject, ObservableObject {
                 return
             }
 
-            // Battery optimization only with a route (needs turn distances)
-            if self.hasRoute {
-                let mode = self.battery.recommendedMode(
-                    distanceToNextTurn: self.navigation.distanceToNextTurn,
-                    isOffRoute: self.navigation.isOffRoute,
-                    speed: self.speed,
-                    floor: self.ridePreferences.gpsAccuracyFloor,
-                    dynamicOptimization: self.ridePreferences.dynamicGPSOptimization)
-                self.battery.apply(mode: mode, to: self.locationManager)
-            }
-
             self.updateAutoPause()
 
             // Recording + distance based on auto-pause state
@@ -332,15 +325,14 @@ class WorkoutManager: NSObject, ObservableObject {
                 self.tentativeLocations.append(location)
             }
 
-            // Battery management
+            // Battery management (consolidated — runs for both route and free rides)
             let mode = self.battery.recommendedMode(
                 distanceToNextTurn: self.navigation.distanceToNextTurn,
                 isOffRoute: self.navigation.isOffRoute,
                 speed: self.speed,
+                floor: self.ridePreferences.gpsAccuracyFloor,
                 dynamicOptimization: self.ridePreferences.dynamicGPSOptimization)
             self.battery.apply(mode: mode, to: self.locationManager)
-
-            self.updateAutoPause()
         }
     }
     // END SIM
@@ -578,9 +570,17 @@ class WorkoutManager: NSObject, ObservableObject {
         // Seed lastCommittedLocation from restored track end when continuing
         lastCommittedLocation = continuationBase != nil ? recordedLocations.last : nil
         skipNextDistanceGap = false
-        // Split tracking anchors to current accumulated distance when continuing
-        lastSplitDistance = totalDistance
-        currentSplitNumber = 0
+        // Split tracking anchors to current accumulated distance when continuing.
+        // When resuming a held ride, restore the split number and last-split boundary
+        // so numbering and timing carry over correctly (e.g. 12 mi in at 5mi splits → split 3 fires at 15mi).
+        let splitDist = navigationAlerts.splitAlerts.splitDistance
+        if continuationBase != nil && splitDist > 0 {
+            currentSplitNumber = Int(totalDistance / splitDist)
+            lastSplitDistance = Double(currentSplitNumber) * splitDist
+        } else {
+            currentSplitNumber = 0
+            lastSplitDistance = totalDistance
+        }
         splitStartMovingTime = movingTime
         splitStartDistance = totalDistance
         splitMaxSpeed = 0
@@ -1404,24 +1404,33 @@ class WorkoutManager: NSObject, ObservableObject {
         let trackURL = checkpointTrackURL
         let metaURL = checkpointMetaURL
 
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        Task {
             let trackData = TrackEncoder.encodeV5(locations, heartRates: heartRates, powers: powers)
-            do {
-                try trackData.write(to: trackURL, options: .atomic)
-            } catch {
-                print("[Checkpoint] Failed to write track: \(error)")
-                return
+
+            let metaData = await MainActor.run {
+                try? JSONEncoder().encode(meta)
             }
-            guard let metaData = try? JSONEncoder().encode(meta) else { return }
-            do {
-                try metaData.write(to: metaURL, options: .atomic)
-            } catch {
-                print("[Checkpoint] Failed to write meta: \(error)")
-                return
-            }
-            print("[Checkpoint] Saved \(locations.count) points")
-            DispatchQueue.main.async {
-                self?.lastCheckpointLocationCount = locations.count
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                do {
+                    try trackData.write(to: trackURL, options: .atomic)
+                } catch {
+                    print("[Checkpoint] Failed to write track: \(error)")
+                    return
+                }
+
+                guard let metaData else { return }
+
+                do {
+                    try metaData.write(to: metaURL, options: .atomic)
+                } catch {
+                    print("[Checkpoint] Failed to write meta: \(error)")
+                    return
+                }
+
+                DispatchQueue.main.async {
+                    self?.lastCheckpointLocationCount = locations.count
+                }
             }
         }
     }
@@ -1446,7 +1455,7 @@ class WorkoutManager: NSObject, ObservableObject {
             guard let self = self else { return }
 
             guard let metaData = try? Data(contentsOf: metaURL),
-                  let meta = try? JSONDecoder().decode(CheckpointMeta.self, from: metaData) else {
+                  let meta = decodeCheckpointMeta(metaData) else {
                 print("[Checkpoint] Could not decode meta, discarding")
                 self.deleteCheckpointFiles()
                 return
@@ -1863,13 +1872,21 @@ extension WorkoutManager: CLLocationManagerDelegate {
         guard let location = locations.last else { return }
         guard location.horizontalAccuracy >= 0,
               location.horizontalAccuracy < 50 else { return }
+        // GPS course is more accurate than compass for direction of travel while cycling.
+        // Use it whenever the signal is valid and the rider is moving.
+        if location.course >= 0 && location.speed > 0.5 {
+            DispatchQueue.main.async { self.heading = location.course }
+        }
         processLocation(location)
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
         guard newHeading.headingAccuracy >= 0 else { return }
         DispatchQueue.main.async {
-            self.heading = newHeading.trueHeading
+            // Fall back to compass only when stopped (GPS course is unavailable/unreliable at low speed)
+            if self.speed <= 0.5 {
+                self.heading = newHeading.trueHeading
+            }
         }
     }
 

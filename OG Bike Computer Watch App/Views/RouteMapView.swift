@@ -20,6 +20,8 @@ struct RouteMapView: View {
 
     @State private var showFullRoute = false
     @State private var autoSwitchTask: Task<Void, Never>?
+    @State private var toggleButtonOpacity: Double = 1.0
+    @State private var toggleFadeTask: Task<Void, Never>?
 
     @State private var zoomIndex: Int = -1 // -1 means "use default from config"
     private var mapConfig: MapScreenConfig { workout.ridePreferences.mapScreen }
@@ -138,8 +140,11 @@ struct RouteMapView: View {
                             showFullRoute.toggle()
                             if showFullRoute {
                                 scheduleAutoSwitch()
+                                scheduleToggleFade()
                             } else {
                                 autoSwitchTask?.cancel()
+                                toggleFadeTask?.cancel()
+                                withAnimation(.easeIn(duration: 0.15)) { toggleButtonOpacity = 1.0 }
                             }
                         } label: {
                             Image(systemName: showFullRoute ? "scope" : "map")
@@ -151,6 +156,7 @@ struct RouteMapView: View {
                         .buttonStyle(.plain)
                         .frame(width: 48, height: 48)
                         .contentShape(Rectangle())
+                        .opacity(toggleButtonOpacity)
                     }
 
                     if mapConfig.showHeading && workout.hasRoute {
@@ -317,6 +323,23 @@ struct RouteMapView: View {
             try? await Task.sleep(for: .seconds(60))
             guard !Task.isCancelled else { return }
             await MainActor.run { showFullRoute = false }
+        }
+    }
+
+    private func scheduleToggleFade() {
+        toggleFadeTask?.cancel()
+        toggleFadeTask = Task {
+            // Brief delay so the button is visible for the tap feedback
+            try? await Task.sleep(for: .seconds(0.4))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.35)) { toggleButtonOpacity = 0 }
+            }
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeIn(duration: 0.35)) { toggleButtonOpacity = 1.0 }
+            }
         }
     }
 }

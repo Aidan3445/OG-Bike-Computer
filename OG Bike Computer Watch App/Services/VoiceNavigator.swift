@@ -36,6 +36,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var firedFinishAlerts: Set<Int> = []
 
     private var announcedHalfway = false
+    private var seenBeforeHalfway = false  // guards against firing halfway if rider started past that point
     private var announcedArrival = false
     private var announcedOffRoute = false
 
@@ -73,6 +74,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
+        seenBeforeHalfway = false
         announcedArrival = false
         announcedOffRoute = false
 
@@ -98,6 +100,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
+        seenBeforeHalfway = false
         announcedArrival = false
         announcedOffRoute = false
 
@@ -113,7 +116,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
+            try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .allowBluetoothHFP, .allowBluetoothA2DP])
         } catch {
             print("VoiceNavigator audio session config error: \(error)")
         }
@@ -166,6 +169,14 @@ class VoiceNavigator: NSObject, ObservableObject {
         } else if wasOffRoute {
             wasOffRoute = false
             announcedOffRoute = false
+
+            // Prime turn tracking at the rejoin position so the next update doesn't
+            // immediately fire a stale approach alert for the turn the rider is now near.
+            if let turn = nav.nextTurn {
+                currentTurnIndex = turn.index
+                firedTurnAlerts.removeAll()
+                markPassedThresholds(distance: nav.distanceToNextTurn, into: &firedTurnAlerts)
+            }
 
             let routeBearing = nav.currentBearing
             let continueDirection = voiceDirectionToTarget(heading: heading, bearingToTarget: routeBearing)
@@ -285,7 +296,12 @@ class VoiceNavigator: NSObject, ObservableObject {
 
         if !announcedHalfway {
             let half = route.totalDistance / 2
-            if nav.distanceAlongRoute >= half {
+            // Track that the rider was on the first half so we don't fire halfway
+            // if they started mid-route or resumed a hold past the halfway point.
+            if nav.distanceAlongRoute < half {
+                seenBeforeHalfway = true
+            }
+            if seenBeforeHalfway && nav.distanceAlongRoute >= half {
                 announcedHalfway = true
                 if isActivelyMoving {
                     announceHalfway(distanceRemaining: nav.distanceRemaining, mode: navEvents.halfwayAlert)
