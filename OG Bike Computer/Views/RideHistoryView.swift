@@ -41,7 +41,7 @@ struct RideHistoryView: View {
                                 }
                             }
                         } header: {
-                            Label("On Hold", systemImage: "hand.raised.fill")
+                            Text("On Hold")
                                 .foregroundStyle(.orange)
                         }
                     }

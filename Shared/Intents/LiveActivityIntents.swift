@@ -44,7 +44,7 @@ private enum RideCommandBridge {
 /// updates instantly without waiting for the main app round-trip.
 private func optimisticallyUpdateLiveActivity(isPaused: Bool) async {
     guard let activity = Activity<RideActivityAttributes>.activities.first else { return }
-    var newState = activity.contentState
+    var newState = activity.content.state
     newState.isPaused = isPaused
     await activity.update(ActivityContent(state: newState, staleDate: nil))
 }

@@ -348,11 +348,10 @@ extension ConnectivityManager {
     private func saveRideLocally(summary: RideSummary, trackURL: URL) {
         let dir = Self.ridesDirectory
 
-        // Copy track file
+        // Copy track file — always overwrite so second/third holds accumulate correctly
         let destTrack = dir.appendingPathComponent(summary.trackFilename)
-        if !FileManager.default.fileExists(atPath: destTrack.path) {
-            try? FileManager.default.copyItem(at: trackURL, to: destTrack)
-        }
+        try? FileManager.default.removeItem(at: destTrack)
+        try? FileManager.default.copyItem(at: trackURL, to: destTrack)
 
         // Save summary JSON
         let summaryURL = dir.appendingPathComponent("\(summary.id.uuidString).json")
@@ -362,9 +361,12 @@ extension ConnectivityManager {
 
         // Update in-memory store if attached
         DispatchQueue.main.async {
-            if let store = self.rideStore,
-               !store.rides.contains(where: { $0.id == summary.id }) {
-                store.rides.insert(summary, at: 0)
+            if let store = self.rideStore {
+                if let idx = store.rides.firstIndex(where: { $0.id == summary.id }) {
+                    store.rides[idx] = summary
+                } else {
+                    store.rides.insert(summary, at: 0)
+                }
             }
         }
 
@@ -598,6 +600,24 @@ extension ConnectivityManager: WCSessionDelegate {
                 self.routeStore.map { self.reportRoutes($0.routes) }
             }
             return
+        }
+
+        // Ride commands queued via transferUserInfo when watch wasn't reachable
+        if let type = userInfo["type"] as? String {
+            switch type {
+            case "holdRide":
+                DispatchQueue.main.async { self.onHoldRideRequested?() }
+            case "continueHeldRide":
+                if let idStr = userInfo["rideID"] as? String, let rideID = UUID(uuidString: idStr) {
+                    DispatchQueue.main.async { self.onContinueHeldRideRequested?(rideID) }
+                }
+            case "finalizeHeldRide":
+                if let idStr = userInfo["rideID"] as? String, let rideID = UUID(uuidString: idStr) {
+                    DispatchQueue.main.async { self.onFinalizeHeldRideRequested?(rideID) }
+                }
+            default:
+                break
+            }
         }
         #endif
 

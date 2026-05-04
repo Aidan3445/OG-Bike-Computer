@@ -147,6 +147,9 @@ class WorkoutManager: NSObject, ObservableObject {
     private var timerAccumulated: TimeInterval = 0
     private var displayTimer: Timer?
     private var workoutStartDate: Date?
+    /// Set once at the very beginning of a ride (or restored from summary.date on continuation).
+    /// Never reset mid-ride — elapsed time is always relative to this.
+    private var initialRideStartDate: Date?
 
     let navigation = NavigationTracker()
 
@@ -238,6 +241,7 @@ class WorkoutManager: NSObject, ObservableObject {
         workoutStartDate = Date()
         timerStart = workoutStartDate
         timerAccumulated = 0
+        initialRideStartDate = workoutStartDate
         startDisplayTimer()
 
         isActive = true
@@ -563,6 +567,7 @@ class WorkoutManager: NSObject, ObservableObject {
         // When continuing a held ride, timerAccumulated is pre-seeded; don't zero it
         if continuationBase == nil {
             timerAccumulated = 0
+            initialRideStartDate = workoutStartDate
         }
         startDisplayTimer()
 
@@ -892,6 +897,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.speed = 0
             self.totalDistance = 0
             self.workoutStartDate = nil
+            self.initialRideStartDate = nil
             self.elapsedTime = 0
             self.movingTime = 0
             self.heartRate = 0
@@ -929,9 +935,9 @@ class WorkoutManager: NSObject, ObservableObject {
         displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             DispatchQueue.main.async {
-                // Elapsed time always counts from workout start (wall-clock time)
-                if let startDate = self.workoutStartDate {
-                    self.elapsedTime = Date().timeIntervalSince(startDate)
+                // Elapsed time always counts from the very first start of this ride
+                if let origin = self.initialRideStartDate {
+                    self.elapsedTime = Date().timeIntervalSince(origin)
                 }
                 // Moving time only ticks while not paused
                 if !self.isAutoPaused && !self.isPaused {
@@ -1533,11 +1539,12 @@ class WorkoutManager: NSObject, ObservableObject {
         let hrsToSave = recordedHeartRates
         let powersToSave = recordedPowers
 
+        // Use the original ride start date so elapsed time spans the whole ride
         let summary = RideSummary(
             id: rideID,
             name: currentRideName(),
             activityType: currentActivity,
-            date: workoutStartDate ?? Date(),
+            date: initialRideStartDate ?? workoutStartDate ?? Date(),
             elapsedTime: elapsedTime,
             movingTime: movingTime,
             distance: totalDistance,
@@ -1580,16 +1587,38 @@ class WorkoutManager: NSObject, ObservableObject {
         stopDisplayTimer()
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
-
-        // Discard the HK session — a fresh one will be created on continue
-        builder?.discardWorkout()
-        session?.end()
-
         deleteCheckpointFiles()
 
-        DispatchQueue.main.async {
-            ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
-            self.cleanup()
+        // Finish the HK session for this segment so it saves to Fitness
+        let endDate = Date()
+        session?.end()
+
+        let finalBatch = pendingRouteLocations
+        pendingRouteLocations = []
+        let insertGroup = DispatchGroup()
+        if !finalBatch.isEmpty {
+            insertGroup.enter()
+            routeBuilder?.insertRouteData(finalBatch) { _, _ in insertGroup.leave() }
+        }
+
+        insertGroup.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            self.builder?.endCollection(withEnd: endDate) { _, _ in
+                self.builder?.finishWorkout { [weak self] workout, error in
+                    guard let self else { return }
+                    if let workout {
+                        self.routeBuilder?.finishRoute(with: workout, metadata: nil) { _, _ in
+                            print("[Hold] HK segment saved to Fitness")
+                        }
+                    } else {
+                        print("[Hold] HK segment not saved: \(String(describing: error))")
+                    }
+                    DispatchQueue.main.async {
+                        ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
+                        self.cleanup()
+                    }
+                }
+            }
         }
     }
 
@@ -1607,6 +1636,7 @@ class WorkoutManager: NSObject, ObservableObject {
         let pwValues = points.compactMap { $0.power > 0 ? $0.power : nil }
 
         continuationBase = summary
+        initialRideStartDate = summary.date
 
         // Pre-populate arrays from old track
         recordedLocations = points.map { pt in

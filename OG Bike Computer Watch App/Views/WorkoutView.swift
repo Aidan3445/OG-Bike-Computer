@@ -19,6 +19,8 @@ struct WorkoutView<ExtraTab: View>: View {
     @State private var tab = 1
     @State private var endCountdown: Double = 0
     @State private var endTimer: Timer?
+    @State private var holdCountdown: Double = 0
+    @State private var holdTimer: Timer?
     @State private var showNavOverlay = false
     @State private var navOverlayTask: Task<Void, Never>?
 
@@ -187,16 +189,32 @@ struct WorkoutView<ExtraTab: View>: View {
                     .buttonStyle(.plain)
                 }
 
-                Button {
-                    cancelEndCountdown()
-                    workout.holdRide()
-                } label: {
-                    Image(systemName: "hand.raised.fill")
-                        .font(.title2)
-                        .frame(width: 48, height: 48)
-                        .background(Color.orange, in: Circle())
+                ZStack {
+                    if holdCountdown > 0 {
+                        Button { cancelHoldCountdown() } label: {
+                            ZStack {
+                                Circle()
+                                    .trim(from: 0, to: holdCountdown / 3.0)
+                                    .stroke(.orange, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                    .rotationEffect(.degrees(-90))
+                                    .frame(width: 48, height: 48)
+                                Text(String(Int(ceil(3.0 - holdCountdown))))
+                                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button { startHoldCountdown() } label: {
+                            Image(systemName: "hand.raised.fill")
+                                .font(.title2)
+                                .frame(width: 48, height: 48)
+                                .background(Color.orange, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .buttonStyle(.plain)
 
                 ZStack {
                     if endCountdown > 0 {
@@ -270,8 +288,12 @@ struct WorkoutView<ExtraTab: View>: View {
         .contentShape(Rectangle())
         .onTapGesture {
             if endCountdown > 0 { cancelEndCountdown() }
+            if holdCountdown > 0 { cancelHoldCountdown() }
         }
-        .onChange(of: page) { _, _ in cancelEndCountdown() }
+        .onChange(of: page) { _, _ in
+            cancelEndCountdown()
+            cancelHoldCountdown()
+        }
     }
 
     private func startEndCountdown() {
@@ -297,6 +319,24 @@ struct WorkoutView<ExtraTab: View>: View {
         endTimer?.invalidate()
         endTimer = nil
         endCountdown = 0
+    }
+
+    private func startHoldCountdown() {
+        cancelEndCountdown()
+        holdCountdown = 0.001
+        holdTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            holdCountdown += 0.05
+            if holdCountdown >= 3.0 {
+                cancelHoldCountdown()
+                workout.holdRide()
+            }
+        }
+    }
+
+    private func cancelHoldCountdown() {
+        holdTimer?.invalidate()
+        holdTimer = nil
+        holdCountdown = 0
     }
 }
 
