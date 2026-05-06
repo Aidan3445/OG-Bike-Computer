@@ -24,6 +24,7 @@ struct RideControlView: View {
     @State private var showDiscardAlert = false
     @State private var showSettingsRevertPrompt = false
     @State private var showRoutePicker = false
+    @State private var showHoldConfirmation = false
     @State private var activeRoute: Route?
     @State private var selectedPage = 0
 
@@ -67,7 +68,7 @@ struct RideControlView: View {
             Button("Discard", role: .destructive) {
                 // Send discard command to watch — don't call session.endRide()
                 // because the watch's discard() handles ending the HK session
-                ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+                session.sendDiscardRide()
                 userSettings.clearRideTracking()
             }
             Button("Save Anyway") {
@@ -238,7 +239,7 @@ struct RideControlView: View {
             }
 
             // Action buttons
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 // Pause / Resume
                 Button {
                     if session.isPaused {
@@ -256,6 +257,23 @@ struct RideControlView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(session.isPaused ? .green : .yellow)
+
+                // Hold Ride
+                Button {
+                    showHoldConfirmation = true
+                } label: {
+                    Label("Hold", systemImage: "hand.raised.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .confirmationDialog("Put ride on hold?", isPresented: $showHoldConfirmation, titleVisibility: .visible) {
+                    Button("Hold Ride") { session.holdRide() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Your data will be saved. Resume from the watch or ride list later.")
+                }
 
                 // End Ride
                 Button {

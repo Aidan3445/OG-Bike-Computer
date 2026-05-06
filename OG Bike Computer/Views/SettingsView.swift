@@ -46,8 +46,7 @@ struct SettingsView: View {
         let mode = alerts.turnAlerts.defaultMode
         var parts: [String] = [mode.label]
         if alerts.splitAlerts.enabled { parts.append("Splits") }
-        if alerts.descentAlerts.enabled { parts.append("Descent") }
-        if alerts.climbAlerts.enabled { parts.append("Climb") }
+        if alerts.waypointAlerts.enabled { parts.append("Waypoints") }
         return parts.joined(separator: " \u{2022} ")
     }
 
@@ -91,7 +90,7 @@ struct SettingsView: View {
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Map Screen")
+                            Text("Route Screens")
                             Text(mapScreenSummary)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -180,7 +179,7 @@ struct SettingsView: View {
 
                 // MARK: - Ride Settings
                 NavigationLink {
-                    RideSettingsView(userSettings: userSettings)
+                    RideSettingsView(userSettings: userSettings, metricConfig: metricConfig)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
@@ -197,7 +196,7 @@ struct SettingsView: View {
                 
                 // MARK: - Battery & Efficiency
                 NavigationLink {
-                    BatterySettingsView(userSettings: userSettings)
+                    BatterySettingsView(userSettings: userSettings, metricConfig: metricConfig)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
@@ -271,7 +270,7 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
                 }
-                .disabled(routeStore.routes.isEmpty)
+                .disabled(routeStore.routes.isEmpty && connectivity.routeNamesOnWatch.isEmpty)
                 
                 Button(role: .destructive) {
                     showClearRides = true
@@ -788,9 +787,17 @@ struct SafariView: UIViewControllerRepresentable {
 
 extension View {
     func settingsPageTitle(_ title: String, profile: String) -> some View {
-        self
-            .navigationTitle(title)
-            .navigationSubtitle(profile)
+        if #available(iOS 26.0, *) {
+            AnyView(
+                self
+                    .navigationTitle(title)
+                    .navigationSubtitle(profile)
+            )
+        } else {
+            AnyView(
+                self
+                    .navigationTitle(title)
+            )
+        }
     }
 }
-

@@ -105,19 +105,29 @@ class GPXParser: NSObject, XMLParserDelegate {
             }
         case "wpt":
             if let lat = currentLat, let lon = currentLon, let name = currentWptName, !name.isEmpty {
-                // Skip non-turn waypoints (POIs, start/end markers, etc.)
                 let wptType = currentWptType?.lowercased() ?? ""
-                let isGeneric = wptType == "generic" || wptType == "poi"
                 let nameLower = name.lowercased()
-                let isNonTurnName = nameLower == "start" || nameLower == "end" || nameLower == "finish"
+                let isStartEnd = nameLower == "start" || nameLower == "end" || nameLower == "finish"
                 let hasTurnKeyword = TurnDirection.hasTurnKeyword(nameLower)
+                let typedAsPOI = wptType == "generic" || wptType == "poi"
 
-                if (!isGeneric && !isNonTurnName) || hasTurnKeyword {
+                if hasTurnKeyword && !typedAsPOI {
+                    // Turn cue
                     waypoints.append(Waypoint(
                         lat: lat,
                         lon: lon,
                         name: name,
-                        description: currentWptDesc.map { RoadNameExpander.expand($0) }
+                        description: currentWptDesc.map { RoadNameExpander.expand($0) },
+                        kind: .turnCue
+                    ))
+                } else if !isStartEnd {
+                    // POI / general landmark
+                    waypoints.append(Waypoint(
+                        lat: lat,
+                        lon: lon,
+                        name: name,
+                        description: currentWptDesc,
+                        kind: .poi
                     ))
                 }
             }

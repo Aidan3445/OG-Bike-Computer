@@ -36,10 +36,12 @@ struct MapCustomizationView: View {
             displaySection
             zoomSection
             routeColorSection
+            waypointSection
             overlaySection
+            elevationScreenSection
             resetSection
         }
-        .settingsPageTitle("Map Screen", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Route Screens", profile: userSettings.activeProfileName)
         .toolbar {
             if !otherProfileConfigs.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
@@ -287,6 +289,23 @@ struct MapCustomizationView: View {
         }
     }
 
+    // MARK: - Waypoint Display
+
+    @ViewBuilder
+    private var waypointSection: some View {
+        Section {
+            Picker("Show Waypoints On", selection: config.waypointDisplay) {
+                ForEach(WaypointDisplay.allCases) { d in
+                    Text(d.label).tag(d)
+                }
+            }
+        } header: {
+            Label("Waypoints / POIs", systemImage: "mappin.and.ellipse")
+        } footer: {
+            Text("Where to render route waypoints (POIs from GPX files, Strava waypoints, RideWithGPS points of interest) on the watch.")
+        }
+    }
+
     // MARK: - Overlay
 
     @ViewBuilder
@@ -297,6 +316,48 @@ struct MapCustomizationView: View {
             Label("Metric Screen Overlay", systemImage: "rectangle.on.rectangle")
         } footer: {
             Text("When enabled, a brief map overlay flashes on the metric screen when approaching a turn. This helps with navigation without needing to swipe to the map.")
+        }
+    }
+
+    // MARK: - Elevation Screen
+
+    private var elevationConfig: Binding<ElevationScreenConfig> {
+        $userSettings.settings.ridePreferences.elevationScreen
+    }
+
+    @ViewBuilder
+    private var elevationScreenSection: some View {
+        Section {
+            Toggle("Show Elevation Screen", isOn: elevationConfig.enabled)
+
+            if userSettings.settings.ridePreferences.elevationScreen.enabled {
+                ElevationScreenPreview(
+                    config: userSettings.settings.ridePreferences.elevationScreen,
+                    waypointDisplay: userSettings.settings.ridePreferences.mapScreen.waypointDisplay
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+
+                Picker("Default Tab", selection: elevationConfig.defaultTab) {
+                    ForEach(ElevationDefaultTab.allCases) { tab in
+                        Text(tab.label).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                LookaheadDistancePicker(meters: elevationConfig.aheadLookahead)
+
+                Toggle("Show Total Gain Readout", isOn: elevationConfig.showGainLossReadout)
+                Toggle("Show Grade Overlay", isOn: elevationConfig.showGrade)
+            }
+        } header: {
+            Label("Elevation Screen", systemImage: "mountain.2")
+        } footer: {
+            if userSettings.settings.ridePreferences.elevationScreen.enabled {
+                Text("Adds an elevation profile tab to the watch when riding a route with elevation data. \"Ahead\" mode shows the next stretch of route only.")
+            } else {
+                Text("Elevation screen is hidden from the watch.")
+            }
         }
     }
 
@@ -321,6 +382,18 @@ struct MapScreenPreview: View {
 
     private let watchWidth: CGFloat = 160
     private let watchHeight: CGFloat = 196
+
+    /// Local UI state so the user can verify the toggle/zoom controls actually
+    /// behave on the demo watch face.
+    @State private var showFullRoute = false
+    @State private var zoomIndex: Int = -1   // -1 means default
+
+    private var resolvedZoomIndex: Int {
+        zoomIndex < 0 ? config.defaultZoomIndex : min(zoomIndex, config.computedZoomLevels.count - 1)
+    }
+
+    private var canZoomIn: Bool { resolvedZoomIndex > 0 }
+    private var canZoomOut: Bool { resolvedZoomIndex < config.computedZoomLevels.count - 1 }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -434,8 +507,16 @@ struct MapScreenPreview: View {
                 mockMapBackground
             }
 
-            // Mock route line
-            mockRouteLine
+            // Mock route line — full-route view shows a more zoomed-out shape,
+            // breadcrumb view shows the segment near the rider, and zoom level
+            // affects the apparent scale.
+            if showFullRoute {
+                mockFullRouteLine
+            } else {
+                mockRouteLine
+                    .scaleEffect(zoomScale, anchor: UnitPoint(x: 0.5, y: 0.75))
+                    .animation(.easeOut(duration: 0.2), value: zoomIndex)
+            }
 
             // Stats overlay (top-left)
             VStack(spacing: 0) {
@@ -481,11 +562,18 @@ struct MapScreenPreview: View {
                     // Right: toggle + heading
                     VStack(spacing: 2) {
                         if config.showFullRouteToggle {
-                            Image(systemName: "map")
-                                .font(.system(size: 10, weight: .bold))
-                                .frame(width: 22, height: 22)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showFullRoute.toggle()
+                                }
+                            } label: {
+                                Image(systemName: showFullRoute ? "scope" : "map")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .frame(width: 22, height: 22)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
                         }
 
                         if config.showHeading {
@@ -500,24 +588,40 @@ struct MapScreenPreview: View {
 
                 Spacer()
 
-                // Zoom controls
-                HStack {
-                    Image(systemName: "minus")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 20, height: 20)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
+                // Zoom controls (disabled in full-route view, like the live watch)
+                if !showFullRoute {
+                    HStack {
+                        Button {
+                            if canZoomOut { zoomIndex = resolvedZoomIndex + 1 }
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.system(size: 10, weight: .bold))
+                                .frame(width: 20, height: 20)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                .opacity(canZoomOut ? 1 : 0.3)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canZoomOut)
 
-                    Spacer()
+                        Spacer()
 
-                    Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 20, height: 20)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
+                        Button {
+                            if canZoomIn { zoomIndex = resolvedZoomIndex - 1 }
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 10, weight: .bold))
+                                .frame(width: 20, height: 20)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                .opacity(canZoomIn ? 1 : 0.3)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canZoomIn)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 10)
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 10)
             }
 
             // Rider dot
@@ -528,6 +632,34 @@ struct MapScreenPreview: View {
                     Circle().fill(.blue).frame(width: 6, height: 6)
                 )
                 .offset(y: watchHeight * 0.05)
+        }
+    }
+
+    /// 1.0 at default zoom; >1 closer in, <1 zoomed out.
+    private var zoomScale: CGFloat {
+        let levels = config.computedZoomLevels
+        guard !levels.isEmpty else { return 1 }
+        let defaultMeters = levels[config.defaultZoomIndex]
+        let currentMeters = levels[resolvedZoomIndex]
+        return CGFloat(defaultMeters / currentMeters)
+    }
+
+    /// Full-route mock — shows the entire route fitted in view. The route line is
+    /// fully colored as "ahead" (no completed/behind portion) and the rider dot sits
+    /// roughly in the middle.
+    private var mockFullRouteLine: some View {
+        Canvas { context, size in
+            var path = Path()
+            let p1 = CGPoint(x: size.width * 0.15, y: size.height * 0.85)
+            let p2 = CGPoint(x: size.width * 0.40, y: size.height * 0.55)
+            let p3 = CGPoint(x: size.width * 0.65, y: size.height * 0.30)
+            let p4 = CGPoint(x: size.width * 0.85, y: size.height * 0.15)
+            path.move(to: p1)
+            path.addQuadCurve(to: p2, control: CGPoint(x: size.width * 0.35, y: size.height * 0.75))
+            path.addQuadCurve(to: p3, control: CGPoint(x: size.width * 0.60, y: size.height * 0.45))
+            path.addQuadCurve(to: p4, control: CGPoint(x: size.width * 0.78, y: size.height * 0.20))
+            context.stroke(path, with: .color(config.routeAheadColor.color),
+                           style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
         }
     }
 
@@ -706,6 +838,235 @@ struct MapConfigImportSheet: View {
         Text(parts.joined(separator: " · "))
             .font(.caption)
             .foregroundStyle(.secondary)
+    }
+}
+
+// MARK: - Lookahead Distance Picker
+
+struct LookaheadDistancePicker: View {
+    @Binding var meters: Double
+
+    private var options: [(label: String, meters: Double)] {
+        if currentUnits.distance == .miles {
+            return [
+                ("1 mi", 1 * 1609.34),
+                ("2 mi", 2 * 1609.34),
+                ("3 mi", 3 * 1609.34),
+                ("5 mi", 5 * 1609.34),
+                ("10 mi", 10 * 1609.34)
+            ]
+        } else {
+            return [
+                ("1 km", 1000),
+                ("2 km", 2000),
+                ("5 km", 5000),
+                ("8 km", 8000),
+                ("15 km", 15000)
+            ]
+        }
+    }
+
+    var body: some View {
+        let opts = options
+        let binding = Binding<Int>(
+            get: {
+                opts.enumerated()
+                    .min(by: { abs($0.element.meters - meters) < abs($1.element.meters - meters) })?
+                    .offset ?? 0
+            },
+            set: { meters = opts[$0].meters }
+        )
+
+        Picker("Ahead Distance", selection: binding) {
+            ForEach(0..<opts.count, id: \.self) { i in
+                Text(opts[i].label).tag(i)
+            }
+        }
+    }
+}
+
+// MARK: - Elevation Screen Preview (mock watch)
+
+struct ElevationScreenPreview: View {
+    let config: ElevationScreenConfig
+    let waypointDisplay: WaypointDisplay
+
+    private let watchWidth: CGFloat = 160
+    private let watchHeight: CGFloat = 196
+
+    @State private var mode: ElevationDefaultTab = .full
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .trailing, spacing: 0) {
+                Spacer().frame(height: 28)
+                callout("Mode toggle", color: .green)
+                Spacer().frame(height: 6)
+                callout("Now marker", color: .white)
+                Spacer()
+                if config.showGainLossReadout {
+                    callout("Gain readout", color: .secondary)
+                        .padding(.bottom, 18)
+                }
+            }
+            .frame(width: 70, alignment: .trailing)
+
+            watchBody
+
+            VStack(alignment: .leading, spacing: 0) {
+                Spacer().frame(height: 60)
+                if waypointDisplay.showsOnElevation {
+                    callout("Waypoints", color: .orange, leading: true)
+                }
+                Spacer()
+            }
+            .frame(width: 70, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .onAppear { mode = config.defaultTab }
+    }
+
+    @ViewBuilder
+    private func callout(_ text: String, color: Color, leading: Bool = false) -> some View {
+        HStack(spacing: 2) {
+            if !leading {
+                Text(text)
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(color)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 6, weight: .bold))
+                    .foregroundStyle(color.opacity(0.6))
+            } else {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 6, weight: .bold))
+                    .foregroundStyle(color.opacity(0.6))
+                Text(text)
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(color)
+            }
+        }
+    }
+
+    private var watchBody: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 34)
+                .fill(Color(white: 0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 34)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
+
+            // Inner screen — keep extra inset on top/bottom so content stays
+            // inside the rounded corner curve like a real watch face.
+            RoundedRectangle(cornerRadius: 26)
+                .fill(Color.black)
+                .padding(7)
+                .overlay(
+                    screenContent
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 18)
+                )
+        }
+        .frame(width: watchWidth, height: watchHeight)
+        .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+    }
+
+    private var screenContent: some View {
+        VStack(spacing: 3) {
+            // Mode toggle (interactive in preview)
+            HStack(spacing: 0) {
+                ForEach(ElevationDefaultTab.allCases) { tab in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { mode = tab }
+                    } label: {
+                        Text(tab.label)
+                            .font(.system(size: 7, weight: mode == tab ? .semibold : .regular))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 1.5)
+                            .background(mode == tab ? Color.green.opacity(0.25) : Color.clear)
+                            .foregroundStyle(mode == tab ? .green : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .background(Color.white.opacity(0.08), in: Capsule())
+            .clipShape(Capsule())
+
+            mockChart
+                .frame(maxHeight: .infinity)
+
+            if config.showGainLossReadout {
+                HStack {
+                    Text("847 ft")
+                        .font(.system(size: 7, weight: .semibold))
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Text("1240 gain")
+                        .font(.system(size: 6))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var mockChart: some View {
+        Canvas { context, size in
+            // Build a simple mock elevation profile
+            let pts: [CGPoint] = [
+                CGPoint(x: 0, y: size.height * 0.7),
+                CGPoint(x: size.width * 0.15, y: size.height * 0.45),
+                CGPoint(x: size.width * 0.30, y: size.height * 0.55),
+                CGPoint(x: size.width * 0.50, y: size.height * 0.20),
+                CGPoint(x: size.width * 0.65, y: size.height * 0.40),
+                CGPoint(x: size.width * 0.80, y: size.height * 0.30),
+                CGPoint(x: size.width, y: size.height * 0.55)
+            ]
+
+            // Restrict to "ahead" portion when in ahead mode
+            let drawnPts: [CGPoint] = mode == .ahead
+                ? pts.filter { $0.x >= size.width * 0.40 }
+                : pts
+
+            guard drawnPts.count >= 2 else { return }
+
+            // Filled area
+            var area = Path()
+            area.move(to: CGPoint(x: drawnPts.first!.x, y: size.height))
+            for p in drawnPts { area.addLine(to: p) }
+            area.addLine(to: CGPoint(x: drawnPts.last!.x, y: size.height))
+            area.closeSubpath()
+            context.fill(area, with: .color(.green.opacity(0.25)))
+
+            // Line
+            var line = Path()
+            line.move(to: drawnPts[0])
+            for p in drawnPts.dropFirst() { line.addLine(to: p) }
+            context.stroke(line, with: .color(.green), style: StrokeStyle(lineWidth: 1.5))
+
+            // "Now" marker
+            let nowX = size.width * (mode == .ahead ? 0.42 : 0.45)
+            var rule = Path()
+            rule.move(to: CGPoint(x: nowX, y: 0))
+            rule.addLine(to: CGPoint(x: nowX, y: size.height))
+            context.stroke(rule, with: .color(.white.opacity(0.6)),
+                           style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+
+            // Waypoint pins
+            if waypointDisplay.showsOnElevation {
+                for x in [size.width * 0.25, size.width * 0.55, size.width * 0.78] {
+                    let pinY: CGFloat = 4
+                    let pinPath = Path { p in
+                        p.move(to: CGPoint(x: x, y: pinY))
+                        p.addLine(to: CGPoint(x: x, y: pinY + 8))
+                    }
+                    context.stroke(pinPath, with: .color(.orange), style: StrokeStyle(lineWidth: 1.2))
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: x - 1.5, y: pinY - 1.5, width: 3, height: 3)),
+                        with: .color(.orange))
+                }
+            }
+        }
     }
 }
 

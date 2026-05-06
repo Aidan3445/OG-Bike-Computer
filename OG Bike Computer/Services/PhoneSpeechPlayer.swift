@@ -47,7 +47,9 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
         utterance.pitchMultiplier = 1.05
         utterance.volume = 1.0
-        synthesizer.stopSpeaking(at: .word)
+        // Don't stopSpeaking — the watch's VoiceAlertQueue is the priority arbiter
+        // and won't dispatch a new alert until the previous one is considered finished.
+        // AVSpeechSynthesizer naturally enqueues if speak() is called mid-utterance.
         synthesizer.speak(utterance)
     }
 

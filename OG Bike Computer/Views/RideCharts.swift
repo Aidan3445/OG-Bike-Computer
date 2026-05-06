@@ -8,6 +8,139 @@
 import SwiftUI
 import Charts
 import CoreLocation
+import UIKit
+
+// MARK: - Long-Press-To-Scrub Recognizer
+//
+// SwiftUI's gesture system claims touches too eagerly to coexist cleanly with a
+// `TabView(.page)` parent — even with `simultaneousGesture`, swipes between tab
+// pages get swallowed. Bridging to a UIKit `UILongPressGestureRecognizer` with
+// `cancelsTouchesInView = false` lets normal swipes pass through to the parent
+// pager while still triggering scrub mode after a 0.25s hold.
+
+struct LongPressScrubOverlay: UIViewRepresentable {
+    var minimumDuration: TimeInterval = 0.25
+    var allowableMovement: CGFloat = 12
+    var onBegan: (CGPoint) -> Void
+    var onChanged: (CGPoint) -> Void
+    var onEnded: () -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = true
+
+        let recognizer = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handle(_:)))
+        recognizer.minimumPressDuration = minimumDuration
+        recognizer.allowableMovement = .greatestFiniteMagnitude // don't cancel once activated
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
+        recognizer.delegate = context.coordinator
+
+        context.coordinator.view = view
+        context.coordinator.recognizer = recognizer
+        view.addGestureRecognizer(recognizer)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onBegan = onBegan
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onBegan: onBegan, onChanged: onChanged, onEnded: onEnded)
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        weak var view: UIView?
+        weak var recognizer: UILongPressGestureRecognizer?
+        /// All UIScrollView ancestors we disabled on `.began` so we can re-enable on `.ended`.
+        private var lockedScrollViews: [UIScrollView] = []
+        /// Other ancestor pan recognizers we briefly toggle on `.began` to cancel any
+        /// gesture they had already started recognizing (e.g. NavigationStack swipe-back).
+        private var bumpedPanRecognizers: [UIPanGestureRecognizer] = []
+        var onBegan: (CGPoint) -> Void
+        var onChanged: (CGPoint) -> Void
+        var onEnded: () -> Void
+
+        init(onBegan: @escaping (CGPoint) -> Void,
+             onChanged: @escaping (CGPoint) -> Void,
+             onEnded: @escaping () -> Void) {
+            self.onBegan = onBegan
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+        }
+
+        @objc func handle(_ gr: UILongPressGestureRecognizer) {
+            guard let view = view else { return }
+            let loc = gr.location(in: view)
+            switch gr.state {
+            case .began:
+                lockAncestorGestures(from: view)
+                onBegan(loc)
+            case .changed:
+                onChanged(loc)
+            case .ended, .cancelled, .failed:
+                unlockAncestorGestures()
+                onEnded()
+            default:
+                break
+            }
+        }
+
+        /// Walk the superview chain and:
+        ///   * Disable every UIScrollView (cancels any in-flight scroll)
+        ///   * Toggle isEnabled on every UIPanGestureRecognizer to cancel any in-flight
+        ///     pan (e.g. the navigation stack's interactive pop gesture)
+        private func lockAncestorGestures(from view: UIView) {
+            var current: UIView? = view.superview
+            while let v = current {
+                if let scroll = v as? UIScrollView, scroll.isScrollEnabled {
+                    scroll.isScrollEnabled = false
+                    lockedScrollViews.append(scroll)
+                }
+                if let recognizers = v.gestureRecognizers {
+                    for r in recognizers where r is UIPanGestureRecognizer && r.isEnabled {
+                        // Skip the page TabView's internal pan — already neutralized by
+                        // disabling its scroll view above.
+                        if let pan = r as? UIPanGestureRecognizer {
+                            pan.isEnabled = false
+                            pan.isEnabled = true
+                            // Mark "bumped" only if it's NOT the scroll view's own pan
+                            // (those re-enable cleanly when isScrollEnabled flips back).
+                            if !(v is UIScrollView) {
+                                bumpedPanRecognizers.append(pan)
+                            }
+                        }
+                    }
+                }
+                current = v.superview
+            }
+        }
+
+        private func unlockAncestorGestures() {
+            for scroll in lockedScrollViews {
+                scroll.isScrollEnabled = true
+            }
+            lockedScrollViews.removeAll()
+            // Bumped pan recognizers were already re-enabled — just clear the list.
+            bumpedPanRecognizers.removeAll()
+        }
+
+        // Allow other recognizers (parent TabView's pan, etc.) to recognize alongside us
+        // BEFORE our long press fires — that's how normal swipes pass through. Once
+        // `.began` fires we forcibly cancel them via `lockAncestorGestures`.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
+        }
+    }
+}
 
 // MARK: - Data Model
 
@@ -48,8 +181,11 @@ struct RideChartsView: View {
     let dataPoints: [ChartDataPoint]
     let hasHeartRate: Bool
     let hasPower: Bool
+    /// Scrub position in meters from start; nil when not scrubbing.
+    @Binding var scrubDistance: Double?
 
     @State private var selected: RideChartMetric = .elevation
+    @State private var scrubActive = false
 
     private var availableMetrics: [RideChartMetric] {
         var metrics: [RideChartMetric] = [.elevation, .speed]
@@ -62,9 +198,96 @@ struct RideChartsView: View {
         VStack(spacing: 8) {
             chart
                 .frame(height: 140)
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        let updateScrub: (CGPoint) -> Void = { loc in
+                            let plotOrigin = geo[proxy.plotFrame!].origin
+                            let x = loc.x - plotOrigin.x
+                            let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+                            if let distInUnits: Double = proxy.value(atX: x) {
+                                let dist = distInUnits * metersPerUnit
+                                let maxDist = dataPoints.last?.distance ?? 0
+                                scrubDistance = max(0, min(dist, maxDist))
+                            }
+                        }
+                        LongPressScrubOverlay(
+                            onBegan: { loc in
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    scrubActive = true
+                                }
+                                updateScrub(loc)
+                            },
+                            onChanged: updateScrub,
+                            onEnded: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    scrubActive = false
+                                }
+                                scrubDistance = nil
+                            }
+                        )
+                    }
+                }
 
             toggleBar
+
+            scrubFooter
         }
+    }
+
+    @ViewBuilder
+    private var scrubFooter: some View {
+        ZStack {
+            // Hint — visible when not actively scrubbing.
+            Text("Tap and hold to scrub")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .opacity(scrubActive ? 0 : 1)
+
+            // Readout — visible while scrubbing with a position.
+            if let scrub = scrubDistance, let pt = closestPoint(to: scrub) {
+                scrubReadout(pt)
+                    .opacity(scrubActive ? 1 : 0)
+            }
+        }
+        .frame(height: 22)
+        .animation(.easeInOut(duration: 0.2), value: scrubActive)
+        .animation(.easeInOut(duration: 0.2), value: scrubDistance == nil)
+    }
+
+    private func closestPoint(to distance: Double) -> ChartDataPoint? {
+        dataPoints.min(by: { abs($0.distance - distance) < abs($1.distance - distance) })
+    }
+
+    @ViewBuilder
+    private func scrubReadout(_ pt: ChartDataPoint) -> some View {
+        let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+        HStack(spacing: 16) {
+            let distLabel = String(format: "%.1f %@", pt.distance / metersPerUnit, currentUnits.distance.label)
+            Text(distLabel)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            switch selected {
+            case .elevation:
+                Text(formatElevation(pt.elevation))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .speed:
+                Text(formatSpeed(pt.speed))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .heartRate:
+                Text("\(Int(pt.heartRate)) bpm")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .power:
+                Text("\(Int(pt.power)) W")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 2)
+        .background(selected.color.opacity(0.1), in: Capsule())
     }
 
     @ViewBuilder
@@ -153,6 +376,13 @@ struct RideChartsView: View {
                     .interpolationMethod(.catmullRom)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
                 }
+            }
+            // Scrub rule line
+            if let scrub = scrubDistance {
+                let scrubInUnits = scrub / metersPerUnit
+                RuleMark(x: .value("Scrub", scrubInUnits))
+                    .foregroundStyle(selected.color.opacity(0.8))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
             }
         }
         .chartXScale(domain: 0...maxDist)
@@ -254,6 +484,8 @@ struct RideChartsView: View {
 
 struct RouteElevationChartView: View {
     let points: [ProcessedPoint]
+    @Binding var scrubDistance: Double?
+    @State private var scrubActive = false
 
     var body: some View {
         let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
@@ -301,6 +533,13 @@ struct RouteElevationChartView: View {
                             .foregroundStyle(.secondary)
                     }
             }
+
+            // Scrub rule line
+            if let scrub = scrubDistance {
+                RuleMark(x: .value("Scrub", scrub / metersPerUnit))
+                    .foregroundStyle(Color.green.opacity(0.8))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+            }
         }
         .chartXScale(domain: 0...maxDist)
         .chartXAxis {
@@ -329,6 +568,68 @@ struct RouteElevationChartView: View {
         .chartLegend(.hidden)
         .clipped()
         .frame(height: 140)
+        .chartOverlay { proxy in
+            GeometryReader { geo in
+                let updateScrub: (CGPoint) -> Void = { loc in
+                    let plotOrigin = geo[proxy.plotFrame!].origin
+                    let x = loc.x - plotOrigin.x
+                    if let distInUnits: Double = proxy.value(atX: x) {
+                        let dist = distInUnits * metersPerUnit
+                        let maxDistMeters = points.last?.distanceFromStart ?? 0
+                        scrubDistance = max(0, min(dist, maxDistMeters))
+                    }
+                }
+                LongPressScrubOverlay(
+                    onBegan: { loc in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            scrubActive = true
+                        }
+                        updateScrub(loc)
+                    },
+                    onChanged: updateScrub,
+                    onEnded: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            scrubActive = false
+                        }
+                        scrubDistance = nil
+                    }
+                )
+            }
+        }
+
+        ZStack {
+            Text("Tap and hold to scrub")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .opacity(scrubActive ? 0 : 1)
+
+            if let scrub = scrubDistance, let elev = elevationAtDistance(scrub) {
+                HStack(spacing: 16) {
+                    Text(String(format: "%.1f %@", scrub / metersPerUnit, currentUnits.distance.label))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(formatElevation(elev))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color.green.opacity(0.1), in: Capsule())
+                .opacity(scrubActive ? 1 : 0)
+            }
+        }
+        .frame(height: 26)
+        .animation(.easeInOut(duration: 0.2), value: scrubActive)
+        .animation(.easeInOut(duration: 0.2), value: scrubDistance == nil)
+    }
+
+    private func elevationAtDistance(_ targetDist: Double) -> Double? {
+        guard !points.isEmpty else { return nil }
+        let sorted = points.filter { $0.elevation != nil }
+        if let exact = sorted.min(by: { abs($0.distanceFromStart - targetDist) < abs($1.distanceFromStart - targetDist) }) {
+            return exact.elevation
+        }
+        return nil
     }
 
     private func elevationValue(_ meters: Double) -> Double {
@@ -430,7 +731,7 @@ func buildRideChartData(from trackURL: URL, segmentCount: Int = 200) -> (points:
             .frame(width: 36, height: 4)
             .padding(.top, 8)
 
-        RideChartsView(dataPoints: mockData, hasHeartRate: true, hasPower: true)
+        RideChartsView(dataPoints: mockData, hasHeartRate: true, hasPower: true, scrubDistance: .constant(nil))
 
         HStack(spacing: 6) {
             Circle().fill(Color.primary).frame(width: 6, height: 6)

@@ -393,7 +393,6 @@ struct ServiceRoutePickerView: View {
                 let route = try await client.downloadRoute(id: serviceRoute.id)
                 await MainActor.run {
                     routeStore.save(route)
-                    dismiss()
                 }
             } catch {
                 await MainActor.run {

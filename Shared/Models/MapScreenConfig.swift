@@ -107,6 +107,85 @@ enum MapDetail: String, Codable, CaseIterable, Identifiable, Hashable {
     }
 }
 
+// MARK: - Waypoint Display
+
+/// Where on the watch to render route POIs / waypoints.
+enum WaypointDisplay: String, Codable, CaseIterable, Hashable, Identifiable {
+    case none, routeMap, elevation, both
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .none:     return "Hidden"
+        case .routeMap: return "Route Map"
+        case .elevation: return "Elevation"
+        case .both:     return "Both"
+        }
+    }
+
+    var showsOnRouteMap: Bool { self == .routeMap || self == .both }
+    var showsOnElevation: Bool { self == .elevation || self == .both }
+}
+
+// MARK: - Elevation Screen Config
+
+/// Which tab the watch elevation screen opens to by default.
+enum ElevationDefaultTab: String, Codable, CaseIterable, Hashable, Identifiable {
+    case full, ahead
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .full:  return "Full Route"
+        case .ahead: return "Ahead"
+        }
+    }
+}
+
+struct ElevationScreenConfig: Codable, Equatable, Hashable {
+    /// Whether to include the elevation screen as a watch tab at all.
+    var enabled: Bool
+    /// Default tab when entering the screen.
+    var defaultTab: ElevationDefaultTab
+    /// How far ahead the "Ahead" view looks, in meters.
+    var aheadLookahead: Double
+    /// Show grade overlay underneath the elevation line.
+    var showGrade: Bool
+    /// Show total ride elevation gain/loss next to the chart.
+    var showGainLossReadout: Bool
+
+    static let `default` = ElevationScreenConfig(
+        enabled: true,
+        defaultTab: .full,
+        aheadLookahead: 8046.72, // 5 miles
+        showGrade: false,
+        showGainLossReadout: true
+    )
+
+    init(
+        enabled: Bool = true,
+        defaultTab: ElevationDefaultTab = .full,
+        aheadLookahead: Double = 8046.72,
+        showGrade: Bool = false,
+        showGainLossReadout: Bool = true
+    ) {
+        self.enabled = enabled
+        self.defaultTab = defaultTab
+        self.aheadLookahead = aheadLookahead
+        self.showGrade = showGrade
+        self.showGainLossReadout = showGainLossReadout
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        defaultTab = try c.decodeIfPresent(ElevationDefaultTab.self, forKey: .defaultTab) ?? .full
+        aheadLookahead = try c.decodeIfPresent(Double.self, forKey: .aheadLookahead) ?? 8046.72
+        showGrade = try c.decodeIfPresent(Bool.self, forKey: .showGrade) ?? false
+        showGainLossReadout = try c.decodeIfPresent(Bool.self, forKey: .showGainLossReadout) ?? true
+    }
+}
+
 // MARK: - Map Screen Config
 
 struct MapScreenConfig: Codable, Equatable, Hashable {
@@ -132,6 +211,8 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
     var showTurnOverlay: Bool
     /// MapKit background detail level (off = black background, on = full map tiles)
     var mapDetail: MapDetail
+    /// Where to render route POIs / waypoints on watch screens.
+    var waypointDisplay: WaypointDisplay
 
     static let maxSecondaryStats = 4
 
@@ -146,7 +227,8 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         defaultZoom: 400,
         routeAheadColor: .white,
         showTurnOverlay: true,
-        mapDetail: .off
+        mapDetail: .off,
+        waypointDisplay: .both
     )
 
     /// Compute 4 zoom levels geometrically spaced between min and max
@@ -176,7 +258,8 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         defaultZoom: Double = 400,
         routeAheadColor: RouteColor = .white,
         showTurnOverlay: Bool = true,
-        mapDetail: MapDetail = .off
+        mapDetail: MapDetail = .off,
+        waypointDisplay: WaypointDisplay = .both
     ) {
         self.primaryStat = primaryStat
         self.secondaryStats = secondaryStats
@@ -189,6 +272,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         self.routeAheadColor = routeAheadColor
         self.showTurnOverlay = showTurnOverlay
         self.mapDetail = mapDetail
+        self.waypointDisplay = waypointDisplay
     }
 
     init(from decoder: Decoder) throws {
@@ -204,5 +288,6 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         routeAheadColor = try c.decodeIfPresent(RouteColor.self, forKey: .routeAheadColor) ?? .white
         showTurnOverlay = try c.decodeIfPresent(Bool.self, forKey: .showTurnOverlay) ?? true
         mapDetail = try c.decodeIfPresent(MapDetail.self, forKey: .mapDetail) ?? .off
+        waypointDisplay = try c.decodeIfPresent(WaypointDisplay.self, forKey: .waypointDisplay) ?? .both
     }
 }

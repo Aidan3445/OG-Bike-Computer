@@ -37,6 +37,12 @@ class UploadManager: ObservableObject {
     func handleNewRide(_ ride: RideSummary) {
         guard let settings = integrationSettings?.settings else { return }
 
+        // Skip auto-upload for held (paused) rides — they're not finished yet
+        guard !ride.onHold else {
+            logger.info("[UploadManager] Skipping auto-upload for held ride: \(ride.name)")
+            return
+        }
+
         // Only Strava supports auto-upload
         guard settings.config(for: .strava).autoUpload else { return }
 

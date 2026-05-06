@@ -60,6 +60,19 @@ class RideStore: ObservableObject {
         logger.log("[RideStore] deleted all rides")
     }
 
+    func update(_ ride: RideSummary) {
+        let fileURL = directory.appendingPathComponent("\(ride.id.uuidString).json")
+        if let data = try? JSONEncoder().encode(ride) {
+            try? data.write(to: fileURL)
+        }
+        if let index = rides.firstIndex(where: { $0.id == ride.id }) {
+            rides[index] = ride
+        } else {
+            rides.insert(ride, at: 0)
+        }
+        logger.log("[RideStore] updated: \(ride.name)")
+    }
+
     func rename(_ ride: RideSummary, to newName: String) {
         guard let index = rides.firstIndex(where: { $0.id == ride.id }) else { return }
         var updated = ride
@@ -70,6 +83,14 @@ class RideStore: ObservableObject {
         }
         rides[index] = updated
         logger.log("[RideStore] renamed: \(newName)")
+    }
+
+    var heldRide: RideSummary? {
+        rides.first { $0.onHold }
+    }
+
+    var completedRides: [RideSummary] {
+        rides.filter { !$0.onHold }
     }
 
     var storageSize: Int64 {

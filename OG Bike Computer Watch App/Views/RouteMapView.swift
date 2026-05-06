@@ -20,6 +20,8 @@ struct RouteMapView: View {
 
     @State private var showFullRoute = false
     @State private var autoSwitchTask: Task<Void, Never>?
+    @State private var toggleButtonOpacity: Double = 1.0
+    @State private var toggleFadeTask: Task<Void, Never>?
 
     @State private var zoomIndex: Int = -1 // -1 means "use default from config"
     private var mapConfig: MapScreenConfig { workout.ridePreferences.mapScreen }
@@ -138,8 +140,11 @@ struct RouteMapView: View {
                             showFullRoute.toggle()
                             if showFullRoute {
                                 scheduleAutoSwitch()
+                                scheduleToggleFade()
                             } else {
                                 autoSwitchTask?.cancel()
+                                toggleFadeTask?.cancel()
+                                withAnimation(.easeIn(duration: 0.15)) { toggleButtonOpacity = 1.0 }
                             }
                         } label: {
                             Image(systemName: showFullRoute ? "scope" : "map")
@@ -151,6 +156,7 @@ struct RouteMapView: View {
                         .buttonStyle(.plain)
                         .frame(width: 48, height: 48)
                         .contentShape(Rectangle())
+                        .opacity(toggleButtonOpacity)
                     }
 
                     if mapConfig.showHeading && workout.hasRoute {
@@ -319,6 +325,23 @@ struct RouteMapView: View {
             await MainActor.run { showFullRoute = false }
         }
     }
+
+    private func scheduleToggleFade() {
+        toggleFadeTask?.cancel()
+        toggleFadeTask = Task {
+            // Brief delay so the button is visible for the tap feedback
+            try? await Task.sleep(for: .seconds(0.4))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.35)) { toggleButtonOpacity = 0 }
+            }
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeIn(duration: 0.35)) { toggleButtonOpacity = 1.0 }
+            }
+        }
+    }
 }
 
 private struct FullRouteCanvas: View {
@@ -394,6 +417,14 @@ private struct FullRouteCanvas: View {
                     .foregroundColor(.white)
                 context.draw(context.resolve(text),
                              at: CGPoint(x: pt.x + 4, y: pt.y - 14))
+            }
+
+            // POI pins (full route view)
+            if workout.ridePreferences.mapScreen.waypointDisplay.showsOnRouteMap {
+                for poi in processed.pois {
+                    let pt = project(poi.coordinate, transform: transform)
+                    drawWaypointPin(context: context, at: pt, scale: 0.85)
+                }
             }
 
             if let loc = workout.currentLocation {
@@ -498,6 +529,36 @@ private struct FullRouteCanvas: View {
             x: coord.longitude * transform.cosLat * transform.scale + transform.offsetX,
             y: -coord.latitude * transform.scale + transform.offsetY)
     }
+}
+
+/// Tiny mappin marker rendered on the watch's full-route Canvas.
+fileprivate func drawWaypointPin(context: GraphicsContext, at pt: CGPoint, scale: CGFloat = 1.0) {
+    let radius: CGFloat = 3 * scale
+    let stemLength: CGFloat = 6 * scale
+    // Stem
+    context.stroke(
+        Path { p in
+            p.move(to: CGPoint(x: pt.x, y: pt.y))
+            p.addLine(to: CGPoint(x: pt.x, y: pt.y - stemLength))
+        },
+        with: .color(.orange),
+        style: StrokeStyle(lineWidth: 1.5 * scale, lineCap: .round))
+    // Head
+    context.fill(
+        Path(ellipseIn: CGRect(
+            x: pt.x - radius,
+            y: pt.y - stemLength - radius,
+            width: radius * 2,
+            height: radius * 2)),
+        with: .color(.orange))
+    // Inner dot
+    context.fill(
+        Path(ellipseIn: CGRect(
+            x: pt.x - radius * 0.45,
+            y: pt.y - stemLength - radius * 0.45,
+            width: radius * 0.9,
+            height: radius * 0.9)),
+        with: .color(.white))
 }
 
 private struct BreadcrumbCanvas: View {
@@ -731,6 +792,16 @@ private struct BreadcrumbCanvas: View {
                             lastUnit = unit
                         }
                         return cachedMarkers
+                    }
+                }
+
+                // POI pins (breadcrumb view)
+                if workout.ridePreferences.mapScreen.waypointDisplay.showsOnRouteMap {
+                    for poi in processed.pois {
+                        let pt = toScreen(poi.coordinate)
+                        guard pt.x >= -10 && pt.x <= screenW + 10 &&
+                              pt.y >= -10 && pt.y <= screenH + 10 else { continue }
+                        drawWaypointPin(context: context, at: pt, scale: 1.1)
                     }
                 }
 
@@ -968,6 +1039,17 @@ private struct BreadcrumbMapView: View {
                             .foregroundStyle(.white)
                         Image(systemName: "flag.fill")
                             .font(.system(size: 8))
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+
+            // POI pins (MapKit-native breadcrumb view)
+            if workout.ridePreferences.mapScreen.waypointDisplay.showsOnRouteMap {
+                ForEach(0..<processed.pois.count, id: \.self) { i in
+                    Annotation("", coordinate: processed.pois[i].coordinate, anchor: .bottom) {
+                        Image(systemName: "mappin")
+                            .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(.orange)
                     }
                 }

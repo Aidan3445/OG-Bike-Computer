@@ -9,6 +9,7 @@ import SwiftUI
 import MapKit
 import CoreLocation
 import Charts
+import AppIntents
 
 struct RideDetailView: View {
     let ride: RideSummary
@@ -24,7 +25,10 @@ struct RideDetailView: View {
     @State private var panelState: PanelState = .collapsed
     @State private var showShareSheet = false
     @State private var isUploadingToStrava = false
+    @State private var showFinalizeConfirm = false
+    @State private var showDiscardConfirm = false
     @State private var uploadError: String?
+    @ObservedObject private var connectivity = ConnectivityManager.shared
     @State private var coloredSegments: [ColoredSegment] = []
     @State private var startCoord: CLLocationCoordinate2D?
     @State private var endCoord: CLLocationCoordinate2D?
@@ -34,6 +38,9 @@ struct RideDetailView: View {
     @State private var chartHasHR = false
     @State private var chartHasPower = false
     @State private var panelPage = 0
+    @State private var scrubDistance: Double? = nil
+    @State private var scrubCoordinate: CLLocationCoordinate2D? = nil
+    @State private var allLocations: [CLLocation] = []
 
     var body: some View {
         let _ = unitState.preferences
@@ -99,18 +106,19 @@ struct RideDetailView: View {
                     }
                 }
 
-                // Mile markers
-                ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
-                    Annotation("", coordinate: marker.coordinate) {
-                        Text("\(marker.mile) \(currentUnits.distance.label)")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.accentColor)
-                            .clipShape(Capsule())
+                // Scrub position indicator
+                if let coord = scrubCoordinate {
+                    Annotation("", coordinate: coord) {
+                        Circle()
+                            .fill(.white)
+                            .frame(width: 12, height: 12)
+                            .overlay(Circle().stroke(Color.accentColor, lineWidth: 3))
+                            .shadow(radius: 3)
                     }
                 }
+
+                // Mile markers
+                mileMarkerAnnotations()
             }
             .mapStyle(.standard(elevation: .realistic))
             .mapControls {
@@ -122,145 +130,58 @@ struct RideDetailView: View {
             VStack(spacing: 0) {
                 Spacer()
 
-                VStack(spacing: 6) {
-                    if panelState != .collapsed {
-                        // Drag handle — tap to collapse, drag to expand/collapse
-                        Capsule()
-                            .fill(.secondary)
-                            .frame(width: 36, height: 4)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 30)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                    panelState = .collapsed
-                                }
-                            }
-                            .gesture(
-                                DragGesture(minimumDistance: 10)
-                                    .onEnded { value in
-                                        guard abs(value.translation.height) > 10 else { return }
-                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                            if value.translation.height > 0 {
-                                                switch panelState {
-                                                case .expanded: panelState = .compact
-                                                case .compact: panelState = .collapsed
-                                                case .collapsed: break
-                                                }
-                                            } else {
-                                                switch panelState {
-                                                case .collapsed: panelState = .compact
-                                                case .compact: panelState = .expanded
-                                                case .expanded: break
-                                                }
-                                            }
-                                        }
-                                    }
-                            )
-
-                        // Content area — swipe between stats and charts
-                        TabView(selection: $panelPage) {
-                            // Page 0: Stats
-                            VStack(spacing: 8) {
-                                let columns = [
-                                    GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
-                                ]
-
-                                let stats = rideStats(compact: panelState == .compact)
-                                let rows = stats.chunked(into: 3)
-                                ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
-                                    if rowIdx > 0 {
-                                        Divider()
-                                    }
-                                    LazyVGrid(columns: columns, spacing: 10) {
-                                        ForEach(row, id: \.label) { stat in
-                                            StatItem(label: stat.label, value: stat.value)
-                                        }
-                                    }
-                                }
-
-                                // More / Less toggle
-                                if hasExtendedStats {
-                                    Button {
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                                            panelState = panelState == .expanded ? .compact : .expanded
-                                        }
-                                    } label: {
-                                        HStack(spacing: 4) {
-                                            Text(panelState == .expanded ? "Less" : "More")
-                                                .font(.caption2.weight(.medium))
-                                            Image(systemName: panelState == .expanded ? "chevron.up" : "chevron.down")
-                                                .font(.caption2)
-                                        }
-                                        .foregroundStyle(.secondary)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .tag(0)
-
-                            // Page 1: Charts
-                            VStack(spacing: 4) {
-                                if !chartData.isEmpty {
-                                    RideChartsView(
-                                        dataPoints: chartData,
-                                        hasHeartRate: chartHasHR,
-                                        hasPower: chartHasPower
-                                    )
-                                } else {
-                                    Text("No chart data")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .frame(height: 140)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .tag(1)
+                statsPanel()
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if ride.onHold && connectivity.isReachable {
+                VStack(spacing: 4) {
+                    HStack(spacing: 8) {
+                        Button(intent: ContinueHeldRideIntent()) {
+                            Label("Continue", systemImage: "hand.raised.fill")
+                                .frame(maxWidth: .infinity, minHeight: 44)
                         }
-                        .tabViewStyle(.page(indexDisplayMode: .never))
-                        .frame(height: panelState == .expanded ? 280 : 200)
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
 
-                        // Page dots
-                        HStack(spacing: 6) {
-                            ForEach(0..<2, id: \.self) { i in
-                                Circle()
-                                    .fill(panelPage == i ? Color.primary : Color.secondary.opacity(0.4))
-                                    .frame(width: 6, height: 6)
-                            }
+                        Button {
+                            showFinalizeConfirm = true
+                        } label: {
+                            Label("End & Save", systemImage: "checkmark.circle")
+                                .frame(maxWidth: .infinity, minHeight: 44)
                         }
-                    } else {
-                        // Collapsed — single round button
-                        Image(systemName: "chart.bar.xaxis")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.top, 8)
-                    }
-                }
-                .padding(.horizontal, panelState != .collapsed ? 16 : 0)
-                .padding(.bottom, panelState != .collapsed ? 8 : 8)
-                .frame(
-                    maxWidth: panelState != .collapsed ? .infinity : nil,
-                    alignment: panelState != .collapsed ? .center : .trailing
-                )
-                .frame(width: panelState != .collapsed ? nil : 48, height: panelState != .collapsed ? nil : 48)
-                .background(
-                    RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                        .fill(.ultraThinMaterial)
-                        .shadow(radius: 12, y: 4)
-                )
-                .padding(.horizontal, panelState != .collapsed ? 12 : 0)
-                .padding(.bottom, panelState != .collapsed ? 12 : 24)
-                .padding(.trailing, panelState != .collapsed ? 0 : 16)
-                .frame(maxWidth: .infinity, alignment: panelState != .collapsed ? .center : .trailing)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if panelState == .collapsed {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            panelState = .compact
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        .confirmationDialog("Save this ride?", isPresented: $showFinalizeConfirm, titleVisibility: .visible) {
+                            Button("Save Ride") {
+                                ConnectivityManager.shared.sendFinalizeHeldRide(rideID: ride.id)
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("The ride will be saved as complete and you can upload it to Strava.")
                         }
                     }
+
+                    Button(role: .destructive) {
+                        showDiscardConfirm = true
+                    } label: {
+                        Label("Discard Ride", systemImage: "trash")
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .confirmationDialog("Discard this ride?", isPresented: $showDiscardConfirm, titleVisibility: .visible) {
+                        Button("Discard", role: .destructive) {
+                            ConnectivityManager.shared.sendDiscardRide(rideID: ride.id)
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("The held ride will be permanently deleted. This cannot be undone.")
+                    }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(.regularMaterial)
             }
         }
         .navigationTitle(ride.name)
@@ -320,6 +241,206 @@ struct RideDetailView: View {
         .onAppear {
             buildRideCache()
         }
+    }
+    
+    @MapContentBuilder
+    private func mileMarkerAnnotations() -> some MapContent {
+        ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
+            Annotation("", coordinate: marker.coordinate) {
+                Text("\(marker.mile) \(currentUnits.distance.label)")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.accentColor)
+                    .clipShape(Capsule())
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func statsPanel() -> some View {
+        VStack(spacing: 6) {
+            if panelState != .collapsed {
+                panelDragHandle()
+
+                TabView(selection: $panelPage) {
+                    statsPage()
+                        .tag(0)
+
+                    chartsPage()
+                        .tag(1)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(height: panelState == .expanded ? 280 : 200)
+                // Lock paging while scrub is active so the chart drag doesn't
+                // bleed into a horizontal page swap.
+                .scrollDisabled(scrubDistance != nil)
+
+                panelPageDots()
+            } else {
+                collapsedPanelButton()
+            }
+        }
+        .padding(.horizontal, panelState != .collapsed ? 16 : 0)
+        .padding(.bottom, 8)
+        .frame(
+            maxWidth: panelState != .collapsed ? .infinity : nil,
+            alignment: panelState != .collapsed ? .center : .trailing
+        )
+        .frame(
+            width: panelState != .collapsed ? nil : 48,
+            height: panelState != .collapsed ? nil : 48
+        )
+        .background(
+            RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
+                .fill(.ultraThinMaterial)
+                .shadow(radius: 12, y: 4)
+        )
+        .padding(.horizontal, panelState != .collapsed ? 12 : 0)
+        .padding(.bottom, panelState != .collapsed ? 12 : 24)
+        .padding(.trailing, panelState != .collapsed ? 0 : 16)
+        .frame(
+            maxWidth: .infinity,
+            alignment: panelState != .collapsed ? .center : .trailing
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if panelState == .collapsed {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    panelState = .compact
+                }
+            }
+        }
+    }
+
+    private func panelDragHandle() -> some View {
+        Capsule()
+            .fill(.secondary)
+            .frame(width: 36, height: 4)
+            .frame(maxWidth: .infinity)
+            .frame(height: 30)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    panelState = .collapsed
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 10)
+                    .onEnded { value in
+                        guard abs(value.translation.height) > 10 else { return }
+
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            if value.translation.height > 0 {
+                                switch panelState {
+                                case .expanded:
+                                    panelState = .compact
+                                case .compact:
+                                    panelState = .collapsed
+                                case .collapsed:
+                                    break
+                                }
+                            } else {
+                                switch panelState {
+                                case .collapsed:
+                                    panelState = .compact
+                                case .compact:
+                                    panelState = .expanded
+                                case .expanded:
+                                    break
+                                }
+                            }
+                        }
+                    }
+            )
+    }
+
+    @ViewBuilder
+    private func statsPage() -> some View {
+        VStack(spacing: 8) {
+            let columns = [
+                GridItem(.flexible()),
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ]
+
+            let stats = rideStats(compact: panelState == .compact)
+            let rows = stats.chunked(into: 3)
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
+                if rowIdx > 0 {
+                    Divider()
+                }
+
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(row, id: \.label) { stat in
+                        StatItem(label: stat.label, value: stat.value)
+                    }
+                }
+            }
+
+            if hasExtendedStats {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        panelState = panelState == .expanded ? .compact : .expanded
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(panelState == .expanded ? "Less" : "More")
+                            .font(.caption2.weight(.medium))
+
+                        Image(systemName: panelState == .expanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private func chartsPage() -> some View {
+        VStack(spacing: 4) {
+            if !chartData.isEmpty {
+                RideChartsView(
+                    dataPoints: chartData,
+                    hasHeartRate: chartHasHR,
+                    hasPower: chartHasPower,
+                    scrubDistance: $scrubDistance
+                )
+                .onChange(of: scrubDistance) { _, dist in
+                    scrubCoordinate = dist.map { interpolateCoordinate(at: $0) } ?? nil
+                }
+            } else {
+                Text("No chart data")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(height: 140)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func panelPageDots() -> some View {
+        HStack(spacing: 6) {
+            ForEach(0..<2, id: \.self) { i in
+                Circle()
+                    .fill(panelPage == i ? Color.primary : Color.secondary.opacity(0.4))
+                    .frame(width: 6, height: 6)
+            }
+        }
+    }
+
+    private func collapsedPanelButton() -> some View {
+        Image(systemName: "chart.bar.xaxis")
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(.primary)
+            .padding(.top, 8)
     }
 
     private func uploadToStrava() {
@@ -389,6 +510,7 @@ struct RideDetailView: View {
         let locations = TrackEncoder.toLocations(pts)
         guard locations.count >= 2 else { return }
 
+        allLocations      = locations
         startCoord        = locations.first?.coordinate
         endCoord          = locations.last?.coordinate
         mileMarkers       = computeRideMileMarkers(locations: locations)
@@ -400,6 +522,22 @@ struct RideDetailView: View {
         chartData = result.points
         chartHasHR = result.hasHR
         chartHasPower = result.hasPower
+    }
+
+    private func interpolateCoordinate(at targetDistance: Double) -> CLLocationCoordinate2D? {
+        guard allLocations.count >= 2 else { return nil }
+        var cumDist: Double = 0
+        for i in 1..<allLocations.count {
+            let seg = allLocations[i].distance(from: allLocations[i - 1])
+            if cumDist + seg >= targetDistance {
+                let fraction = seg > 0 ? (targetDistance - cumDist) / seg : 0
+                let lat = allLocations[i - 1].coordinate.latitude + fraction * (allLocations[i].coordinate.latitude - allLocations[i - 1].coordinate.latitude)
+                let lon = allLocations[i - 1].coordinate.longitude + fraction * (allLocations[i].coordinate.longitude - allLocations[i - 1].coordinate.longitude)
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            }
+            cumDist += seg
+        }
+        return allLocations.last?.coordinate
     }
 }
 

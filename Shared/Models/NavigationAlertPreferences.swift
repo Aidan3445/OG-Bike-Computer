@@ -297,83 +297,6 @@ struct AutoPauseAlertPreferences: Codable, Equatable, Hashable {
     }
 }
 
-// MARK: - Descent Alert Preferences
-
-struct DescentAlertPreferences: Codable, Equatable, Hashable {
-    var enabled: Bool
-    var speedThreshold: Double          // m/s (default 13.41 ≈ 30mph)
-    var minimumDescentDistance: Double   // meters
-    var mode: AlertMode
-
-    static let `default` = DescentAlertPreferences(
-        enabled: false,
-        speedThreshold: 13.41,
-        minimumDescentDistance: 200,
-        mode: .voiceAndHaptic
-    )
-
-    init(
-        enabled: Bool = false,
-        speedThreshold: Double = 13.41,
-        minimumDescentDistance: Double = 200,
-        mode: AlertMode = .voiceAndHaptic
-    ) {
-        self.enabled = enabled
-        self.speedThreshold = speedThreshold
-        self.minimumDescentDistance = minimumDescentDistance
-        self.mode = mode
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        speedThreshold = try c.decodeIfPresent(Double.self, forKey: .speedThreshold) ?? 13.41
-        minimumDescentDistance = try c.decodeIfPresent(Double.self, forKey: .minimumDescentDistance) ?? 200
-        mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceAndHaptic
-    }
-}
-
-// MARK: - Climb Alert Preferences
-
-struct ClimbAlertPreferences: Codable, Equatable, Hashable {
-    var enabled: Bool
-    var minimumClimbHeight: Double       // meters (default 30 ≈ 100ft)
-    var minimumClimbDistance: Double      // meters
-    var climbSeparationDistance: Double   // meters
-    var mode: AlertMode
-
-    static let `default` = ClimbAlertPreferences(
-        enabled: false,
-        minimumClimbHeight: 30,
-        minimumClimbDistance: 500,
-        climbSeparationDistance: 200,
-        mode: .voiceAndHaptic
-    )
-
-    init(
-        enabled: Bool = false,
-        minimumClimbHeight: Double = 30,
-        minimumClimbDistance: Double = 500,
-        climbSeparationDistance: Double = 200,
-        mode: AlertMode = .voiceAndHaptic
-    ) {
-        self.enabled = enabled
-        self.minimumClimbHeight = minimumClimbHeight
-        self.minimumClimbDistance = minimumClimbDistance
-        self.climbSeparationDistance = climbSeparationDistance
-        self.mode = mode
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        minimumClimbHeight = try c.decodeIfPresent(Double.self, forKey: .minimumClimbHeight) ?? 30
-        minimumClimbDistance = try c.decodeIfPresent(Double.self, forKey: .minimumClimbDistance) ?? 500
-        climbSeparationDistance = try c.decodeIfPresent(Double.self, forKey: .climbSeparationDistance) ?? 200
-        mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceAndHaptic
-    }
-}
-
 // MARK: - Haptic Preferences
 
 struct HapticPreferences: Codable, Equatable, Hashable {
@@ -391,6 +314,63 @@ struct HapticPreferences: Codable, Equatable, Hashable {
     }
 }
 
+// MARK: - Waypoint / POI Alert Preferences
+
+/// Announce when approaching POI/waypoints along (or near) the route.
+/// Defaults to using the same approach distances as turn alerts;
+/// `useCustomDistances` lets the user override them for waypoints alone.
+struct WaypointAlertPreferences: Codable, Equatable, Hashable {
+    var enabled: Bool
+    var mode: AlertMode
+    /// When true, use the custom distances below; when false, mirror turn alert distances.
+    var useCustomDistances: Bool
+    var primaryApproachDistance: Double      // meters
+    var secondaryApproachEnabled: Bool
+    var secondaryApproachDistance: Double    // meters
+    /// Maximum off-route distance (meters) before suppressing a POI alert.
+    /// Beyond this the POI is considered too far away to be relevant.
+    var maxOffRouteDistance: Double
+
+    static let `default` = WaypointAlertPreferences(
+        enabled: true,
+        mode: .voiceOnly,
+        useCustomDistances: false,
+        primaryApproachDistance: 152.4,         // 500ft
+        secondaryApproachEnabled: false,
+        secondaryApproachDistance: 804.672,     // 0.5mi
+        maxOffRouteDistance: 4828.03            // 3 miles
+    )
+
+    init(
+        enabled: Bool = true,
+        mode: AlertMode = .voiceOnly,
+        useCustomDistances: Bool = false,
+        primaryApproachDistance: Double = 152.4,
+        secondaryApproachEnabled: Bool = false,
+        secondaryApproachDistance: Double = 804.672,
+        maxOffRouteDistance: Double = 4828.03
+    ) {
+        self.enabled = enabled
+        self.mode = mode
+        self.useCustomDistances = useCustomDistances
+        self.primaryApproachDistance = primaryApproachDistance
+        self.secondaryApproachEnabled = secondaryApproachEnabled
+        self.secondaryApproachDistance = secondaryApproachDistance
+        self.maxOffRouteDistance = maxOffRouteDistance
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceOnly
+        useCustomDistances = try c.decodeIfPresent(Bool.self, forKey: .useCustomDistances) ?? false
+        primaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .primaryApproachDistance) ?? 152.4
+        secondaryApproachEnabled = try c.decodeIfPresent(Bool.self, forKey: .secondaryApproachEnabled) ?? false
+        secondaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .secondaryApproachDistance) ?? 804.672
+        maxOffRouteDistance = try c.decodeIfPresent(Double.self, forKey: .maxOffRouteDistance) ?? 4828.03
+    }
+}
+
 // MARK: - Top-Level Preferences
 
 struct NavigationAlertPreferences: Codable, Equatable, Hashable {
@@ -398,8 +378,7 @@ struct NavigationAlertPreferences: Codable, Equatable, Hashable {
     var navigationEvents: NavigationEventPreferences
     var splitAlerts: SplitAlertPreferences
     var autoPauseAlerts: AutoPauseAlertPreferences
-    var descentAlerts: DescentAlertPreferences
-    var climbAlerts: ClimbAlertPreferences
+    var waypointAlerts: WaypointAlertPreferences
     var haptics: HapticPreferences
 
     static let `default` = NavigationAlertPreferences(
@@ -407,8 +386,7 @@ struct NavigationAlertPreferences: Codable, Equatable, Hashable {
         navigationEvents: .default,
         splitAlerts: .default,
         autoPauseAlerts: .default,
-        descentAlerts: .default,
-        climbAlerts: .default,
+        waypointAlerts: .default,
         haptics: .default
     )
 
@@ -417,16 +395,14 @@ struct NavigationAlertPreferences: Codable, Equatable, Hashable {
         navigationEvents: NavigationEventPreferences = .default,
         splitAlerts: SplitAlertPreferences = .default,
         autoPauseAlerts: AutoPauseAlertPreferences = .default,
-        descentAlerts: DescentAlertPreferences = .default,
-        climbAlerts: ClimbAlertPreferences = .default,
+        waypointAlerts: WaypointAlertPreferences = .default,
         haptics: HapticPreferences = .default
     ) {
         self.turnAlerts = turnAlerts
         self.navigationEvents = navigationEvents
         self.splitAlerts = splitAlerts
         self.autoPauseAlerts = autoPauseAlerts
-        self.descentAlerts = descentAlerts
-        self.climbAlerts = climbAlerts
+        self.waypointAlerts = waypointAlerts
         self.haptics = haptics
     }
 
@@ -436,8 +412,7 @@ struct NavigationAlertPreferences: Codable, Equatable, Hashable {
         navigationEvents = try c.decodeIfPresent(NavigationEventPreferences.self, forKey: .navigationEvents) ?? .default
         splitAlerts = try c.decodeIfPresent(SplitAlertPreferences.self, forKey: .splitAlerts) ?? .default
         autoPauseAlerts = try c.decodeIfPresent(AutoPauseAlertPreferences.self, forKey: .autoPauseAlerts) ?? .default
-        descentAlerts = try c.decodeIfPresent(DescentAlertPreferences.self, forKey: .descentAlerts) ?? .default
-        climbAlerts = try c.decodeIfPresent(ClimbAlertPreferences.self, forKey: .climbAlerts) ?? .default
+        waypointAlerts = try c.decodeIfPresent(WaypointAlertPreferences.self, forKey: .waypointAlerts) ?? .default
         haptics = try c.decodeIfPresent(HapticPreferences.self, forKey: .haptics) ?? .default
     }
 }

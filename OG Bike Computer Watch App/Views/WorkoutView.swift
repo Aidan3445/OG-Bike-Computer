@@ -19,8 +19,12 @@ struct WorkoutView<ExtraTab: View>: View {
     @State private var tab = 1
     @State private var endCountdown: Double = 0
     @State private var endTimer: Timer?
+    @State private var holdCountdown: Double = 0
+    @State private var holdTimer: Timer?
     @State private var showNavOverlay = false
     @State private var navOverlayTask: Task<Void, Never>?
+    @State private var showHoldExplainer = false
+    @State private var holdExplainerDontShow = false
 
     init(workout: WorkoutManager, metricConfig: MetricConfigStore, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
         self.workout = workout
@@ -43,17 +47,31 @@ struct WorkoutView<ExtraTab: View>: View {
                 .tag(1)
 
             TabView(selection: $tab) {
-                RouteMapView(workout: workout)
-                    .tag(1)
-
-                // Dynamic metric pages from config
-                ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, metricPage in
-                    DynamicMetricsPage(
-                        workout: workout,
-                        metricPage: metricPage,
-                        showOffRouteBanner: index == 0
-                    )
-                    .tag(2 + index)
+                let resolved = WorkoutTabOrder.resolve(
+                    hasRoute: workout.hasRoute,
+                    elevationEnabled: workout.ridePreferences.elevationScreen.enabled,
+                    pages: metricConfig.config.pages,
+                    stored: workout.ridePreferences.tabOrder
+                )
+                ForEach(Array(resolved.enumerated()), id: \.element.id) { index, key in
+                    let tag = index + 1
+                    switch key.kind {
+                    case .routeMap:
+                        RouteMapView(workout: workout)
+                            .tag(tag)
+                    case .elevation:
+                        ElevationProfileView(workout: workout)
+                            .tag(tag)
+                    case .metricPage:
+                        if let page = metricConfig.config.pages.first(where: { $0.id == key.metricPageID }) {
+                            DynamicMetricsPage(
+                                workout: workout,
+                                metricPage: page,
+                                showOffRouteBanner: !resolved.prefix(index).contains(where: { $0.kind == .metricPage })
+                            )
+                            .tag(tag)
+                        }
+                    }
                 }
             }
             .tabViewStyle(.verticalPage)
@@ -73,9 +91,9 @@ struct WorkoutView<ExtraTab: View>: View {
                         .allowsHitTesting(false)
                 }
             }
-            // Nav turn overlay — flash stripped-down map when a turn is imminent and rider is on a metrics page
+            // Nav turn overlay — flash stripped-down map when a turn is imminent and rider is on a non-map page
             .overlay {
-                if showNavOverlay && tab >= 3 && workout.ridePreferences.mapScreen.showTurnOverlay {
+                if showNavOverlay && tab > 1 && workout.ridePreferences.mapScreen.showTurnOverlay {
                     ZStack {
                         Color.black.opacity(0.85)
                         RouteMapView(workout: workout, isOverlay: true)
@@ -89,7 +107,7 @@ struct WorkoutView<ExtraTab: View>: View {
             }
             .onChange(of: workout.navigation.nextTurn?.index) { oldTurn, newTurn in
                 // A new turn became the next turn (rider passed one or a new one appeared)
-                guard newTurn != nil, tab >= 3, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
+                guard newTurn != nil, tab > 1, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
                 navOverlayTask?.cancel()
                 withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
                 navOverlayTask = Task {
@@ -102,7 +120,7 @@ struct WorkoutView<ExtraTab: View>: View {
             }
             .onChange(of: workout.navigation.distanceToNextTurn) { _, dist in
                 // Also flash when approaching a turn closely
-                guard dist > 0, dist < 150, tab >= 3, !showNavOverlay, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
+                guard dist > 0, dist < 150, tab > 1, !showNavOverlay, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
                 navOverlayTask?.cancel()
                 withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
                 navOverlayTask = Task {
@@ -115,25 +133,29 @@ struct WorkoutView<ExtraTab: View>: View {
             }
             .onChange(of: tab) { _, newTab in
                 // Dismiss overlay when user swipes to map themselves
-                if newTab <= 2 && showNavOverlay {
+                if newTab == 1 && showNavOverlay {
                     withAnimation(.easeOut(duration: 0.2)) { showNavOverlay = false }
                     navOverlayTask?.cancel()
                 }
             }
-            .onChange(of: workout.hasRoute) { _, hasRoute in
-                    if hasRoute && tab >= 3 {
-                        // Loaded a route mid-ride — switch to map
-                        withAnimation { tab = 2 }
-                    } else if !hasRoute {
-                        // Cleared route — go to first metrics page
-                        withAnimation { tab = 3 }
+            .onChange(of: workout.hasRoute) { hadRoute, hasRoute in
+                    // Only switch to map when a route is freshly loaded (nil → route).
+                    // Swapping routes briefly makes hasRoute false then true; ignoring
+                    // the false→true transition here prevents the tab from jumping
+                    // to map unexpectedly when the rider is on a metrics page.
+                    if hasRoute && !hadRoute && tab > 1 {
+                        withAnimation { tab = 1 }
                     }
                 }
-            .onChange(of: metricConfig.config.pages.count) { _, count in
-                // Clamp tab to valid range when pages are added/removed
-                let maxTab = 2 + count
-                if tab > maxTab {
-                    withAnimation { tab = max(maxTab, 1) }
+            .onChange(of: metricConfig.config.pages.count) { _, _ in
+                let resolvedCount = WorkoutTabOrder.resolve(
+                    hasRoute: workout.hasRoute,
+                    elevationEnabled: workout.ridePreferences.elevationScreen.enabled,
+                    pages: metricConfig.config.pages,
+                    stored: workout.ridePreferences.tabOrder
+                ).count
+                if tab > resolvedCount {
+                    withAnimation { tab = max(resolvedCount, 1) }
                 }
             }
             .tag(2)
@@ -149,6 +171,45 @@ struct WorkoutView<ExtraTab: View>: View {
             navOverlayTask = nil
             showNavOverlay = false
         }
+        .sheet(isPresented: $showHoldExplainer) {
+            holdExplainerSheet
+        }
+    }
+
+    private var holdExplainerSheet: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.orange)
+                    .padding(.top, 8)
+
+                Text("Hold Ride")
+                    .font(.headline)
+
+                Text("Your ride is paused and saved. You can resume it later from the route list — your distance, time, and route progress are preserved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                Divider()
+
+                Toggle("Don't show again", isOn: $holdExplainerDontShow)
+                    .font(.caption)
+
+                Button("Got It") {
+                    if holdExplainerDontShow {
+                        UserDefaults.standard.set(true, forKey: "holdExplainerShown")
+                    }
+                    showHoldExplainer = false
+                    workout.holdRide()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 16)
+        }
     }
 
     private var controlsOverlay: some View {
@@ -160,7 +221,7 @@ struct WorkoutView<ExtraTab: View>: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
 
-            HStack(spacing: 16) {
+            HStack(spacing: 10) {
                 if workout.isPaused || workout.isAutoPaused {
                     Button {
                         cancelEndCountdown()
@@ -169,7 +230,7 @@ struct WorkoutView<ExtraTab: View>: View {
                     } label: {
                         Image(systemName: "play.fill")
                             .font(.title2)
-                            .frame(width: 52, height: 52)
+                            .frame(width: 48, height: 48)
                             .background(Color.green, in: Circle())
                     }
                     .buttonStyle(.plain)
@@ -180,11 +241,38 @@ struct WorkoutView<ExtraTab: View>: View {
                     } label: {
                         Image(systemName: "pause.fill")
                             .font(.title2)
-                            .frame(width: 52, height: 52)
+                            .frame(width: 48, height: 48)
                             .background(Color.yellow, in: Circle())
                             .foregroundStyle(.black)
                     }
                     .buttonStyle(.plain)
+                }
+
+                ZStack {
+                    if holdCountdown > 0 {
+                        Button { cancelHoldCountdown() } label: {
+                            ZStack {
+                                Circle()
+                                    .trim(from: 0, to: holdCountdown / 3.0)
+                                    .stroke(.orange, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                    .rotationEffect(.degrees(-90))
+                                    .frame(width: 48, height: 48)
+                                Text(String(Int(ceil(3.0 - holdCountdown))))
+                                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button { startHoldCountdown() } label: {
+                            Image(systemName: "hand.raised.fill")
+                                .font(.title2)
+                                .frame(width: 48, height: 48)
+                                .background(Color.orange, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
 
                 ZStack {
@@ -195,7 +283,7 @@ struct WorkoutView<ExtraTab: View>: View {
                                     .trim(from: 0, to: endCountdown / 3.0)
                                     .stroke(.red, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                                     .rotationEffect(.degrees(-90))
-                                    .frame(width: 52, height: 52)
+                                    .frame(width: 48, height: 48)
                                 Text(String(Int(ceil(3.0 - endCountdown))))
                                     .font(.system(size: 18, weight: .bold, design: .rounded))
                                     .monospacedDigit()
@@ -207,7 +295,7 @@ struct WorkoutView<ExtraTab: View>: View {
                         Button { startEndCountdown() } label: {
                             Image(systemName: "stop.fill")
                                 .font(.title2)
-                                .frame(width: 52, height: 52)
+                                .frame(width: 48, height: 48)
                                 .background(Color.red, in: Circle())
                         }
                         .buttonStyle(.plain)
@@ -259,8 +347,12 @@ struct WorkoutView<ExtraTab: View>: View {
         .contentShape(Rectangle())
         .onTapGesture {
             if endCountdown > 0 { cancelEndCountdown() }
+            if holdCountdown > 0 { cancelHoldCountdown() }
         }
-        .onChange(of: page) { _, _ in cancelEndCountdown() }
+        .onChange(of: page) { _, _ in
+            cancelEndCountdown()
+            cancelHoldCountdown()
+        }
     }
 
     private func startEndCountdown() {
@@ -286,6 +378,29 @@ struct WorkoutView<ExtraTab: View>: View {
         endTimer?.invalidate()
         endTimer = nil
         endCountdown = 0
+    }
+
+    private func startHoldCountdown() {
+        cancelEndCountdown()
+        holdCountdown = 0.001
+        holdTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            holdCountdown += 0.05
+            if holdCountdown >= 3.0 {
+                cancelHoldCountdown()
+                if UserDefaults.standard.bool(forKey: "holdExplainerShown") {
+                    workout.holdRide()
+                } else {
+                    holdExplainerDontShow = false
+                    showHoldExplainer = true
+                }
+            }
+        }
+    }
+
+    private func cancelHoldCountdown() {
+        holdTimer?.invalidate()
+        holdTimer = nil
+        holdCountdown = 0
     }
 }
 
@@ -343,6 +458,8 @@ struct DynamicMetricsPage: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .safeAreaPadding(.top)
     }
 }

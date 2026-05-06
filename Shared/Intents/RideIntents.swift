@@ -78,8 +78,9 @@ struct StartRideIntent: AppIntent {
             }
         }
         
+        let finalMessage = message
         await MainActor.run {
-            ConnectivityManager.shared.sendRideCommand(message)
+            ConnectivityManager.shared.sendRideCommand(finalMessage)
         }
 
         // (2) HKHealthStore.startWatchApp — guaranteed to launch + foreground watch
@@ -163,7 +164,7 @@ struct EndRideAppIntent: AppIntent {
         }
         let movingTime = await PhoneTelemetryStore.shared.movingTime
         if movingTime < 60 {
-            await ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+            await RideSessionManager.shared.sendDiscardRide()
             return .result(dialog: "Ride was under 1 minute and has been discarded.")
         }
         await RideSessionManager.shared.endRide()
@@ -335,7 +336,56 @@ struct SendRouteToWatchIntent: AppIntent {
     }
 }
 
+// MARK: - Continue Held Ride
+
+struct ContinueHeldRideIntent: AppIntent {
+    static var title: LocalizedStringResource = "Continue Held Ride"
+    static var description: IntentDescription = "Resumes a ride that was placed on hold."
+    static var openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        #if os(iOS)
+        // Same two-pronged approach as StartRideIntent:
+        // 1. WC message (delivers immediately if reachable, or queued via userInfo)
+        // 2. startWatchApp — guarantees the watch app is foregrounded so the WC message lands
+        guard let held = await loadHeldRide() else {
+            return .result(dialog: "No held ride found.")
+        }
+
+        await MainActor.run {
+            ConnectivityManager.shared.sendContinueHeldRide(rideID: held.id)
+        }
+
+        let config = HKWorkoutConfiguration()
+        config.activityType = await held.activityType.hkType
+        config.locationType = .outdoor
+        HKHealthStore().startWatchApp(with: config) { _, _ in
+            logger.info("[ContinueHeldRide] startWatchApp returned")
+        }
+
+        return .result(dialog: "Resuming your held ride.")
+        #elseif os(watchOS)
+        return .result(dialog: "Use the phone app to continue a held ride.")
+        #endif
+    }
+}
+
 // MARK: - Helpers
+
+/// Scan the phone-side rides directory for a ride that is on hold.
+private func loadHeldRide() -> RideSummary? {
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    let dir  = docs.appendingPathComponent("rides", isDirectory: true)
+    guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }
+    for file in files where file.pathExtension == "json" {
+        if let data = try? Data(contentsOf: file),
+           let summary = try? JSONDecoder().decode(RideSummary.self, from: data),
+           summary.onHold {
+            return summary
+        }
+    }
+    return nil
+}
 
 /// Load the full Route model from disk by UUID (phone-side Documents/routes/).
 private func loadRoute(id: UUID) -> Route? {

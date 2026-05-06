@@ -19,6 +19,32 @@ enum AutoPauseState {
     case tentativeResume
 }
 
+private struct CheckpointMeta: Codable, Sendable {
+    let rideID: UUID
+    let startDate: Date
+    let name: String
+    let activityType: ActivityType
+    let distance: Double
+    let movingTime: TimeInterval
+    let elapsedTime: TimeInterval
+    let calories: Double
+    let elevationGain: Double
+    let elevationLoss: Double
+    let avgSpeed: Double
+    let maxSpeed: Double
+    let avgHeartRate: Double?
+    let maxHeartRate: Double?
+    let avgPower: Double?
+    let maxPower: Double?
+    let highestElevation: Double?
+    let lowestElevation: Double?
+    let pointCount: Int
+}
+
+private func decodeCheckpointMeta(_ data: Data) -> CheckpointMeta? {
+    try? JSONDecoder().decode(CheckpointMeta.self, from: data)
+}
+
 class WorkoutManager: NSObject, ObservableObject {
     @Published var isActive = false
     @Published var isPaused = false
@@ -103,6 +129,9 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var completedRideSummary: WatchRideSummary?
     /// Set when healthKitAutoUpload is off — prompts the user to save or discard the HK workout
     @Published var showHealthKitPrompt = false
+    /// Set when starting a new ride would discard an existing held ride.
+    /// The watch UI should show a confirmation sheet and call the closure to proceed or nil to cancel.
+    @Published var pendingStartConfirmation: (() -> Void)?
     /// Continuation called with `true` to save to HealthKit, `false` to discard
     var healthKitPromptHandler: ((Bool) -> Void)?
 
@@ -125,6 +154,9 @@ class WorkoutManager: NSObject, ObservableObject {
     private var timerAccumulated: TimeInterval = 0
     private var displayTimer: Timer?
     private var workoutStartDate: Date?
+    /// Set once at the very beginning of a ride (or restored from summary.date on continuation).
+    /// Never reset mid-ride — elapsed time is always relative to this.
+    private var initialRideStartDate: Date?
 
     let navigation = NavigationTracker()
 
@@ -156,6 +188,15 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Periodic voice alert connection check (proactive ping)
     private var connectionCheckTimer: Timer?
+
+    // Checkpoint / crash recovery
+    private var checkpointTimer: Timer?
+    private var lastCheckpointLocationCount = 0
+    private var currentRideID: UUID?
+    private var continuationBase: RideSummary?
+    @Published var recoveredRideSummary: RideSummary?
+
+    weak var rideStore: RideStore?
 
     // Mirroring: set true after delay post-mirroring, false on error/disconnect.
     // Re-arms via DispatchWorkItem after 10s to detect phone reconnection.
@@ -207,6 +248,7 @@ class WorkoutManager: NSObject, ObservableObject {
         workoutStartDate = Date()
         timerStart = workoutStartDate
         timerAccumulated = 0
+        initialRideStartDate = workoutStartDate
         startDisplayTimer()
 
         isActive = true
@@ -262,17 +304,6 @@ class WorkoutManager: NSObject, ObservableObject {
                 return
             }
 
-            // Battery optimization only with a route (needs turn distances)
-            if self.hasRoute {
-                let mode = self.battery.recommendedMode(
-                    distanceToNextTurn: self.navigation.distanceToNextTurn,
-                    isOffRoute: self.navigation.isOffRoute,
-                    speed: self.speed,
-                    floor: self.ridePreferences.gpsAccuracyFloor,
-                    dynamicOptimization: self.ridePreferences.dynamicGPSOptimization)
-                self.battery.apply(mode: mode, to: self.locationManager)
-            }
-
             self.updateAutoPause()
 
             // Recording + distance based on auto-pause state
@@ -297,15 +328,14 @@ class WorkoutManager: NSObject, ObservableObject {
                 self.tentativeLocations.append(location)
             }
 
-            // Battery management
+            // Battery management (consolidated — runs for both route and free rides)
             let mode = self.battery.recommendedMode(
                 distanceToNextTurn: self.navigation.distanceToNextTurn,
                 isOffRoute: self.navigation.isOffRoute,
                 speed: self.speed,
+                floor: self.ridePreferences.gpsAccuracyFloor,
                 dynamicOptimization: self.ridePreferences.dynamicGPSOptimization)
             self.battery.apply(mode: mode, to: self.locationManager)
-
-            self.updateAutoPause()
         }
     }
     // END SIM
@@ -466,6 +496,11 @@ class WorkoutManager: NSObject, ObservableObject {
 
     /// Start a ride by creating a new local HKWorkoutSession (default path).
     func start(activity: ActivityType) {
+        // Discard any existing held ride (caller must have already confirmed with user)
+        if continuationBase == nil {
+            autoFinalizeHeldRideIfNeeded()
+        }
+
         let config = HKWorkoutConfiguration()
         config.activityType = activity.hkType
         config.locationType = .outdoor
@@ -524,25 +559,47 @@ class WorkoutManager: NSObject, ObservableObject {
 
         workoutStartDate = Date()
         timerStart = workoutStartDate
-        timerAccumulated = 0
+        // When continuing a held ride, timerAccumulated is pre-seeded; don't zero it
+        if continuationBase == nil {
+            timerAccumulated = 0
+            initialRideStartDate = workoutStartDate
+        }
         startDisplayTimer()
 
         isActive = true
         isPaused = false
         autoPauseState = .moving
         slowSampleCount = 0
-        lastCommittedLocation = nil
+        // Seed lastCommittedLocation from restored track end when continuing
+        lastCommittedLocation = continuationBase != nil ? recordedLocations.last : nil
         skipNextDistanceGap = false
-        lastSplitDistance = 0
-        currentSplitNumber = 0
-        splitStartMovingTime = 0
-        splitStartDistance = 0
+        // Split tracking anchors to current accumulated distance when continuing.
+        // When resuming a held ride, restore the split number and last-split boundary
+        // so numbering and timing carry over correctly (e.g. 12 mi in at 5mi splits → split 3 fires at 15mi).
+        let splitDist = navigationAlerts.splitAlerts.splitDistance
+        if continuationBase != nil && splitDist > 0 {
+            currentSplitNumber = Int(totalDistance / splitDist)
+            lastSplitDistance = Double(currentSplitNumber) * splitDist
+        } else {
+            currentSplitNumber = 0
+            lastSplitDistance = totalDistance
+        }
+        splitStartMovingTime = movingTime
+        splitStartDistance = totalDistance
         splitMaxSpeed = 0
         splitHRSum = 0
         splitHRCount = 0
         initialRouteName = navigation.processedRoute?.name
         startTelemetryTimer()
         startConnectionCheckTimer()
+
+        // Only assign a fresh ride ID and reset checkpoint counter when NOT continuing a held ride
+        if continuationBase == nil {
+            currentRideID = UUID()
+            lastCheckpointLocationCount = 0
+        }
+        startCheckpointTimer()
+        continuationBase = nil  // clear after use
     }
 
     func pauseSession() {
@@ -685,6 +742,7 @@ class WorkoutManager: NSObject, ObservableObject {
         stopDisplayTimer()
         stopTelemetryTimer()
         stopConnectionCheckTimer()
+        stopCheckpointTimer()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
         
@@ -807,6 +865,7 @@ class WorkoutManager: NSObject, ObservableObject {
             } else {
                 builder?.discardWorkout()
             }
+            deleteCheckpointFiles()
             cleanup()
         }
     }
@@ -841,6 +900,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.speed = 0
             self.totalDistance = 0
             self.workoutStartDate = nil
+            self.initialRideStartDate = nil
             self.elapsedTime = 0
             self.movingTime = 0
             self.heartRate = 0
@@ -864,6 +924,8 @@ class WorkoutManager: NSObject, ObservableObject {
             self.powerSampleCount = 0
             self.gradeWindowLocations = []
             self.liveElevRefAltitude = nil
+            self.currentRideID = nil
+            self.continuationBase = nil
         }
     }
 
@@ -876,9 +938,9 @@ class WorkoutManager: NSObject, ObservableObject {
         displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             DispatchQueue.main.async {
-                // Elapsed time always counts from workout start (wall-clock time)
-                if let startDate = self.workoutStartDate {
-                    self.elapsedTime = Date().timeIntervalSince(startDate)
+                // Elapsed time always counts from the very first start of this ride
+                if let origin = self.initialRideStartDate {
+                    self.elapsedTime = Date().timeIntervalSince(origin)
                 }
                 // Moving time only ticks while not paused
                 if !self.isAutoPaused && !self.isPaused {
@@ -1152,7 +1214,8 @@ class WorkoutManager: NSObject, ObservableObject {
         }
 
         let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
-        let trackFilename = "\(UUID().uuidString).track"
+        let rideID = currentRideID ?? UUID()
+        let trackFilename = "\(rideID.uuidString).track"
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(trackFilename)
 
@@ -1164,7 +1227,7 @@ class WorkoutManager: NSObject, ObservableObject {
         }
 
         var summary = RideSummary(
-            id: UUID(),
+            id: rideID,
             name: rideName,
             activityType: activity,
             date: Date(),
@@ -1199,6 +1262,7 @@ class WorkoutManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.onRideCompleted?(summary)
             ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
+            self.deleteCheckpointFiles()
         }
     }
 
@@ -1283,6 +1347,383 @@ class WorkoutManager: NSObject, ObservableObject {
     private func stopConnectionCheckTimer() {
         connectionCheckTimer?.invalidate()
         connectionCheckTimer = nil
+    }
+
+    // MARK: - Checkpoint (Crash Recovery)
+
+    private var checkpointTrackURL: URL {
+        ConnectivityManager.ridesDirectory.appendingPathComponent("checkpoint.track")
+    }
+    private var checkpointMetaURL: URL {
+        ConnectivityManager.ridesDirectory.appendingPathComponent("checkpoint.json")
+    }
+
+    private func startCheckpointTimer() {
+        checkpointTimer?.invalidate()
+        guard let interval = ridePreferences.checkpointInterval.interval else { return }
+        checkpointTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.saveCheckpoint()
+        }
+    }
+
+    private func stopCheckpointTimer() {
+        checkpointTimer?.invalidate()
+        checkpointTimer = nil
+    }
+
+    private func saveCheckpoint() {
+        guard isActive, !isPaused, autoPauseState == .moving else { return }
+        let currentCount = recordedLocations.count
+        guard currentCount > lastCheckpointLocationCount, currentCount > 0 else { return }
+
+        let locations = recordedLocations
+        let heartRates = recordedHeartRates
+        let powers = recordedPowers
+        let rideID = currentRideID ?? UUID()
+
+        let rideName = currentRideName()
+        let meta = CheckpointMeta(
+            rideID: rideID,
+            startDate: workoutStartDate ?? Date(),
+            name: rideName,
+            activityType: currentActivity,
+            distance: totalDistance,
+            movingTime: movingTime,
+            elapsedTime: elapsedTime,
+            calories: activeCalories,
+            elevationGain: liveElevationGain,
+            elevationLoss: liveElevationLoss,
+            avgSpeed: movingTime > 0 ? totalDistance / movingTime : 0,
+            maxSpeed: maxSpeed,
+            avgHeartRate: heartRateSampleCount > 0 ? averageHeartRate : nil,
+            maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
+            avgPower: powerSampleCount > 0 ? averagePower : nil,
+            maxPower: maxPower > 0 ? maxPower : nil,
+            highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
+            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil,
+            pointCount: locations.count
+        )
+
+        let trackURL = checkpointTrackURL
+        let metaURL = checkpointMetaURL
+
+        Task {
+            let trackData = TrackEncoder.encodeV5(locations, heartRates: heartRates, powers: powers)
+
+            let metaData = await MainActor.run {
+                try? JSONEncoder().encode(meta)
+            }
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                do {
+                    try trackData.write(to: trackURL, options: .atomic)
+                } catch {
+                    print("[Checkpoint] Failed to write track: \(error)")
+                    return
+                }
+
+                guard let metaData else { return }
+
+                do {
+                    try metaData.write(to: metaURL, options: .atomic)
+                } catch {
+                    print("[Checkpoint] Failed to write meta: \(error)")
+                    return
+                }
+
+                DispatchQueue.main.async {
+                    self?.lastCheckpointLocationCount = locations.count
+                }
+            }
+        }
+    }
+
+    private func deleteCheckpointFiles() {
+        try? FileManager.default.removeItem(at: checkpointTrackURL)
+        try? FileManager.default.removeItem(at: checkpointMetaURL)
+    }
+
+    func recoverCheckpointIfNeeded() {
+        guard !isActive else { return }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: checkpointMetaURL.path),
+              fm.fileExists(atPath: checkpointTrackURL.path) else { return }
+
+        print("[Checkpoint] Found checkpoint, attempting recovery...")
+
+        let metaURL = checkpointMetaURL
+        let trackURL = checkpointTrackURL
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            guard let metaData = try? Data(contentsOf: metaURL),
+                  let meta = decodeCheckpointMeta(metaData) else {
+                print("[Checkpoint] Could not decode meta, discarding")
+                self.deleteCheckpointFiles()
+                return
+            }
+
+            guard let trackData = try? Data(contentsOf: trackURL), !trackData.isEmpty else {
+                print("[Checkpoint] Empty track data, discarding")
+                self.deleteCheckpointFiles()
+                return
+            }
+
+            let trackFilename = "\(meta.rideID.uuidString).track"
+            let destURL = ConnectivityManager.ridesDirectory.appendingPathComponent(trackFilename)
+            do {
+                if FileManager.default.fileExists(atPath: destURL.path) {
+                    try FileManager.default.removeItem(at: destURL)
+                }
+                try FileManager.default.copyItem(at: trackURL, to: destURL)
+            } catch {
+                print("[Checkpoint] Failed to copy track: \(error)")
+                self.deleteCheckpointFiles()
+                return
+            }
+
+            let summary = RideSummary(
+                id: meta.rideID,
+                name: meta.name,
+                activityType: meta.activityType,
+                date: meta.startDate,
+                elapsedTime: meta.elapsedTime,
+                movingTime: meta.movingTime,
+                distance: meta.distance,
+                calories: meta.calories,
+                elevationGain: meta.elevationGain,
+                elevationLoss: meta.elevationLoss,
+                avgSpeed: meta.avgSpeed,
+                pointCount: meta.pointCount,
+                trackFilename: trackFilename,
+                maxSpeed: meta.maxSpeed > 0 ? meta.maxSpeed : nil,
+                avgPower: meta.avgPower,
+                maxPower: meta.maxPower,
+                avgHeartRate: meta.avgHeartRate,
+                maxHeartRate: meta.maxHeartRate,
+                highestElevation: meta.highestElevation,
+                lowestElevation: meta.lowestElevation,
+                isOnHold: true
+            )
+
+            ConnectivityManager.shared.sendRide(summary: summary, trackURL: destURL)
+            self.deleteCheckpointFiles()
+
+            DispatchQueue.main.async {
+                self.recoveredRideSummary = summary
+                print("[Checkpoint] Recovered ride: \(summary.name), \(summary.pointCount) points")
+            }
+        }
+    }
+
+    // MARK: - Hold Ride
+
+    private func currentRideName() -> String {
+        if let routeName = initialRouteName { return routeName }
+        let hour = Calendar.current.component(.hour, from: Date())
+        switch hour {
+        case 5..<12:  return "Morning Ride"
+        case 12..<17: return "Afternoon Ride"
+        case 17..<21: return "Evening Ride"
+        default:      return "Night Ride"
+        }
+    }
+
+    func holdRide() {
+        guard isActive, !isSimulating else { return }
+
+        stopCheckpointTimer()
+        stopTelemetryTimer()
+        stopConnectionCheckTimer()
+        routeInsertionTimer?.invalidate()
+        routeInsertionTimer = nil
+
+        if autoPauseState == .tentativeResume {
+            commitTentativeBuffer()
+        }
+
+        let rideID = currentRideID ?? UUID()
+        let trackFilename = "\(rideID.uuidString).track"
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(trackFilename)
+
+        let locationsToSave = recordedLocations
+        let hrsToSave = recordedHeartRates
+        let powersToSave = recordedPowers
+
+        // Use the original ride start date so elapsed time spans the whole ride
+        let summary = RideSummary(
+            id: rideID,
+            name: currentRideName(),
+            activityType: currentActivity,
+            date: initialRideStartDate ?? workoutStartDate ?? Date(),
+            elapsedTime: elapsedTime,
+            movingTime: movingTime,
+            distance: totalDistance,
+            calories: activeCalories,
+            elevationGain: liveElevationGain,
+            elevationLoss: liveElevationLoss,
+            avgSpeed: movingTime > 0 ? totalDistance / movingTime : 0,
+            pointCount: locationsToSave.count,
+            trackFilename: trackFilename,
+            maxSpeed: maxSpeed > 0 ? maxSpeed : nil,
+            avgPower: powerSampleCount > 0 ? averagePower : nil,
+            maxPower: maxPower > 0 ? maxPower : nil,
+            avgHeartRate: heartRateSampleCount > 0 ? averageHeartRate : nil,
+            maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
+            highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
+            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil,
+            isOnHold: true
+        )
+
+        let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
+        do {
+            try trackData.write(to: tempURL)
+        } catch {
+            print("[Hold] Failed to write track: \(error)")
+            return
+        }
+
+        VoiceNavigator.shared.reset()
+        VoiceNavigator.shared.workoutManager = nil
+        navigation.reset()
+        isMirroringReady = false
+        mirroringRetryWorkItem?.cancel()
+        mirroringRetryWorkItem = nil
+
+        isLocalStateChange = true
+        if let start = timerStart {
+            timerAccumulated += Date().timeIntervalSince(start)
+        }
+        timerStart = nil
+        stopDisplayTimer()
+        locationManager.stopUpdatingLocation()
+        locationManager.stopUpdatingHeading()
+        deleteCheckpointFiles()
+
+        // Finish the HK session for this segment so it saves to Fitness
+        let endDate = Date()
+        session?.end()
+
+        let finalBatch = pendingRouteLocations
+        pendingRouteLocations = []
+        let insertGroup = DispatchGroup()
+        if !finalBatch.isEmpty {
+            insertGroup.enter()
+            routeBuilder?.insertRouteData(finalBatch) { _, _ in insertGroup.leave() }
+        }
+
+        insertGroup.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            self.builder?.endCollection(withEnd: endDate) { _, _ in
+                self.builder?.finishWorkout { [weak self] workout, error in
+                    guard let self else { return }
+                    if let workout {
+                        self.routeBuilder?.finishRoute(with: workout, metadata: nil) { _, _ in
+                            print("[Hold] HK segment saved to Fitness")
+                        }
+                    } else {
+                        print("[Hold] HK segment not saved: \(String(describing: error))")
+                    }
+                    DispatchQueue.main.async {
+                        ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
+                        self.cleanup()
+                    }
+                }
+            }
+        }
+    }
+
+    func continueHeldRide(summary: RideSummary) {
+        guard !isActive else { return }
+
+        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
+        guard let trackData = try? Data(contentsOf: trackURL) else {
+            print("[Continue] Could not load track for held ride")
+            return
+        }
+
+        let points = TrackEncoder.decodeV5Full(trackData)
+        let hrValues = points.compactMap { $0.heartRate > 0 ? $0.heartRate : nil }
+        let pwValues = points.compactMap { $0.power > 0 ? $0.power : nil }
+
+        continuationBase = summary
+        initialRideStartDate = summary.date
+
+        // Pre-populate arrays from old track
+        recordedLocations = points.map { pt in
+            CLLocation(
+                coordinate: CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lon),
+                altitude: pt.altitude,
+                horizontalAccuracy: 0,
+                verticalAccuracy: 0,
+                timestamp: Date(timeIntervalSince1970: pt.timestamp))
+        }
+        recordedHeartRates = points.map { $0.heartRate > 0 ? $0.heartRate : nil }
+        recordedPowers = points.map { $0.power > 0 ? $0.power : nil }
+
+        // Restore running sums for accurate averages over the whole ride
+        heartRateSum = hrValues.reduce(0, +)
+        heartRateSampleCount = hrValues.count
+        powerSum = pwValues.reduce(0, +)
+        powerSampleCount = pwValues.count
+
+        // Restore accumulated stats
+        totalDistance = summary.distance
+        movingTime = summary.movingTime
+        timerAccumulated = summary.elapsedTime
+        liveElevationGain = summary.elevationGain
+        liveElevationLoss = summary.elevationLoss
+        maxSpeed = summary.maxSpeed ?? 0
+        maxHeartRate = summary.maxHeartRate ?? 0
+        maxPower = summary.maxPower ?? 0
+        highestElevation = summary.highestElevation ?? -Double.greatestFiniteMagnitude
+        lowestElevation = summary.lowestElevation ?? Double.greatestFiniteMagnitude
+        averageHeartRate = heartRateSampleCount > 0 ? heartRateSum / Double(heartRateSampleCount) : 0
+        averagePower = powerSampleCount > 0 ? powerSum / Double(powerSampleCount) : 0
+
+        // Stable ID so the final save overwrites the held summary on phone
+        currentRideID = summary.id
+        lastCheckpointLocationCount = recordedLocations.count
+
+        start(activity: summary.activityType)
+    }
+
+    func finalizeHeldRide(summary: RideSummary) {
+        guard !isActive else { return }
+
+        var completed = summary
+        completed.isOnHold = nil
+        completed.wasAutoFinalized = nil
+
+        // Update local store immediately
+        rideStore?.update(completed)
+
+        // Re-send to phone so it receives the updated (completed) summary
+        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
+        ConnectivityManager.shared.sendRide(summary: completed, trackURL: trackURL)
+    }
+
+    func discardHeldRide(summary: RideSummary) {
+        rideStore?.delete(summary)
+        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
+        try? FileManager.default.removeItem(at: trackURL)
+        // Notify phone to remove it as well
+        ConnectivityManager.shared.sendDiscardRide(rideID: summary.id)
+        print("[Hold] Discarded held ride: \(summary.name)")
+    }
+
+    func autoFinalizeHeldRideIfNeeded() {
+        guard let held = rideStore?.heldRide else { return }
+
+        var completed = held
+        completed.isOnHold = nil
+        completed.wasAutoFinalized = true
+
+        rideStore?.update(completed)
+        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(held.trackFilename)
+        ConnectivityManager.shared.sendRide(summary: completed, trackURL: trackURL)
+        print("[Hold] Auto-finalized held ride before new ride: \(held.name)")
     }
 
     private func sendConnectionPing() {
@@ -1443,13 +1884,21 @@ extension WorkoutManager: CLLocationManagerDelegate {
         guard let location = locations.last else { return }
         guard location.horizontalAccuracy >= 0,
               location.horizontalAccuracy < 50 else { return }
+        // GPS course is more accurate than compass for direction of travel while cycling.
+        // Use it whenever the signal is valid and the rider is moving.
+        if location.course >= 0 && location.speed > 0.5 {
+            DispatchQueue.main.async { self.heading = location.course }
+        }
         processLocation(location)
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
         guard newHeading.headingAccuracy >= 0 else { return }
         DispatchQueue.main.async {
-            self.heading = newHeading.trueHeading
+            // Fall back to compass only when stopped (GPS course is unavailable/unreliable at low speed)
+            if self.speed <= 0.5 {
+                self.heading = newHeading.trueHeading
+            }
         }
     }
 

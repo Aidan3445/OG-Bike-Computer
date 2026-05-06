@@ -9,6 +9,7 @@ import SwiftUI
 
 struct BatterySettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    @ObservedObject var metricConfig: MetricConfigStore
 
     var body: some View {
         Form {
@@ -117,7 +118,7 @@ struct BatterySettingsView: View {
                 }
 
                 NavigationLink {
-                    RideSettingsView(userSettings: userSettings)
+                    RideSettingsView(userSettings: userSettings, metricConfig: metricConfig)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {

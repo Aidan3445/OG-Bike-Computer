@@ -34,6 +34,8 @@ struct RouteDetailView: View {
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
     @State private var cachedElevationData: [ProcessedPoint] = []
     @State private var panelPage = 0
+    @State private var scrubDistance: Double? = nil
+    @State private var scrubCoordinate: CLLocationCoordinate2D? = nil
 
     var body: some View {
         let _ = unitState.preferences
@@ -118,6 +120,24 @@ struct RouteDetailView: View {
                     }
                 }
 
+                // Waypoints / POIs
+                ForEach(Array((route.waypoints?.pois ?? []).enumerated()), id: \.offset) { _, poi in
+                    Annotation(poi.name, coordinate: poi.coordinate) {
+                        WaypointPin()
+                    }
+                }
+
+                // Scrub position indicator
+                if let coord = scrubCoordinate {
+                    Annotation("", coordinate: coord) {
+                        Circle()
+                            .fill(.white)
+                            .frame(width: 12, height: 12)
+                            .overlay(Circle().stroke(Color.green, lineWidth: 3))
+                            .shadow(radius: 3)
+                    }
+                }
+
                 // Current location
                 UserAnnotation()
             }
@@ -188,7 +208,10 @@ struct RouteDetailView: View {
                             // Page 1: Elevation Chart
                             if !cachedElevationData.isEmpty {
                                 VStack {
-                                    RouteElevationChartView(points: cachedElevationData)
+                                    RouteElevationChartView(points: cachedElevationData, scrubDistance: $scrubDistance)
+                                        .onChange(of: scrubDistance) { _, dist in
+                                            scrubCoordinate = dist.map { interpolateRouteCoordinate(at: $0) } ?? nil
+                                        }
                                     Spacer(minLength: 0)
                                 }
                                 .tag(1)
@@ -196,6 +219,9 @@ struct RouteDetailView: View {
                         }
                         .tabViewStyle(.page(indexDisplayMode: .never))
                         .frame(height: panelState == .expanded ? 170 : (route.elevationGain > 0 ? 70 : 60))
+                        // Lock paging while scrub is active so the chart drag doesn't
+                        // bleed into a horizontal page swap.
+                        .scrollDisabled(scrubDistance != nil)
                         .onChange(of: panelPage) { _, newPage in
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                 panelState = newPage == 1 ? .expanded : .compact
@@ -327,6 +353,25 @@ struct RouteDetailView: View {
 
         // Build chart data
         cachedElevationData = buildRouteElevationData(from: route)
+    }
+
+    private func interpolateRouteCoordinate(at targetDist: Double) -> CLLocationCoordinate2D? {
+        guard cachedCoordinates.count >= 2 else { return nil }
+        let pts = route.points
+        var cumDist: Double = 0
+        for i in 1..<pts.count {
+            let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
+            let cur  = CLLocation(latitude: pts[i].lat, longitude: pts[i].lon)
+            let seg  = cur.distance(from: prev)
+            if cumDist + seg >= targetDist {
+                let fraction = seg > 0 ? (targetDist - cumDist) / seg : 0
+                let lat = pts[i - 1].lat + fraction * (pts[i].lat - pts[i - 1].lat)
+                let lon = pts[i - 1].lon + fraction * (pts[i].lon - pts[i - 1].lon)
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            }
+            cumDist += seg
+        }
+        return cachedCoordinates.last
     }
 }
 

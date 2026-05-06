@@ -18,6 +18,7 @@ import Foundation
 
 /// Helpers that read/write App Group defaults on the calling thread,
 /// avoiding Sendable warnings from the global `UserDefaults` instance.
+@MainActor
 private enum RideCommandBridge {
     private static let defaults = UserDefaults(suiteName: "group.com.aidan3445.computa")
 
@@ -44,7 +45,7 @@ private enum RideCommandBridge {
 /// updates instantly without waiting for the main app round-trip.
 private func optimisticallyUpdateLiveActivity(isPaused: Bool) async {
     guard let activity = Activity<RideActivityAttributes>.activities.first else { return }
-    var newState = activity.contentState
+    var newState = activity.content.state
     newState.isPaused = isPaused
     await activity.update(ActivityContent(state: newState, staleDate: nil))
 }
@@ -67,6 +68,21 @@ struct PauseResumeRideIntent: LiveActivityIntent {
         // Queue the command for the main app to execute
         await RideCommandBridge.send(isPaused ? "resume" : "pause")
         return .result()
+    }
+}
+
+// MARK: - Hold Ride
+
+struct HoldRideIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Hold Ride"
+    static var description: IntentDescription = "Puts the current ride on hold to continue later."
+
+    // Hide from shortcuts/automations
+    static var isDiscoverable: Bool = false
+
+    func perform() async throws -> some IntentResult {
+        await RideCommandBridge.send("hold")
+        return .result(dialog: "Ride on hold. Resume it later from the app or ride list.")
     }
 }
 

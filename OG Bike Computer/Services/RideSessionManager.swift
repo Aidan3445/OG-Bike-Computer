@@ -14,8 +14,23 @@ import Combine
 class RideSessionManager: ObservableObject {
     static let shared = RideSessionManager()
 
-    @Published var isRideActive = false
+    @Published var isRideActive = false {
+        didSet {
+            if oldValue && !isRideActive {
+                if suppressAwaitingOnNextEnd {
+                    suppressAwaitingOnNextEnd = false
+                } else {
+                    ConnectivityManager.shared.markAwaitingIncomingRide()
+                }
+            }
+        }
+    }
     @Published var isPaused = false
+
+    /// Set when we're about to discard the ride — prevents the next true→false
+    /// transition on `isRideActive` from showing a "Waiting for ride from watch"
+    /// placeholder, since no ride will actually transfer.
+    private var suppressAwaitingOnNextEnd = false
 
     /// The mirrored workout session from the watch.
     /// Set by AppDelegate when mirroring starts; cleared when session ends.
@@ -54,6 +69,17 @@ class RideSessionManager: ObservableObject {
     func endRide() {
         guard let session = mirroredSession else { return }
         session.end()
+    }
+
+    func holdRide() {
+        ConnectivityManager.shared.sendHoldRide()
+    }
+
+    /// Send a discardRide command to the watch. Suppresses the "waiting for ride"
+    /// placeholder since no ride will transfer.
+    func sendDiscardRide() {
+        suppressAwaitingOnNextEnd = true
+        ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
     }
 
     // MARK: - Optimistic Updates
@@ -202,18 +228,20 @@ class RideSessionManager: ObservableObject {
             resumeRide()
         case "discard":
             // Short ride — discard both HK workout and app recording
-            ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+            sendDiscardRide()
             RideNotificationManager.shared.postRideDiscarded()
         case "end":
             // Normal end — check moving time as a safety net
             let movingTime = PhoneTelemetryStore.shared.movingTime
             if movingTime < 60 {
-                ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+                sendDiscardRide()
                 RideNotificationManager.shared.postRideDiscarded()
             } else {
                 endRide()
                 RideNotificationManager.shared.postRideEnded()
             }
+        case "hold":
+            holdRide()
         default:
             break
         }

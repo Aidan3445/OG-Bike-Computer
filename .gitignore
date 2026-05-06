@@ -7,7 +7,7 @@ ogbc-pages/
 ogbc-pages/**/*
 
 ## Integration Secrets
-Secrets.swift
+OG Bike Computer/Services/Integrations/Secrets.swift
 
 ## Claude
 .claude/*

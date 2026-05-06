@@ -33,6 +33,10 @@ struct RideSummary: Codable, Identifiable {
     let highestElevation: Double?
     let lowestElevation: Double?
     var uploads: [ServiceUploadRecord]?
+    var isOnHold: Bool?
+    var wasAutoFinalized: Bool?
+
+    var onHold: Bool { isOnHold == true }
 
     init(id: UUID, name: String, activityType: ActivityType, date: Date,
          elapsedTime: TimeInterval, movingTime: TimeInterval, distance: Double,
@@ -41,7 +45,8 @@ struct RideSummary: Codable, Identifiable {
          maxSpeed: Double? = nil, avgPower: Double? = nil, maxPower: Double? = nil,
          avgHeartRate: Double? = nil, maxHeartRate: Double? = nil,
          highestElevation: Double? = nil, lowestElevation: Double? = nil,
-         uploads: [ServiceUploadRecord]? = nil) {
+         uploads: [ServiceUploadRecord]? = nil,
+         isOnHold: Bool? = nil, wasAutoFinalized: Bool? = nil) {
         self.id = id
         self.name = name
         self.activityType = activityType
@@ -63,6 +68,8 @@ struct RideSummary: Codable, Identifiable {
         self.highestElevation = highestElevation
         self.lowestElevation = lowestElevation
         self.uploads = uploads
+        self.isOnHold = isOnHold
+        self.wasAutoFinalized = wasAutoFinalized
     }
 
     init(from decoder: Decoder) throws {
@@ -89,5 +96,7 @@ struct RideSummary: Codable, Identifiable {
         highestElevation = try container.decodeIfPresent(Double.self, forKey: .highestElevation)
         lowestElevation = try container.decodeIfPresent(Double.self, forKey: .lowestElevation)
         uploads = try container.decodeIfPresent([ServiceUploadRecord].self, forKey: .uploads)
+        isOnHold = try container.decodeIfPresent(Bool.self, forKey: .isOnHold)
+        wasAutoFinalized = try container.decodeIfPresent(Bool.self, forKey: .wasAutoFinalized)
     }
 }

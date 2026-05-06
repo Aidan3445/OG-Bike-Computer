@@ -50,6 +50,20 @@ struct AppShortcuts: AppShortcutsProvider {
             systemImageName: "pause.fill"
         )
 
+        // Continue held ride
+        AppShortcut(
+            intent: ContinueHeldRideIntent(),
+            phrases: [
+                "Continue my held ride in \(.applicationName)",
+                "Resume held ride in \(.applicationName)",
+
+                "Continue my \(.applicationName) held ride",
+                "Resume \(.applicationName) held ride",
+            ],
+            shortTitle: "Continue Held Ride",
+            systemImageName: "hand.raised.fill"
+        )
+
         // Resume
         AppShortcut(
             intent: ResumeRideAppIntent(),

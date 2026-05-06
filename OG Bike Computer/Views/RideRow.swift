@@ -10,6 +10,7 @@ import SwiftUI
 struct RideRow: View {
     let ride: RideSummary
     let onRename: (String) -> Void
+    var isTransferring: Bool = false
     @ObservedObject private var unitState = UnitState.shared
 
     @State private var showRenameSheet = false
@@ -28,6 +29,19 @@ struct RideRow: View {
                     let uniqueServices = uploads.uniqueByService()
                     ForEach(uniqueServices) { upload in
                         ServiceBadge(service: upload.service)
+                    }
+                }
+                if ride.wasAutoFinalized == true {
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("Auto-saved when a new ride started")
+                }
+                if isTransferring {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .frame(width: 14, height: 14)
                     }
                 }
                 Spacer()

@@ -21,17 +21,26 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         ConnectivityManager.shared.activate()
         ConnectivityManager.shared.attachStores(routeStore: store, rideStore: rideStore)
 
+        workout.rideStore = rideStore
+
         // Wire up WC ride command handlers immediately so they're ready
         // even before ContentView loads. This handles the case where iOS
         // sends a startRide WC message alongside startWatchApp.
         ConnectivityManager.shared.onStartRideRequested = { [weak self] (routeID: UUID?, activity: ActivityType) in
             guard let self = self else { return }
             guard !self.workout.isActive else { return }
-            if let routeID = routeID,
-               let route = self.store.routes.first(where: { $0.id == routeID }) {
-                self.workout.loadRoute(route)
+            let doStart = {
+                if let routeID = routeID,
+                   let route = self.store.routes.first(where: { $0.id == routeID }) {
+                    self.workout.loadRoute(route)
+                }
+                self.workout.start(activity: activity)
             }
-            self.workout.start(activity: activity)
+            if self.rideStore.heldRide != nil {
+                self.workout.pendingStartConfirmation = doStart
+            } else {
+                doStart()
+            }
         }
 
         ConnectivityManager.shared.onChangeRouteRequested = { [weak self] routeID in
@@ -47,6 +56,25 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             guard let self = self, self.workout.isActive else { return }
             self.workout.discard()
         }
+
+        ConnectivityManager.shared.onHoldRideRequested = { [weak self] in
+            guard let self = self, self.workout.isActive else { return }
+            self.workout.holdRide()
+        }
+
+        ConnectivityManager.shared.onContinueHeldRideRequested = { [weak self] rideID in
+            guard let self = self, !self.workout.isActive else { return }
+            guard let held = self.rideStore.heldRide, held.id == rideID else { return }
+            self.workout.continueHeldRide(summary: held)
+        }
+
+        ConnectivityManager.shared.onFinalizeHeldRideRequested = { [weak self] rideID in
+            guard let self = self, !self.workout.isActive else { return }
+            guard let held = self.rideStore.heldRide, held.id == rideID else { return }
+            self.workout.finalizeHeldRide(summary: held)
+        }
+
+        workout.recoverCheckpointIfNeeded()
     }
 
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
@@ -62,12 +90,16 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
     /// Called when iOS triggers `HKHealthStore().startWatchApp(with:)`.
     /// The system launches/foregrounds the watch app and delivers the configuration here.
-    /// Route loading is handled separately via the WC message handler (onStartRideRequested).
+    /// The WC message handler (onStartRideRequested / onContinueHeldRideRequested) is the
+    /// primary start trigger; this is just a foreground signal. If there's a held ride, do
+    /// nothing here — the WC handler is responsible for the continue path.
     func handle(_ workoutConfiguration: HKWorkoutConfiguration) {
         let activityType = ActivityType(hkType: workoutConfiguration.activityType)
 
         Task { @MainActor in
             guard !workout.isActive else { return }
+            // If there's a held ride, let the WC message handler decide what to do.
+            guard rideStore.heldRide == nil else { return }
             workout.start(activity: activityType)
         }
     }
