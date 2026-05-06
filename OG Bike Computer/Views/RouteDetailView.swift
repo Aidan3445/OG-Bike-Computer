@@ -120,6 +120,13 @@ struct RouteDetailView: View {
                     }
                 }
 
+                // Waypoints / POIs
+                ForEach(Array((route.waypoints?.pois ?? []).enumerated()), id: \.offset) { _, poi in
+                    Annotation(poi.name, coordinate: poi.coordinate) {
+                        WaypointPin()
+                    }
+                }
+
                 // Scrub position indicator
                 if let coord = scrubCoordinate {
                     Annotation("", coordinate: coord) {
@@ -212,6 +219,9 @@ struct RouteDetailView: View {
                         }
                         .tabViewStyle(.page(indexDisplayMode: .never))
                         .frame(height: panelState == .expanded ? 170 : (route.elevationGain > 0 ? 70 : 60))
+                        // Lock paging while scrub is active so the chart drag doesn't
+                        // bleed into a horizontal page swap.
+                        .scrollDisabled(scrubDistance != nil)
                         .onChange(of: panelPage) { _, newPage in
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                 panelState = newPage == 1 ? .expanded : .compact

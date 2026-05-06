@@ -47,23 +47,31 @@ struct WorkoutView<ExtraTab: View>: View {
                 .tag(1)
 
             TabView(selection: $tab) {
-                RouteMapView(workout: workout)
-                    .tag(1)
-
-                // Elevation profile (only when route with elevation data available)
-                if workout.hasRoute {
-                    ElevationProfileView(workout: workout)
-                        .tag(2)
-                }
-
-                // Dynamic metric pages from config
-                ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, metricPage in
-                    DynamicMetricsPage(
-                        workout: workout,
-                        metricPage: metricPage,
-                        showOffRouteBanner: index == 0
-                    )
-                    .tag((workout.hasRoute ? 3 : 2) + index)
+                let resolved = WorkoutTabOrder.resolve(
+                    hasRoute: workout.hasRoute,
+                    elevationEnabled: workout.ridePreferences.elevationScreen.enabled,
+                    pages: metricConfig.config.pages,
+                    stored: workout.ridePreferences.tabOrder
+                )
+                ForEach(Array(resolved.enumerated()), id: \.element.id) { index, key in
+                    let tag = index + 1
+                    switch key.kind {
+                    case .routeMap:
+                        RouteMapView(workout: workout)
+                            .tag(tag)
+                    case .elevation:
+                        ElevationProfileView(workout: workout)
+                            .tag(tag)
+                    case .metricPage:
+                        if let page = metricConfig.config.pages.first(where: { $0.id == key.metricPageID }) {
+                            DynamicMetricsPage(
+                                workout: workout,
+                                metricPage: page,
+                                showOffRouteBanner: !resolved.prefix(index).contains(where: { $0.kind == .metricPage })
+                            )
+                            .tag(tag)
+                        }
+                    }
                 }
             }
             .tabViewStyle(.verticalPage)
@@ -139,12 +147,15 @@ struct WorkoutView<ExtraTab: View>: View {
                         withAnimation { tab = 1 }
                     }
                 }
-            .onChange(of: metricConfig.config.pages.count) { _, count in
-                // Clamp tab to valid range when pages are added/removed
-                let extraTabs = workout.hasRoute ? 2 : 1 // map + optional elevation
-                let maxTab = extraTabs + count
-                if tab > maxTab {
-                    withAnimation { tab = max(maxTab, 1) }
+            .onChange(of: metricConfig.config.pages.count) { _, _ in
+                let resolvedCount = WorkoutTabOrder.resolve(
+                    hasRoute: workout.hasRoute,
+                    elevationEnabled: workout.ridePreferences.elevationScreen.enabled,
+                    pages: metricConfig.config.pages,
+                    stored: workout.ridePreferences.tabOrder
+                ).count
+                if tab > resolvedCount {
+                    withAnimation { tab = max(resolvedCount, 1) }
                 }
             }
             .tag(2)

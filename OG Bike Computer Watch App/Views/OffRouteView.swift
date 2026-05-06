@@ -11,48 +11,106 @@ struct OffRouteView: View {
     @ObservedObject var workout: WorkoutManager
     @ObservedObject private var unitState = UnitState.shared
 
+    private var mapConfig: MapScreenConfig { workout.ridePreferences.mapScreen }
+
     var body: some View {
         let _ = unitState.preferences
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             // Bearing arrow back to route
             Image(systemName: "arrow.up")
-                .font(.system(size: 44, weight: .bold))
+                .font(.system(size: 36, weight: .bold))
                 .foregroundStyle(.red)
                 .rotationEffect(.degrees(relativeArrowAngle))
 
             Text("OFF ROUTE")
-                .font(.system(size: 16, weight: .heavy))
+                .font(.system(size: 14, weight: .heavy))
                 .foregroundStyle(.red)
 
             Text(formatTurnDistance(workout.navigation.nearestRouteDistance))
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(.system(size: 18, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.red.opacity(0.8))
 
             if let missed = workout.navigation.missedTurn {
-                Divider()
                 HStack(spacing: 6) {
                     Image(systemName: missed.direction.icon)
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.yellow)
                     Text("Missed \(missed.direction.label)")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.yellow)
                 }
             }
 
-            Spacer()
+            Divider().padding(.vertical, 2)
 
-            HStack {
-                MiniStat(label: "DIST", value: formatDistance(workout.totalDistance))
-                Spacer()
-                MiniStat(label: "TIME", value: formatTime(workout.movingTime))
-            }
-            .padding(.horizontal, 4)
+            // Map-screen stats so the rider doesn't lose stat visibility while off route.
+            mapScreenStats
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
-        .padding(.top, 8)
+        .padding(.top, 6)
         .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private var mapScreenStats: some View {
+        VStack(spacing: 1) {
+            if mapConfig.primaryStat != .none {
+                let primary = resolveStat(mapConfig.primaryStat)
+                HStack(spacing: 2) {
+                    Text(primary.value)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                    if let unit = primary.unit {
+                        Text(unit)
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            ForEach(Array(mapConfig.secondaryStats.enumerated()), id: \.offset) { index, stat in
+                if stat != .none {
+                    let resolved = resolveStat(stat)
+                    let display = resolved.unit != nil ? "\(resolved.value) \(resolved.unit!)" : resolved.value
+                    Text(display)
+                        .font(.system(size: index == mapConfig.secondaryStats.count - 1 ? 9 : 11,
+                                      weight: .semibold, design: .rounded))
+                        .foregroundStyle(index == mapConfig.secondaryStats.count - 1 ? .secondary : .primary)
+                }
+            }
+        }
+    }
+
+    private func resolveStat(_ type: MapStatType) -> (value: String, unit: String?) {
+        switch type {
+        case .speed:
+            return (formatSpeed(workout.speed, false), currentUnits.speed.label)
+        case .averageSpeed:
+            return (formatSpeed(workout.averageSpeed, false), currentUnits.speed.label)
+        case .heartRate:
+            return (workout.heartRate > 0 ? "\(Int(workout.heartRate))" : "--", "bpm")
+        case .distance:
+            return (formatDistance(workout.totalDistance), nil)
+        case .movingTime:
+            return (formatTime(workout.movingTime), nil)
+        case .elapsedTime:
+            return (formatTime(workout.elapsedTime), nil)
+        case .elevation:
+            return (formatElevation(workout.currentElevation), nil)
+        case .grade:
+            return (String(format: "%.1f%%", workout.currentGrade), nil)
+        case .power:
+            return (workout.estimatedPower > 0 ? "\(Int(workout.estimatedPower))" : "--", "W")
+        case .distanceRemaining:
+            return (formatDistance(workout.navigation.distanceRemaining), nil)
+        case .calories:
+            return ("\(Int(workout.activeCalories))", "cal")
+        case .none:
+            return ("", nil)
+        }
     }
 
     // Rotate arrow to point toward the route relative to current heading

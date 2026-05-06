@@ -273,6 +273,9 @@ struct RideDetailView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .frame(height: panelState == .expanded ? 280 : 200)
+                // Lock paging while scrub is active so the chart drag doesn't
+                // bleed into a horizontal page swap.
+                .scrollDisabled(scrubDistance != nil)
 
                 panelPageDots()
             } else {

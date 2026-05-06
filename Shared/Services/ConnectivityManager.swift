@@ -171,7 +171,14 @@ extension ConnectivityManager {
             return
         }
 
-        guard let data = try? JSONEncoder().encode(route) else {
+        // Precompute the simplified elevation series here so the watch never has
+        // to iterate the full point list to render its elevation chart.
+        var routeToSend = route
+        if routeToSend.simplifiedElevation == nil {
+            routeToSend.simplifiedElevation = RouteElevationSimplifier.simplify(routeToSend)
+        }
+
+        guard let data = try? JSONEncoder().encode(routeToSend) else {
             completion(.failure(ConnectivityError.encodingFailed))
             return
         }

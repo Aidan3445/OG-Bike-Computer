@@ -8,6 +8,14 @@
 import Foundation
 import CoreLocation
 
+/// A simplified elevation sample preserving major peaks/valleys.
+/// Generated on the phone before sending a route to the watch so the watch
+/// can render an elevation chart cheaply without iterating thousands of points.
+struct ElevationSample: Codable, Equatable, Hashable {
+    let distanceFromStart: Double // meters
+    let elevation: Double         // meters
+}
+
 struct Route: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     var name: String
@@ -15,14 +23,18 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
     let waypoints: [Waypoint]?
     let createdAt: Date
     let source: RouteSource?
+    /// Simplified elevation profile (typically a few hundred points or fewer).
+    /// nil for older routes; computed by `RouteElevationSimplifier` before send-to-watch.
+    var simplifiedElevation: [ElevationSample]?
 
-    init(id: UUID = UUID(), name: String, points: [TrackPoint], waypoints: [Waypoint]? = nil, createdAt: Date = Date(), source: RouteSource? = nil) {
+    init(id: UUID = UUID(), name: String, points: [TrackPoint], waypoints: [Waypoint]? = nil, createdAt: Date = Date(), source: RouteSource? = nil, simplifiedElevation: [ElevationSample]? = nil) {
         self.id = id
         self.name = name
         self.points = points
         self.waypoints = waypoints
         self.createdAt = createdAt
         self.source = source
+        self.simplifiedElevation = simplifiedElevation
     }
 
     init(from decoder: Decoder) throws {
@@ -33,6 +45,7 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
         waypoints = try container.decodeIfPresent([Waypoint].self, forKey: .waypoints)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         source = try container.decodeIfPresent(RouteSource.self, forKey: .source)
+        simplifiedElevation = try container.decodeIfPresent([ElevationSample].self, forKey: .simplifiedElevation)
     }
 
     func hash(into hasher: inout Hasher) {
@@ -67,6 +80,14 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
             }
         }
         return gain
+    }
+
+    /// Best-available elevation series for chart rendering on resource-constrained
+    /// surfaces (the watch). Prefers the precomputed simplified series; falls back
+    /// to recomputing on-the-fly from the full track if it's missing.
+    var watchElevationSeries: [ElevationSample]? {
+        if let s = simplifiedElevation, !s.isEmpty { return s }
+        return RouteElevationSimplifier.simplify(self)
     }
 
     var elevationLoss: Double {

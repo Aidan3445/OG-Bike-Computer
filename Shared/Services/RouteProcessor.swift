@@ -117,27 +117,69 @@ struct RouteProcessor {
         }
         let calculatedTurns = filtered
 
-        // Step 3: Map waypoints to route points
+        // Step 3: Map waypoints to route points (only turn-cue waypoints, not POIs)
         let waypointTurns: [TurnPoint]
-        if let waypoints = route.waypoints, !waypoints.isEmpty {
+        if let waypoints = route.waypoints?.turnCues, !waypoints.isEmpty {
             waypointTurns = mapWaypoints(waypoints, to: processedPoints)
         } else {
             waypointTurns = []
+        }
+
+        // Step 3b: Map POIs to route points
+        let pois: [RoutePOI]
+        if let routePOIs = route.waypoints?.pois, !routePOIs.isEmpty {
+            pois = mapPOIs(routePOIs, to: processedPoints)
+        } else {
+            pois = []
         }
 
         // Step 4: Bounding box
         let lats = coords.map { $0.latitude }
         let lons = coords.map { $0.longitude }
 
+        // Reuse the precomputed simplified elevation if the route has one,
+        // otherwise compute it now from the full track.
+        let simplified = route.simplifiedElevation
+            ?? RouteElevationSimplifier.simplify(route)
+            ?? []
+
         return ProcessedRoute(
             name: route.name,
             points: processedPoints,
             waypointTurnPoints: waypointTurns,
             calculatedTurnPoints: calculatedTurns,
+            pois: pois,
+            simplifiedElevation: simplified,
             totalDistance: cumulativeDistance,
             hasWaypoints: !waypointTurns.isEmpty,
             minLat: lats.min()!, maxLat: lats.max()!,
             minLon: lons.min()!, maxLon: lons.max()!)
+    }
+
+    /// Map POI waypoints to the nearest route points and capture their off-route distance.
+    private static func mapPOIs(_ pois: [Waypoint], to processedPoints: [ProcessedPoint]) -> [RoutePOI] {
+        return pois.map { poi in
+            let poiLoc = CLLocation(latitude: poi.lat, longitude: poi.lon)
+            var bestIndex = 0
+            var bestDist = Double.greatestFiniteMagnitude
+            for i in 0..<processedPoints.count {
+                let pt = processedPoints[i]
+                let ptLoc = CLLocation(latitude: pt.coordinate.latitude, longitude: pt.coordinate.longitude)
+                let dist = poiLoc.distance(from: ptLoc)
+                if dist < bestDist {
+                    bestDist = dist
+                    bestIndex = i
+                }
+            }
+            return RoutePOI(
+                coordinate: poi.coordinate,
+                name: poi.name,
+                description: poi.description,
+                distanceFromStart: processedPoints[bestIndex].distanceFromStart,
+                offRouteDistance: bestDist,
+                nearestPointIndex: bestIndex
+            )
+        }
     }
 
     /// Map GPX waypoints to the nearest processed route points, creating TurnPoints.

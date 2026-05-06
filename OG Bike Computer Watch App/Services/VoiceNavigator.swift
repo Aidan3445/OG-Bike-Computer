@@ -607,8 +607,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                 if !spoken {
                     self.speakLocally(text)
                 } else {
-                    let estimatedDuration = max(1.0, Double(text.count) * 0.06)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + estimatedDuration) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.estimatedSpeechDuration(for: text)) {
                         self.finishCurrentAlert()
                     }
                 }
@@ -616,6 +615,16 @@ class VoiceNavigator: NSObject, ObservableObject {
         } else {
             speakLocally(text)
         }
+    }
+
+    /// Estimate how long it takes to speak `text` at our utterance rate.
+    /// Digits expand ~5× when spoken ("145" → "one hundred forty five"), so they're
+    /// counted as 5 spoken characters each. Underestimating causes the queue to
+    /// dispatch the next alert before the phone finishes the current one.
+    private static func estimatedSpeechDuration(for text: String) -> TimeInterval {
+        let digitCount = text.filter { $0.isNumber }.count
+        let spokenCharCount = text.count + digitCount * 4
+        return max(1.5, Double(spokenCharCount) * 0.08)
     }
 
     private func scheduleWakeNotification(body: String) {

@@ -130,11 +130,27 @@ struct ProcessedPoint {
     let bearingToNext: Double
 }
 
+/// A POI mapped onto a processed route. `distanceFromStart` is the route distance
+/// of the nearest route point; `offRouteDistance` is how far the POI sits from that
+/// point (so we can decide whether it's on/near the route).
+struct RoutePOI {
+    let coordinate: CLLocationCoordinate2D
+    let name: String
+    let description: String?
+    let distanceFromStart: Double
+    let offRouteDistance: Double
+    /// Index of the closest processed route point.
+    let nearestPointIndex: Int
+}
+
 struct ProcessedRoute {
     let name: String
     let points: [ProcessedPoint]
     let waypointTurnPoints: [TurnPoint]
     let calculatedTurnPoints: [TurnPoint]
+    let pois: [RoutePOI]
+    /// Simplified elevation series for cheap chart rendering (watch ElevationProfileView).
+    let simplifiedElevation: [ElevationSample]
     let totalDistance: Double
     let hasWaypoints: Bool
 
@@ -142,6 +158,29 @@ struct ProcessedRoute {
     let maxLat: Double
     let minLon: Double
     let maxLon: Double
+
+    init(name: String,
+         points: [ProcessedPoint],
+         waypointTurnPoints: [TurnPoint],
+         calculatedTurnPoints: [TurnPoint],
+         pois: [RoutePOI] = [],
+         simplifiedElevation: [ElevationSample] = [],
+         totalDistance: Double,
+         hasWaypoints: Bool,
+         minLat: Double, maxLat: Double, minLon: Double, maxLon: Double) {
+        self.name = name
+        self.points = points
+        self.waypointTurnPoints = waypointTurnPoints
+        self.calculatedTurnPoints = calculatedTurnPoints
+        self.pois = pois
+        self.simplifiedElevation = simplifiedElevation
+        self.totalDistance = totalDistance
+        self.hasWaypoints = hasWaypoints
+        self.minLat = minLat
+        self.maxLat = maxLat
+        self.minLon = minLon
+        self.maxLon = maxLon
+    }
 
     /// Returns the active turn list for a given mode.
     func turnPoints(for mode: TurnMode) -> [TurnPoint] {

@@ -223,6 +223,36 @@ enum CheckpointInterval: String, Codable, CaseIterable, Hashable {
     }
 }
 
+// MARK: - Tab Order
+
+/// One of the watch's main workout tabs. Metric pages are referenced by their
+/// MetricPage UUID; the two built-ins use sentinel values.
+struct WorkoutTabKey: Codable, Equatable, Hashable, Identifiable {
+    enum Kind: String, Codable {
+        case routeMap
+        case elevation
+        case metricPage
+    }
+
+    let kind: Kind
+    /// Only set when `kind == .metricPage` — the MetricPage's UUID.
+    let metricPageID: UUID?
+
+    var id: String {
+        switch kind {
+        case .routeMap:    return "routeMap"
+        case .elevation:   return "elevation"
+        case .metricPage:  return "metric:\(metricPageID?.uuidString ?? "?")"
+        }
+    }
+
+    static let routeMap = WorkoutTabKey(kind: .routeMap, metricPageID: nil)
+    static let elevation = WorkoutTabKey(kind: .elevation, metricPageID: nil)
+    static func metricPage(_ id: UUID) -> WorkoutTabKey {
+        WorkoutTabKey(kind: .metricPage, metricPageID: id)
+    }
+}
+
 // MARK: - Top-Level Ride Preferences
 
 struct RidePreferences: Codable, Equatable, Hashable {
@@ -238,7 +268,11 @@ struct RidePreferences: Codable, Equatable, Hashable {
     var telemetryRate: TelemetryRate
     var offRouteGraceSamples: Int
     var mapScreen: MapScreenConfig
+    var elevationScreen: ElevationScreenConfig
     var checkpointInterval: CheckpointInterval
+    /// Custom workout tab order (when nil, default order applies). Stores stable
+    /// keys so metric pages keep their slot when added/removed.
+    var tabOrder: [WorkoutTabKey]?
 
     static let `default` = RidePreferences(
         autoPause: .default,
@@ -253,7 +287,9 @@ struct RidePreferences: Codable, Equatable, Hashable {
         telemetryRate: .standard,
         offRouteGraceSamples: 3,
         mapScreen: .default,
-        checkpointInterval: .tenMin
+        elevationScreen: .default,
+        checkpointInterval: .tenMin,
+        tabOrder: nil
     )
 
     init(
@@ -269,7 +305,9 @@ struct RidePreferences: Codable, Equatable, Hashable {
         telemetryRate: TelemetryRate = .standard,
         offRouteGraceSamples: Int = 3,
         mapScreen: MapScreenConfig = .default,
-        checkpointInterval: CheckpointInterval = .tenMin
+        elevationScreen: ElevationScreenConfig = .default,
+        checkpointInterval: CheckpointInterval = .tenMin,
+        tabOrder: [WorkoutTabKey]? = nil
     ) {
         self.autoPause = autoPause
         self.autoLap = autoLap
@@ -283,7 +321,9 @@ struct RidePreferences: Codable, Equatable, Hashable {
         self.telemetryRate = telemetryRate
         self.offRouteGraceSamples = offRouteGraceSamples
         self.mapScreen = mapScreen
+        self.elevationScreen = elevationScreen
         self.checkpointInterval = checkpointInterval
+        self.tabOrder = tabOrder
     }
 
     init(from decoder: Decoder) throws {
@@ -300,6 +340,8 @@ struct RidePreferences: Codable, Equatable, Hashable {
         telemetryRate = try c.decodeIfPresent(TelemetryRate.self, forKey: .telemetryRate) ?? .standard
         offRouteGraceSamples = try c.decodeIfPresent(Int.self, forKey: .offRouteGraceSamples) ?? 3
         mapScreen = try c.decodeIfPresent(MapScreenConfig.self, forKey: .mapScreen) ?? .default
+        elevationScreen = try c.decodeIfPresent(ElevationScreenConfig.self, forKey: .elevationScreen) ?? .default
         checkpointInterval = try c.decodeIfPresent(CheckpointInterval.self, forKey: .checkpointInterval) ?? .tenMin
+        tabOrder = try c.decodeIfPresent([WorkoutTabKey].self, forKey: .tabOrder)
     }
 }

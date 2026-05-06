@@ -9,6 +9,7 @@ import SwiftUI
 
 struct RideSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
 
     private var prefs: Binding<RidePreferences> {
@@ -17,6 +18,7 @@ struct RideSettingsView: View {
 
     var body: some View {
         Form {
+            tabOrderSection
             autoPauseSection
             gpsSensorsSection
             displaySection
@@ -42,6 +44,28 @@ struct RideSettingsView: View {
                     Image(systemName: "slider.horizontal.2.gobackward")
                 }
             }
+        }
+    }
+
+    // MARK: - Tab Order
+
+    @ViewBuilder
+    private var tabOrderSection: some View {
+        Section {
+            NavigationLink {
+                TabOrderingView(userSettings: userSettings, metricConfig: metricConfig)
+            } label: {
+                HStack {
+                    Text("Tab Order")
+                    Spacer()
+                    Text(userSettings.settings.ridePreferences.tabOrder == nil ? "Default" : "Custom")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Label("Watch Layout", systemImage: "rectangle.split.3x1")
+        } footer: {
+            Text("Reorder the screens you swipe through on the watch during a ride.")
         }
     }
 

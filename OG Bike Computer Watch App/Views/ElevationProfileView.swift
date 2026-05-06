@@ -15,22 +15,45 @@ struct ElevationProfileView: View {
     }
 
     @State private var mode: ViewMode = .full
-    private let lookaheadMeters: Double = 8046.72 // 5 miles
+    @State private var initializedDefaultTab = false
+
+    private var elevationConfig: ElevationScreenConfig {
+        workout.ridePreferences.elevationScreen
+    }
+
+    private var lookaheadMeters: Double { elevationConfig.aheadLookahead }
 
     private var route: ProcessedRoute? { workout.navigation.processedRoute }
     private var currentDist: Double { workout.navigation.distanceAlongRoute }
     private var currentElev: Double { workout.currentElevation }
 
+    /// Simplified elevation samples for cheap rendering. Falls back to nothing
+    /// (handled by the empty-state branch) if the route didn't carry any.
+    private var simplifiedSamples: [ElevationSample] {
+        route?.simplifiedElevation ?? []
+    }
+
+    /// POIs the user opted to surface on the elevation screen.
+    private var poisToShow: [RoutePOI] {
+        guard workout.ridePreferences.mapScreen.waypointDisplay.showsOnElevation else { return [] }
+        return route?.pois ?? []
+    }
+
     var body: some View {
-        if let route = route, route.points.contains(where: { $0.elevation != nil }) {
+        if let route = route, !simplifiedSamples.isEmpty || route.points.contains(where: { $0.elevation != nil }) {
             VStack(spacing: 6) {
                 modeToggle
-                chart(route: route)
+                chart()
                 elevationReadout
             }
             .padding(.horizontal, 8)
             .padding(.top, 4)
             .safeAreaPadding(.top)
+            .onAppear {
+                guard !initializedDefaultTab else { return }
+                initializedDefaultTab = true
+                mode = elevationConfig.defaultTab == .ahead ? .ahead : .full
+            }
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "mountain.2")
@@ -65,64 +88,79 @@ struct ElevationProfileView: View {
     }
 
     @ViewBuilder
-    private func chart(route: ProcessedRoute) -> some View {
-        let pts = elevationPoints(route: route)
+    private func chart() -> some View {
+        let pts = activeSamples()
         if pts.isEmpty {
             Text("No elevation data in range")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         } else {
-        let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
-        let unitLabel = currentUnits.distance.label
-        let domain = elevDomain(pts)
-        let xMin = pts.first?.distanceFromStart ?? 0
-        let xMax = pts.last?.distanceFromStart ?? 1
-        let baseline = domain.lowerBound
+            let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+            let unitLabel = currentUnits.distance.label
+            let domain = elevDomain(pts)
+            let xMin = pts.first?.distanceFromStart ?? 0
+            let xMax = pts.last?.distanceFromStart ?? 1
+            let baseline = domain.lowerBound
 
-        Chart {
-            ForEach(Array(pts.enumerated()), id: \.offset) { _, pt in
-                elevationMarks(pt: pt, metersPerUnit: metersPerUnit, baseline: baseline)
+            Chart {
+                ForEach(Array(pts.enumerated()), id: \.offset) { _, pt in
+                    elevationMarks(pt: pt, metersPerUnit: metersPerUnit, baseline: baseline)
+                }
+
+                // POI markers
+                ForEach(Array(visiblePOIs.enumerated()), id: \.offset) { _, poi in
+                    let x = poi.distanceFromStart / metersPerUnit
+                    PointMark(
+                        x: .value("POI", x),
+                        y: .value("Top", domain.upperBound)
+                    )
+                    .symbol {
+                        Image(systemName: "mappin")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange)
+                    }
+                    .symbolSize(0)
+                }
+
+                // Current position marker
+                RuleMark(x: .value("Now", currentDist / metersPerUnit))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 2]))
+
+                PointMark(
+                    x: .value("Now", currentDist / metersPerUnit),
+                    y: .value("Elev", convertElev(currentElev))
+                )
+                .foregroundStyle(.white)
+                .symbolSize(40)
             }
-
-            // Current position marker
-            RuleMark(x: .value("Now", currentDist / metersPerUnit))
-                .foregroundStyle(.white.opacity(0.7))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 2]))
-
-            PointMark(
-                x: .value("Now", currentDist / metersPerUnit),
-                y: .value("Elev", convertElev(currentElev))
-            )
-            .foregroundStyle(.white)
-            .symbolSize(40)
-        }
-        .chartXScale(domain: (xMin / metersPerUnit)...(xMax / metersPerUnit))
-        .chartYScale(domain: domain)
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 3)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                AxisValueLabel {
-                    if let v = value.as(Double.self) {
-                        Text("\(Int(v))\(unitLabel)")
-                            .font(.system(size: 8))
+            .chartXScale(domain: (xMin / metersPerUnit)...(xMax / metersPerUnit))
+            .chartYScale(domain: domain)
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 3)) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
+                    AxisValueLabel {
+                        if let v = value.as(Double.self) {
+                            Text("\(Int(v))\(unitLabel)")
+                                .font(.system(size: 8))
+                        }
                     }
                 }
             }
-        }
-        .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                AxisValueLabel {
-                    if let v = value.as(Double.self) {
-                        Text("\(Int(v))\(currentUnits.elevation == .feet ? "ft" : "m")")
-                            .font(.system(size: 8))
+            .chartYAxis {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
+                    AxisValueLabel {
+                        if let v = value.as(Double.self) {
+                            Text("\(Int(v))\(currentUnits.elevation == .feet ? "ft" : "m")")
+                                .font(.system(size: 8))
+                        }
                     }
                 }
             }
+            .chartLegend(.hidden)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .chartLegend(.hidden)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } // end else
     }
 
     private var elevationReadout: some View {
@@ -131,7 +169,7 @@ struct ElevationProfileView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.green)
             Spacer()
-            if workout.liveElevationGain > 0 {
+            if elevationConfig.showGainLossReadout, workout.liveElevationGain > 0 {
                 Label(formatElevation(workout.liveElevationGain) + " gain", systemImage: "mountain.2")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -141,19 +179,36 @@ struct ElevationProfileView: View {
 
     // MARK: - Helpers
 
-    private func elevationPoints(route: ProcessedRoute) -> [ProcessedPoint] {
-        let pts = route.points.filter { $0.elevation != nil }
+    /// Selects the simplified samples to render based on the active mode.
+    private func activeSamples() -> [ElevationSample] {
+        let samples = simplifiedSamples
+        guard !samples.isEmpty else { return [] }
         switch mode {
         case .full:
-            return pts
+            return samples
         case .ahead:
             let end = currentDist + lookaheadMeters
-            return pts.filter { $0.distanceFromStart >= currentDist && $0.distanceFromStart <= end }
+            return samples.filter {
+                $0.distanceFromStart >= currentDist - 50 &&
+                $0.distanceFromStart <= end
+            }
         }
     }
 
-    private func elevDomain(_ pts: [ProcessedPoint]) -> ClosedRange<Double> {
-        let vals = pts.compactMap { $0.elevation.map { convertElev($0) } }
+    private var visiblePOIs: [RoutePOI] {
+        let pois = poisToShow
+        guard !pois.isEmpty else { return [] }
+        switch mode {
+        case .full:
+            return pois
+        case .ahead:
+            let end = currentDist + lookaheadMeters
+            return pois.filter { $0.distanceFromStart >= currentDist && $0.distanceFromStart <= end }
+        }
+    }
+
+    private func elevDomain(_ pts: [ElevationSample]) -> ClosedRange<Double> {
+        let vals = pts.map { convertElev($0.elevation) }
         let lo = vals.min() ?? 0
         let hi = vals.max() ?? 100
         let pad = max((hi - lo) * 0.15, 5)
@@ -165,20 +220,18 @@ struct ElevationProfileView: View {
     }
 
     @ChartContentBuilder
-    private func elevationMarks(pt: ProcessedPoint, metersPerUnit: Double, baseline: Double) -> some ChartContent {
-        if let elev = pt.elevation {
-            let x = pt.distanceFromStart / metersPerUnit
-            let y = convertElev(elev)
-            AreaMark(x: .value("Dist", x), yStart: .value("Base", baseline), yEnd: .value("Elev", y))
-                .foregroundStyle(.linearGradient(
-                    colors: [Color.green.opacity(0.5), Color.green.opacity(0.05)],
-                    startPoint: .top, endPoint: .bottom
-                ))
-                .interpolationMethod(.catmullRom)
-            LineMark(x: .value("Dist", x), y: .value("Elev", y))
-                .foregroundStyle(.green)
-                .interpolationMethod(.catmullRom)
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
-        }
+    private func elevationMarks(pt: ElevationSample, metersPerUnit: Double, baseline: Double) -> some ChartContent {
+        let x = pt.distanceFromStart / metersPerUnit
+        let y = convertElev(pt.elevation)
+        AreaMark(x: .value("Dist", x), yStart: .value("Base", baseline), yEnd: .value("Elev", y))
+            .foregroundStyle(.linearGradient(
+                colors: [Color.green.opacity(0.5), Color.green.opacity(0.05)],
+                startPoint: .top, endPoint: .bottom
+            ))
+            .interpolationMethod(.catmullRom)
+        LineMark(x: .value("Dist", x), y: .value("Elev", y))
+            .foregroundStyle(.green)
+            .interpolationMethod(.catmullRom)
+            .lineStyle(StrokeStyle(lineWidth: 1.5))
     }
 }

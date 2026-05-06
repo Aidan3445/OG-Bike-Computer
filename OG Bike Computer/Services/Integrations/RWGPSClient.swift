@@ -192,17 +192,32 @@ class RWGPSClient: ServiceClient {
             TrackPoint(lat: pt.y, lon: pt.x, elevation: pt.e)
         }
 
-        let waypoints = (rwgps.course_points ?? []).compactMap { cp -> Waypoint? in
+        let turnCues = (rwgps.course_points ?? []).compactMap { cp -> Waypoint? in
             guard let type = cp.t else { return nil }
             return Waypoint(
                 lat: cp.y,
                 lon: cp.x,
                 name: type,
-                description: cp.n
+                description: cp.n,
+                kind: .turnCue
             )
         }
 
-        logger.info("Imported '\(rwgps.name ?? "unnamed")': \(trackPoints.count) pts, \(waypoints.count) cues")
+        let pois = (rwgps.points_of_interest ?? []).compactMap { poi -> Waypoint? in
+            guard let lat = poi.lat, let lon = poi.lng else { return nil }
+            let name = poi.name ?? poi.type_name ?? "Point of Interest"
+            return Waypoint(
+                lat: lat,
+                lon: lon,
+                name: name,
+                description: poi.description,
+                kind: .poi
+            )
+        }
+
+        let waypoints = turnCues + pois
+
+        logger.info("Imported '\(rwgps.name ?? "unnamed")': \(trackPoints.count) pts, \(turnCues.count) cues, \(pois.count) POIs")
 
         return Route(
             name: rwgps.name ?? "Unnamed Route",

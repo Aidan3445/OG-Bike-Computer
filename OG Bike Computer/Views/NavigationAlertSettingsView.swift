@@ -22,10 +22,9 @@ struct NavigationAlertSettingsView: View {
         Form {
             turnAlertsSection
             navigationEventsSection
+            waypointAlertsSection
             splitAlertsSection
             autoPauseAlertsSection
-            descentAlertsSection
-            climbAlertsSection
             hapticsSection
 
             if userSettings.settings.navigationAlerts != .default {
@@ -176,24 +175,6 @@ struct NavigationAlertSettingsView: View {
     @ViewBuilder
     private var splitAlertsSection: some View {
         Section {
-            HStack {
-                Spacer()
-                Text("EXPERIMENTAL")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(.orange)
-                    .clipShape(Capsule())
-                Text("Features below are new.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .listRowBackground(Color.clear)
-        }
-
-        Section {
             Toggle("Split Updates", isOn: prefs.splitAlerts.enabled)
 
             if userSettings.settings.navigationAlerts.splitAlerts.enabled {
@@ -254,65 +235,44 @@ struct NavigationAlertSettingsView: View {
         }
     }
 
-    // MARK: - Descent Alerts
+    // MARK: - Waypoint / POI Alerts
 
     @ViewBuilder
-    private var descentAlertsSection: some View {
+    private var waypointAlertsSection: some View {
         Section {
-            Toggle("Descent Alerts", isOn: prefs.descentAlerts.enabled)
+            Toggle("Waypoint Alerts", isOn: prefs.waypointAlerts.enabled)
 
-            if userSettings.settings.navigationAlerts.descentAlerts.enabled {
-                AlertModePicker(label: "Mode", mode: prefs.descentAlerts.mode)
+            if userSettings.settings.navigationAlerts.waypointAlerts.enabled {
+                AlertModePicker(label: "Mode", mode: prefs.waypointAlerts.mode)
 
-                SpeedPicker(
-                    label: "Speed Threshold",
-                    mps: prefs.descentAlerts.speedThreshold,
-                    min: 8.94,    // ~20mph / 30kph
-                    max: 22.35    // ~50mph / 80kph
-                )
+                Toggle("Custom Distances", isOn: prefs.waypointAlerts.useCustomDistances)
+
+                if userSettings.settings.navigationAlerts.waypointAlerts.useCustomDistances {
+                    DistancePicker(
+                        label: "Primary Distance",
+                        meters: prefs.waypointAlerts.primaryApproachDistance,
+                        min: 30.48,    // 100ft
+                        max: 402.336   // 0.25mi
+                    )
+
+                    Toggle("Secondary Approach", isOn: prefs.waypointAlerts.secondaryApproachEnabled)
+
+                    if userSettings.settings.navigationAlerts.waypointAlerts.secondaryApproachEnabled {
+                        DistancePicker(
+                            label: "Secondary Distance",
+                            meters: prefs.waypointAlerts.secondaryApproachDistance,
+                            min: 402.336,  // 0.25mi
+                            max: 3218.69   // 2mi
+                        )
+                    }
+                }
+
+                MaxOffRouteRangeField(meters: prefs.waypointAlerts.maxOffRouteDistance)
             }
         } header: {
-            Label("Descent Alerts", systemImage: "arrow.down.right")
+            Label("Waypoint Alerts", systemImage: "mappin.and.ellipse")
         } footer: {
-            Text("Announce max speed and stats after a high-speed descent.")
-        }
-    }
-
-    // MARK: - Climb Alerts
-
-    @ViewBuilder
-    private var climbAlertsSection: some View {
-        Section {
-            Toggle("Climb Alerts", isOn: prefs.climbAlerts.enabled)
-
-            if userSettings.settings.navigationAlerts.climbAlerts.enabled {
-                AlertModePicker(label: "Mode", mode: prefs.climbAlerts.mode)
-
-                ElevationPicker(
-                    label: "Min Climb Height",
-                    meters: prefs.climbAlerts.minimumClimbHeight,
-                    min: 15,     // ~50ft / 15m
-                    max: 150     // ~500ft / 150m
-                )
-
-                DistancePicker(
-                    label: "Min Climb Distance",
-                    meters: prefs.climbAlerts.minimumClimbDistance,
-                    min: 100,    // ~300ft / 100m
-                    max: 2000    // ~1.2mi / 2km
-                )
-
-                DistancePicker(
-                    label: "Climb Separation",
-                    meters: prefs.climbAlerts.climbSeparationDistance,
-                    min: 50,     // ~150ft / 50m
-                    max: 500     // ~1600ft / 500m
-                )
-            }
-        } header: {
-            Label("Climb Alerts", systemImage: "arrow.up.right")
-        } footer: {
-            Text("Announce elevation gain, distance, and peak at the start of a climb.")
+            Text("Announce points of interest along or near the route — e.g. \"in 500ft, pass the world's largest spork\". When custom distances are off, waypoint alerts use the same approach distances as turn alerts.")
         }
     }
 
@@ -340,5 +300,64 @@ struct NavigationAlertSettingsView: View {
         } footer: {
             Text("Controls vibration strength for all navigation haptics.")
         }
+    }
+}
+
+// MARK: - Max Off-Route Range Field
+
+/// Numeric input for the waypoint-alerts max off-route range.
+/// Bounds: 0.5–10 mi (0.5–16 km depending on units). Value is clamped on commit.
+private struct MaxOffRouteRangeField: View {
+    @Binding var meters: Double
+    @State private var text: String = ""
+    @FocusState private var focused: Bool
+
+    private var isImperial: Bool { currentUnits.distance == .miles }
+
+    private var unitLabel: String { isImperial ? "mi" : "km" }
+    private var minValue: Double { 0.5 }
+    private var maxValue: Double { isImperial ? 10 : 16 }
+    private var metersPerUnit: Double { isImperial ? 1609.34 : 1000 }
+
+    private var displayValue: Double {
+        meters / metersPerUnit
+    }
+
+    var body: some View {
+        HStack {
+            Text("Max Off-Route Range")
+            Spacer()
+            TextField("", text: $text)
+                .keyboardType(.decimalPad)
+                .focused($focused)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: 80)
+                .onAppear { syncFromMeters() }
+                .onChange(of: meters) { _, _ in
+                    if !focused { syncFromMeters() }
+                }
+                .onChange(of: focused) { _, isFocused in
+                    if !isFocused { commit() }
+                }
+            Text(unitLabel)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func syncFromMeters() {
+        let v = displayValue
+        // 1 decimal place is enough for this range
+        text = String(format: v == v.rounded() ? "%.0f" : "%.1f", v)
+    }
+
+    private func commit() {
+        let normalized = text.replacingOccurrences(of: ",", with: ".")
+        guard var parsed = Double(normalized) else {
+            syncFromMeters()
+            return
+        }
+        parsed = min(max(parsed, minValue), maxValue)
+        meters = parsed * metersPerUnit
+        syncFromMeters()
     }
 }
