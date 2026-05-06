@@ -26,7 +26,9 @@ struct RideDetailView: View {
     @State private var showShareSheet = false
     @State private var isUploadingToStrava = false
     @State private var showFinalizeConfirm = false
+    @State private var showDiscardConfirm = false
     @State private var uploadError: String?
+    @ObservedObject private var connectivity = ConnectivityManager.shared
     @State private var coloredSegments: [ColoredSegment] = []
     @State private var startCoord: CLLocationCoordinate2D?
     @State private var endCoord: CLLocationCoordinate2D?
@@ -36,6 +38,9 @@ struct RideDetailView: View {
     @State private var chartHasHR = false
     @State private var chartHasPower = false
     @State private var panelPage = 0
+    @State private var scrubDistance: Double? = nil
+    @State private var scrubCoordinate: CLLocationCoordinate2D? = nil
+    @State private var allLocations: [CLLocation] = []
 
     var body: some View {
         let _ = unitState.preferences
@@ -101,6 +106,17 @@ struct RideDetailView: View {
                     }
                 }
 
+                // Scrub position indicator
+                if let coord = scrubCoordinate {
+                    Annotation("", coordinate: coord) {
+                        Circle()
+                            .fill(.white)
+                            .frame(width: 12, height: 12)
+                            .overlay(Circle().stroke(Color.accentColor, lineWidth: 3))
+                            .shadow(radius: 3)
+                    }
+                }
+
                 // Mile markers
                 mileMarkerAnnotations()
             }
@@ -118,30 +134,49 @@ struct RideDetailView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if ride.onHold {
-                VStack(spacing: 8) {
-                    Button(intent: ContinueHeldRideIntent()) {
-                        Label("Continue Ride", systemImage: "hand.raised.fill")
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
+            if ride.onHold && connectivity.isReachable {
+                VStack(spacing: 4) {
+                    HStack(spacing: 8) {
+                        Button(intent: ContinueHeldRideIntent()) {
+                            Label("Continue", systemImage: "hand.raised.fill")
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
 
-                    Button {
-                        showFinalizeConfirm = true
-                    } label: {
-                        Label("End & Save", systemImage: "checkmark.circle")
-                            .frame(maxWidth: .infinity, minHeight: 44)
+                        Button {
+                            showFinalizeConfirm = true
+                        } label: {
+                            Label("End & Save", systemImage: "checkmark.circle")
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        .confirmationDialog("Save this ride?", isPresented: $showFinalizeConfirm, titleVisibility: .visible) {
+                            Button("Save Ride") {
+                                ConnectivityManager.shared.sendFinalizeHeldRide(rideID: ride.id)
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("The ride will be saved as complete and you can upload it to Strava.")
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .confirmationDialog("Save this ride?", isPresented: $showFinalizeConfirm, titleVisibility: .visible) {
-                        Button("Save Ride") {
-                            ConnectivityManager.shared.sendFinalizeHeldRide(rideID: ride.id)
+
+                    Button(role: .destructive) {
+                        showDiscardConfirm = true
+                    } label: {
+                        Label("Discard Ride", systemImage: "trash")
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .confirmationDialog("Discard this ride?", isPresented: $showDiscardConfirm, titleVisibility: .visible) {
+                        Button("Discard", role: .destructive) {
+                            ConnectivityManager.shared.sendDiscardRide(rideID: ride.id)
                         }
                         Button("Cancel", role: .cancel) {}
                     } message: {
-                        Text("The ride will be saved as complete and you can upload it to Strava.")
+                        Text("The held ride will be permanently deleted. This cannot be undone.")
                     }
                 }
                 .padding(.horizontal)
@@ -371,8 +406,12 @@ struct RideDetailView: View {
                 RideChartsView(
                     dataPoints: chartData,
                     hasHeartRate: chartHasHR,
-                    hasPower: chartHasPower
+                    hasPower: chartHasPower,
+                    scrubDistance: $scrubDistance
                 )
+                .onChange(of: scrubDistance) { _, dist in
+                    scrubCoordinate = dist.map { interpolateCoordinate(at: $0) } ?? nil
+                }
             } else {
                 Text("No chart data")
                     .font(.caption)
@@ -468,6 +507,7 @@ struct RideDetailView: View {
         let locations = TrackEncoder.toLocations(pts)
         guard locations.count >= 2 else { return }
 
+        allLocations      = locations
         startCoord        = locations.first?.coordinate
         endCoord          = locations.last?.coordinate
         mileMarkers       = computeRideMileMarkers(locations: locations)
@@ -479,6 +519,22 @@ struct RideDetailView: View {
         chartData = result.points
         chartHasHR = result.hasHR
         chartHasPower = result.hasPower
+    }
+
+    private func interpolateCoordinate(at targetDistance: Double) -> CLLocationCoordinate2D? {
+        guard allLocations.count >= 2 else { return nil }
+        var cumDist: Double = 0
+        for i in 1..<allLocations.count {
+            let seg = allLocations[i].distance(from: allLocations[i - 1])
+            if cumDist + seg >= targetDistance {
+                let fraction = seg > 0 ? (targetDistance - cumDist) / seg : 0
+                let lat = allLocations[i - 1].coordinate.latitude + fraction * (allLocations[i].coordinate.latitude - allLocations[i - 1].coordinate.latitude)
+                let lon = allLocations[i - 1].coordinate.longitude + fraction * (allLocations[i].coordinate.longitude - allLocations[i - 1].coordinate.longitude)
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            }
+            cumDist += seg
+        }
+        return allLocations.last?.coordinate
     }
 }
 

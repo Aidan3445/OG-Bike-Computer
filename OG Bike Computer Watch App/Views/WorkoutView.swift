@@ -23,6 +23,8 @@ struct WorkoutView<ExtraTab: View>: View {
     @State private var holdTimer: Timer?
     @State private var showNavOverlay = false
     @State private var navOverlayTask: Task<Void, Never>?
+    @State private var showHoldExplainer = false
+    @State private var holdExplainerDontShow = false
 
     init(workout: WorkoutManager, metricConfig: MetricConfigStore, onStop: @escaping () -> Void) where ExtraTab == EmptyView {
         self.workout = workout
@@ -48,6 +50,12 @@ struct WorkoutView<ExtraTab: View>: View {
                 RouteMapView(workout: workout)
                     .tag(1)
 
+                // Elevation profile (only when route with elevation data available)
+                if workout.hasRoute {
+                    ElevationProfileView(workout: workout)
+                        .tag(2)
+                }
+
                 // Dynamic metric pages from config
                 ForEach(Array(metricConfig.config.pages.enumerated()), id: \.element.id) { index, metricPage in
                     DynamicMetricsPage(
@@ -55,7 +63,7 @@ struct WorkoutView<ExtraTab: View>: View {
                         metricPage: metricPage,
                         showOffRouteBanner: index == 0
                     )
-                    .tag(2 + index)
+                    .tag((workout.hasRoute ? 3 : 2) + index)
                 }
             }
             .tabViewStyle(.verticalPage)
@@ -75,9 +83,9 @@ struct WorkoutView<ExtraTab: View>: View {
                         .allowsHitTesting(false)
                 }
             }
-            // Nav turn overlay — flash stripped-down map when a turn is imminent and rider is on a metrics page
+            // Nav turn overlay — flash stripped-down map when a turn is imminent and rider is on a non-map page
             .overlay {
-                if showNavOverlay && tab >= 3 && workout.ridePreferences.mapScreen.showTurnOverlay {
+                if showNavOverlay && tab > 1 && workout.ridePreferences.mapScreen.showTurnOverlay {
                     ZStack {
                         Color.black.opacity(0.85)
                         RouteMapView(workout: workout, isOverlay: true)
@@ -91,7 +99,7 @@ struct WorkoutView<ExtraTab: View>: View {
             }
             .onChange(of: workout.navigation.nextTurn?.index) { oldTurn, newTurn in
                 // A new turn became the next turn (rider passed one or a new one appeared)
-                guard newTurn != nil, tab >= 3, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
+                guard newTurn != nil, tab > 1, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
                 navOverlayTask?.cancel()
                 withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
                 navOverlayTask = Task {
@@ -104,7 +112,7 @@ struct WorkoutView<ExtraTab: View>: View {
             }
             .onChange(of: workout.navigation.distanceToNextTurn) { _, dist in
                 // Also flash when approaching a turn closely
-                guard dist > 0, dist < 150, tab >= 3, !showNavOverlay, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
+                guard dist > 0, dist < 150, tab > 1, !showNavOverlay, workout.ridePreferences.mapScreen.showTurnOverlay else { return }
                 navOverlayTask?.cancel()
                 withAnimation(.easeIn(duration: 0.2)) { showNavOverlay = true }
                 navOverlayTask = Task {
@@ -117,7 +125,7 @@ struct WorkoutView<ExtraTab: View>: View {
             }
             .onChange(of: tab) { _, newTab in
                 // Dismiss overlay when user swipes to map themselves
-                if newTab <= 2 && showNavOverlay {
+                if newTab == 1 && showNavOverlay {
                     withAnimation(.easeOut(duration: 0.2)) { showNavOverlay = false }
                     navOverlayTask?.cancel()
                 }
@@ -127,13 +135,14 @@ struct WorkoutView<ExtraTab: View>: View {
                     // Swapping routes briefly makes hasRoute false then true; ignoring
                     // the false→true transition here prevents the tab from jumping
                     // to map unexpectedly when the rider is on a metrics page.
-                    if hasRoute && !hadRoute && tab >= 3 {
-                        withAnimation { tab = 2 }
+                    if hasRoute && !hadRoute && tab > 1 {
+                        withAnimation { tab = 1 }
                     }
                 }
             .onChange(of: metricConfig.config.pages.count) { _, count in
                 // Clamp tab to valid range when pages are added/removed
-                let maxTab = 2 + count
+                let extraTabs = workout.hasRoute ? 2 : 1 // map + optional elevation
+                let maxTab = extraTabs + count
                 if tab > maxTab {
                     withAnimation { tab = max(maxTab, 1) }
                 }
@@ -150,6 +159,45 @@ struct WorkoutView<ExtraTab: View>: View {
             navOverlayTask?.cancel()
             navOverlayTask = nil
             showNavOverlay = false
+        }
+        .sheet(isPresented: $showHoldExplainer) {
+            holdExplainerSheet
+        }
+    }
+
+    private var holdExplainerSheet: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.orange)
+                    .padding(.top, 8)
+
+                Text("Hold Ride")
+                    .font(.headline)
+
+                Text("Your ride is paused and saved. You can resume it later from the route list — your distance, time, and route progress are preserved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                Divider()
+
+                Toggle("Don't show again", isOn: $holdExplainerDontShow)
+                    .font(.caption)
+
+                Button("Got It") {
+                    if holdExplainerDontShow {
+                        UserDefaults.standard.set(true, forKey: "holdExplainerShown")
+                    }
+                    showHoldExplainer = false
+                    workout.holdRide()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 16)
         }
     }
 
@@ -328,7 +376,12 @@ struct WorkoutView<ExtraTab: View>: View {
             holdCountdown += 0.05
             if holdCountdown >= 3.0 {
                 cancelHoldCountdown()
-                workout.holdRide()
+                if UserDefaults.standard.bool(forKey: "holdExplainerShown") {
+                    workout.holdRide()
+                } else {
+                    holdExplainerDontShow = false
+                    showHoldExplainer = true
+                }
             }
         }
     }

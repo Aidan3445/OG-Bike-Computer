@@ -71,41 +71,10 @@ struct IntegrationsSettingsView: View {
             )
 
             // MARK: - Strava
-            #if DEBUG
             serviceSection(
                 service: .strava,
                 supportsAutoUpload: true
             )
-            #else
-            Section {
-                Label {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Strava")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text("Coming Soon")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.orange.opacity(0.8))
-                                .clipShape(Capsule())
-                        }
-                        Text("Strava integration is under development. Sign up to be notified when it ships.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image("StravaIcon")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 20, height: 20)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .opacity(0.5)
-                }
-            }
-            #endif
         }
         .navigationTitle("Integrations")
         .alert("Connection Error", isPresented: .init(

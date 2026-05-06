@@ -26,6 +26,13 @@ final class ConnectivityManager: NSObject, ObservableObject {
     var onUserSettingsReceived: ((Data) -> Void)?
     #if os(iOS)
     var onRideReceived: ((RideSummary) -> Void)?
+    /// Ride IDs currently being transferred from the watch (file in flight).
+    @Published var pendingTransferRideIDs: Set<UUID> = []
+    /// True when the phone has detected the watch's ride session ended but the
+    /// ride summary/file hasn't started transferring yet. Used to show an
+    /// immediate "Waiting for ride from watch" placeholder in the ride list.
+    @Published var isAwaitingIncomingRide: Bool = false
+    private var awaitingIncomingRideTimeout: DispatchWorkItem?
     #endif
 
     #if os(watchOS)
@@ -284,7 +291,44 @@ extension ConnectivityManager {
         sendRideCommand(["type": "finalizeHeldRide", "rideID": rideID.uuidString])
     }
 
+    /// Tell the watch to discard a held ride and delete the phone's local copy.
+    func sendDiscardRide(rideID: UUID) {
+        deleteLocalRide(rideID: rideID, dir: Self.ridesDirectory, fm: FileManager.default)
+        guard WCSession.default.activationState == .activated else { return }
+        let msg: [String: Any] = ["type": "discardRide", "rideID": rideID.uuidString]
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+                WCSession.default.transferUserInfo(msg)
+            })
+        } else {
+            WCSession.default.transferUserInfo(msg)
+        }
+    }
+
     /// Send acknowledgment to watch that a ride was successfully received.
+    /// Mark that the phone is expecting a ride to start transferring from the watch.
+    /// Shows a placeholder row in the ride list with a spinner. Auto-clears after
+    /// a timeout if no transfer arrives.
+    func markAwaitingIncomingRide() {
+        DispatchQueue.main.async {
+            self.isAwaitingIncomingRide = true
+            self.awaitingIncomingRideTimeout?.cancel()
+            let task = DispatchWorkItem { [weak self] in
+                self?.isAwaitingIncomingRide = false
+            }
+            self.awaitingIncomingRideTimeout = task
+            DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: task)
+        }
+    }
+
+    func clearAwaitingIncomingRide() {
+        awaitingIncomingRideTimeout?.cancel()
+        awaitingIncomingRideTimeout = nil
+        if isAwaitingIncomingRide {
+            isAwaitingIncomingRide = false
+        }
+    }
+
     func sendRideAck(rideID: UUID) {
         guard WCSession.default.activationState == .activated else { return }
 
@@ -310,6 +354,19 @@ extension ConnectivityManager {
 #if os(watchOS)
 extension ConnectivityManager {
 
+    /// Notify phone that a held ride was discarded on the watch so it can remove its copy.
+    func sendDiscardRide(rideID: UUID) {
+        guard WCSession.default.activationState == .activated else { return }
+        let msg: [String: Any] = ["type": "deleteHeldRide", "rideID": rideID.uuidString]
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+                WCSession.default.transferUserInfo(msg)
+            })
+        } else {
+            WCSession.default.transferUserInfo(msg)
+        }
+    }
+
     func sendRide(summary: RideSummary, trackURL: URL) {
         // Save locally on watch first
         saveRideLocally(summary: summary, trackURL: trackURL)
@@ -333,12 +390,19 @@ extension ConnectivityManager {
             return
         }
 
+        // Notify phone that a file transfer is starting so it can show a progress indicator
+        let summaryJSON = (try? JSONEncoder().encode(summary)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        WCSession.default.transferUserInfo([
+            "type": "rideTransferStarting",
+            "rideID": summary.id.uuidString,
+            "summaryJSON": summaryJSON
+        ])
+
         WCSession.default.transferFile(
             trackURL,
             metadata: [
                 "type": "rideTrack",
-                "summaryJSON": (try? JSONEncoder().encode(summary))
-                    .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                "summaryJSON": summaryJSON
             ]
         )
 
@@ -420,23 +484,6 @@ extension ConnectivityManager {
             deleteLocalRide(rideID: rideID, dir: dir, fm: fm)
             TransferLedger.shared.remove(rideID: rideID)
             print("[Transfer] Expired unconfirmed ride: \(rideID)")
-        }
-    }
-
-    private func deleteLocalRide(rideID: UUID, dir: URL, fm: FileManager) {
-        let summaryURL = dir.appendingPathComponent("\(rideID.uuidString).json")
-
-        // Read summary to get track filename before deleting
-        if let data = try? Data(contentsOf: summaryURL),
-           let summary = try? JSONDecoder().decode(RideSummary.self, from: data) {
-            let trackURL = dir.appendingPathComponent(summary.trackFilename)
-            try? fm.removeItem(at: trackURL)
-        }
-        try? fm.removeItem(at: summaryURL)
-
-        // Remove from in-memory store
-        DispatchQueue.main.async {
-            self.rideStore?.rides.removeAll { $0.id == rideID }
         }
     }
 
@@ -627,6 +674,28 @@ extension ConnectivityManager: WCSessionDelegate {
                 self.onRouteReceived?(route)
             }
         }
+
+        #if os(iOS)
+        // Watch is about to transfer a ride file — show it as pending in the ride list
+        if let type = userInfo["type"] as? String,
+           type == "rideTransferStarting",
+           let idStr = userInfo["rideID"] as? String,
+           let rideID = UUID(uuidString: idStr) {
+            DispatchQueue.main.async {
+                self.clearAwaitingIncomingRide()
+                self.pendingTransferRideIDs.insert(rideID)
+                // Also pre-populate the ride store with the summary so a row appears immediately
+                if let jsonStr = userInfo["summaryJSON"] as? String,
+                   let data = jsonStr.data(using: .utf8),
+                   let summary = try? JSONDecoder().decode(RideSummary.self, from: data) {
+                    if let store = self.rideStore,
+                       !store.rides.contains(where: { $0.id == rideID }) {
+                        store.rides.insert(summary, at: 0)
+                    }
+                }
+            }
+        }
+        #endif
     }
 
     func session(
@@ -739,6 +808,12 @@ extension ConnectivityManager: WCSessionDelegate {
                 }
                 replyHandler(["finalized": true])
                 return
+            case "deleteHeldRide":
+                if let idStr = message["rideID"] as? String, let rideID = UUID(uuidString: idStr) {
+                    deleteLocalRide(rideID: rideID, dir: Self.ridesDirectory, fm: FileManager.default)
+                }
+                replyHandler(["deleted": true])
+                return
             default:
                 break
             }
@@ -752,6 +827,14 @@ extension ConnectivityManager: WCSessionDelegate {
            let text = message["text"] as? String {
             PhoneSpeechPlayer.shared.speak(text)
             replyHandler(["spoken": true])
+            return
+        }
+        if let type = message["type"] as? String,
+           type == "deleteHeldRide",
+           let idStr = message["rideID"] as? String,
+           let rideID = UUID(uuidString: idStr) {
+            deleteLocalRide(rideID: rideID, dir: Self.ridesDirectory, fm: FileManager.default)
+            replyHandler(["deleted": true])
             return
         }
         #endif
@@ -831,6 +914,7 @@ private extension ConnectivityManager {
 
         // If rideStore is attached, update in-memory immediately
         DispatchQueue.main.async {
+            self.pendingTransferRideIDs.remove(summary.id)
             if let store = self.rideStore {
                 if let idx = store.rides.firstIndex(where: { $0.id == summary.id }) {
                     store.rides[idx] = summary  // update existing (e.g. held → completed)
@@ -850,5 +934,18 @@ private extension ConnectivityManager {
         sendRideAck(rideID: summary.id)
     }
     #endif
+
+    func deleteLocalRide(rideID: UUID, dir: URL, fm: FileManager) {
+        let summaryURL = dir.appendingPathComponent("\(rideID.uuidString).json")
+        if let data = try? Data(contentsOf: summaryURL),
+           let summary = try? JSONDecoder().decode(RideSummary.self, from: data) {
+            let trackURL = dir.appendingPathComponent(summary.trackFilename)
+            try? fm.removeItem(at: trackURL)
+        }
+        try? fm.removeItem(at: summaryURL)
+        DispatchQueue.main.async {
+            self.rideStore?.rides.removeAll { $0.id == rideID }
+        }
+    }
 }
 #endif // canImport(WatchConnectivity)

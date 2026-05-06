@@ -29,11 +29,18 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         ConnectivityManager.shared.onStartRideRequested = { [weak self] (routeID: UUID?, activity: ActivityType) in
             guard let self = self else { return }
             guard !self.workout.isActive else { return }
-            if let routeID = routeID,
-               let route = self.store.routes.first(where: { $0.id == routeID }) {
-                self.workout.loadRoute(route)
+            let doStart = {
+                if let routeID = routeID,
+                   let route = self.store.routes.first(where: { $0.id == routeID }) {
+                    self.workout.loadRoute(route)
+                }
+                self.workout.start(activity: activity)
             }
-            self.workout.start(activity: activity)
+            if self.rideStore.heldRide != nil {
+                self.workout.pendingStartConfirmation = doStart
+            } else {
+                doStart()
+            }
         }
 
         ConnectivityManager.shared.onChangeRouteRequested = { [weak self] routeID in
@@ -83,12 +90,16 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
     /// Called when iOS triggers `HKHealthStore().startWatchApp(with:)`.
     /// The system launches/foregrounds the watch app and delivers the configuration here.
-    /// Route loading is handled separately via the WC message handler (onStartRideRequested).
+    /// The WC message handler (onStartRideRequested / onContinueHeldRideRequested) is the
+    /// primary start trigger; this is just a foreground signal. If there's a held ride, do
+    /// nothing here — the WC handler is responsible for the continue path.
     func handle(_ workoutConfiguration: HKWorkoutConfiguration) {
         let activityType = ActivityType(hkType: workoutConfiguration.activityType)
 
         Task { @MainActor in
             guard !workout.isActive else { return }
+            // If there's a held ride, let the WC message handler decide what to do.
+            guard rideStore.heldRide == nil else { return }
             workout.start(activity: activityType)
         }
     }

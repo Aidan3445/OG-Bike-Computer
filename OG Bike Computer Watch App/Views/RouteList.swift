@@ -17,6 +17,7 @@ struct RouteList: View {
     @ObservedObject private var unitState = UnitState.shared
 
     @State private var showHeldRideAlert = false
+    @State private var showDiscardConfirmation = false
 
     var body: some View {
         let _ = unitState.preferences // register dependency so list re-renders on unit change
@@ -42,7 +43,7 @@ struct RouteList: View {
                         Divider().padding(.vertical, 4)
 
                         NavigationLink {
-                            StartRideView(route: nil, workout: workout)
+                            StartRideView(route: nil, workout: workout, rideStore: rideStore)
                         } label: {
                             Label("Free Ride", systemImage: "record.circle")
                                 .frame(maxWidth: .infinity)
@@ -57,7 +58,7 @@ struct RouteList: View {
                         }
 
                         NavigationLink {
-                            StartRideView(route: nil, workout: workout)
+                            StartRideView(route: nil, workout: workout, rideStore: rideStore)
                         } label: {
                             Label("Free Ride", systemImage: "record.circle")
                                 .foregroundStyle(.orange)
@@ -99,7 +100,7 @@ struct RouteList: View {
                     .id(unitState.preferences)
                     .navigationTitle("Routes")
                     .navigationDestination(for: Route.self) { route in
-                        StartRideView(route: route, workout: workout)
+                        StartRideView(route: route, workout: workout, rideStore: rideStore)
                     }
                 }
             }
@@ -116,10 +117,33 @@ struct RouteList: View {
         }
         .alert("Held Ride", isPresented: $showHeldRideAlert) {
             Button("Continue") { workout.continueHeldRide(summary: held) }
-            Button("End & Save", role: .destructive) { workout.finalizeHeldRide(summary: held) }
+            Button("End & Save") { workout.finalizeHeldRide(summary: held) }
+            Button("Discard", role: .destructive) { showDiscardConfirmation = true }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("\(held.name) • \(formatDistance(held.distance))")
+        }
+        .alert("Discard Held Ride?", isPresented: $showDiscardConfirmation) {
+            Button("Discard", role: .destructive) {
+                workout.discardHeldRide(summary: held)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete your held ride. This cannot be undone.")
+        }
+        // Phone-initiated start that needs confirmation (held ride would be discarded)
+        .alert("Discard Held Ride?", isPresented: Binding(
+            get: { workout.pendingStartConfirmation != nil },
+            set: { if !$0 { workout.pendingStartConfirmation = nil } }
+        )) {
+            Button("Discard & Start", role: .destructive) {
+                let action = workout.pendingStartConfirmation
+                workout.pendingStartConfirmation = nil
+                action?()
+            }
+            Button("Cancel", role: .cancel) { workout.pendingStartConfirmation = nil }
+        } message: {
+            Text("Starting a new ride will discard your held ride. This cannot be undone.")
         }
     }
 }

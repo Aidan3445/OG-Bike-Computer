@@ -9,9 +9,11 @@ import SwiftUI
 
 struct RideHistoryView: View {
     @ObservedObject var rideStore: RideStore
+    @ObservedObject private var connectivity = ConnectivityManager.shared
 
     private var heldRides: [RideSummary] {
-        rideStore.rides.filter { $0.onHold }
+        guard connectivity.isReachable else { return [] }
+        return rideStore.rides.filter { $0.onHold }
     }
 
     private var completedRides: [RideSummary] {
@@ -22,15 +24,28 @@ struct RideHistoryView: View {
         DateSection.group(completedRides, by: \.date)
     }
 
+    /// Show the generic "waiting for ride from watch" placeholder only when we're
+    /// expecting a ride but no summary has arrived yet (no row to update in place).
+    private var showAwaitingPlaceholder: Bool {
+        connectivity.isAwaitingIncomingRide &&
+            connectivity.pendingTransferRideIDs.isEmpty
+    }
+
     var body: some View {
         Group {
-            if rideStore.rides.isEmpty {
+            if rideStore.rides.isEmpty && !showAwaitingPlaceholder {
                 ContentUnavailableView(
                     "No Rides Yet",
                     systemImage: "bicycle",
                     description: Text("Completed rides from your watch will appear here."))
             } else {
                 List {
+                    if showAwaitingPlaceholder {
+                        Section {
+                            AwaitingRideRow()
+                        }
+                    }
+
                     if !heldRides.isEmpty {
                         Section {
                             ForEach(heldRides) { ride in
@@ -49,12 +64,23 @@ struct RideHistoryView: View {
                     ForEach(sections, id: \.0) { section, rides in
                         Section {
                             ForEach(rides) { ride in
-                                NavigationLink {
-                                    RideDetailView(ride: ride, rideStore: rideStore)
-                                } label: {
-                                    RideRow(ride: ride, onRename: { newName in
-                                        rideStore.rename(ride, to: newName)
-                                    })
+                                let isTransferring = connectivity.pendingTransferRideIDs.contains(ride.id)
+                                if isTransferring {
+                                    RideRow(
+                                        ride: ride,
+                                        onRename: { newName in rideStore.rename(ride, to: newName) },
+                                        isTransferring: true
+                                    )
+                                } else {
+                                    NavigationLink {
+                                        RideDetailView(ride: ride, rideStore: rideStore)
+                                    } label: {
+                                        RideRow(
+                                            ride: ride,
+                                            onRename: { newName in rideStore.rename(ride, to: newName) },
+                                            isTransferring: false
+                                        )
+                                    }
                                 }
                             }
                             .onDelete { indices in

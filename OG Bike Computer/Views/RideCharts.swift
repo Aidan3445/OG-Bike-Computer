@@ -48,6 +48,8 @@ struct RideChartsView: View {
     let dataPoints: [ChartDataPoint]
     let hasHeartRate: Bool
     let hasPower: Bool
+    /// Scrub position in meters from start; nil when not scrubbing.
+    @Binding var scrubDistance: Double?
 
     @State private var selected: RideChartMetric = .elevation
 
@@ -62,9 +64,69 @@ struct RideChartsView: View {
         VStack(spacing: 8) {
             chart
                 .frame(height: 140)
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        let x = value.location.x - geo[proxy.plotFrame!].origin.x
+                                        let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+                                        if let distInUnits: Double = proxy.value(atX: x) {
+                                            let dist = distInUnits * metersPerUnit
+                                            let maxDist = dataPoints.last?.distance ?? 0
+                                            scrubDistance = max(0, min(dist, maxDist))
+                                        }
+                                    }
+                                    .onEnded { _ in scrubDistance = nil }
+                            )
+                    }
+                }
 
             toggleBar
+            
+            if let scrub = scrubDistance, let pt = closestPoint(to: scrub) {
+                scrubReadout(pt)
+            }
         }
+    }
+
+    private func closestPoint(to distance: Double) -> ChartDataPoint? {
+        dataPoints.min(by: { abs($0.distance - distance) < abs($1.distance - distance) })
+    }
+
+    @ViewBuilder
+    private func scrubReadout(_ pt: ChartDataPoint) -> some View {
+        let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+        HStack(spacing: 16) {
+            let distLabel = String(format: "%.1f %@", pt.distance / metersPerUnit, currentUnits.distance.label)
+            Text(distLabel)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            switch selected {
+            case .elevation:
+                Text(formatElevation(pt.elevation))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .speed:
+                Text(formatSpeed(pt.speed))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .heartRate:
+                Text("\(Int(pt.heartRate)) bpm")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .power:
+                Text("\(Int(pt.power)) W")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(selected.color.opacity(0.1), in: Capsule())
     }
 
     @ViewBuilder
@@ -153,6 +215,13 @@ struct RideChartsView: View {
                     .interpolationMethod(.catmullRom)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
                 }
+            }
+            // Scrub rule line
+            if let scrub = scrubDistance {
+                let scrubInUnits = scrub / metersPerUnit
+                RuleMark(x: .value("Scrub", scrubInUnits))
+                    .foregroundStyle(selected.color.opacity(0.8))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
             }
         }
         .chartXScale(domain: 0...maxDist)
@@ -254,6 +323,7 @@ struct RideChartsView: View {
 
 struct RouteElevationChartView: View {
     let points: [ProcessedPoint]
+    @Binding var scrubDistance: Double?
 
     var body: some View {
         let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
@@ -301,6 +371,13 @@ struct RouteElevationChartView: View {
                             .foregroundStyle(.secondary)
                     }
             }
+
+            // Scrub rule line
+            if let scrub = scrubDistance {
+                RuleMark(x: .value("Scrub", scrub / metersPerUnit))
+                    .foregroundStyle(Color.green.opacity(0.8))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+            }
         }
         .chartXScale(domain: 0...maxDist)
         .chartXAxis {
@@ -329,6 +406,49 @@ struct RouteElevationChartView: View {
         .chartLegend(.hidden)
         .clipped()
         .frame(height: 140)
+        .chartOverlay { proxy in
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let x = value.location.x - geo[proxy.plotFrame!].origin.x
+                                if let distInUnits: Double = proxy.value(atX: x) {
+                                    let dist = distInUnits * metersPerUnit
+                                    let maxDistMeters = points.last?.distanceFromStart ?? 0
+                                    scrubDistance = max(0, min(dist, maxDistMeters))
+                                }
+                            }
+                            .onEnded { _ in scrubDistance = nil }
+                    )
+            }
+        }
+
+        if let scrub = scrubDistance, let elev = elevationAtDistance(scrub) {
+            HStack(spacing: 16) {
+                let metersPerUnit2: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+                Text(String(format: "%.1f %@", scrub / metersPerUnit2, currentUnits.distance.label))
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(formatElevation(elev))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.green)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .background(Color.green.opacity(0.1), in: Capsule())
+        }
+    }
+
+    private func elevationAtDistance(_ targetDist: Double) -> Double? {
+        guard !points.isEmpty else { return nil }
+        let sorted = points.filter { $0.elevation != nil }
+        if let exact = sorted.min(by: { abs($0.distanceFromStart - targetDist) < abs($1.distanceFromStart - targetDist) }) {
+            return exact.elevation
+        }
+        return nil
     }
 
     private func elevationValue(_ meters: Double) -> Double {
@@ -430,7 +550,7 @@ func buildRideChartData(from trackURL: URL, segmentCount: Int = 200) -> (points:
             .frame(width: 36, height: 4)
             .padding(.top, 8)
 
-        RideChartsView(dataPoints: mockData, hasHeartRate: true, hasPower: true)
+        RideChartsView(dataPoints: mockData, hasHeartRate: true, hasPower: true, scrubDistance: .constant(nil))
 
         HStack(spacing: 6) {
             Circle().fill(Color.primary).frame(width: 6, height: 6)

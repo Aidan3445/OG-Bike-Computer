@@ -164,7 +164,7 @@ struct EndRideAppIntent: AppIntent {
         }
         let movingTime = await PhoneTelemetryStore.shared.movingTime
         if movingTime < 60 {
-            await ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+            await RideSessionManager.shared.sendDiscardRide()
             return .result(dialog: "Ride was under 1 minute and has been discarded.")
         }
         await RideSessionManager.shared.endRide()

@@ -68,7 +68,7 @@ struct RideControlView: View {
             Button("Discard", role: .destructive) {
                 // Send discard command to watch — don't call session.endRide()
                 // because the watch's discard() handles ending the HK session
-                ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+                session.sendDiscardRide()
                 userSettings.clearRideTracking()
             }
             Button("Save Anyway") {

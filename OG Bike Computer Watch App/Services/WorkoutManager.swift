@@ -129,6 +129,9 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var completedRideSummary: WatchRideSummary?
     /// Set when healthKitAutoUpload is off — prompts the user to save or discard the HK workout
     @Published var showHealthKitPrompt = false
+    /// Set when starting a new ride would discard an existing held ride.
+    /// The watch UI should show a confirmation sheet and call the closure to proceed or nil to cancel.
+    @Published var pendingStartConfirmation: (() -> Void)?
     /// Continuation called with `true` to save to HealthKit, `false` to discard
     var healthKitPromptHandler: ((Bool) -> Void)?
 
@@ -493,7 +496,7 @@ class WorkoutManager: NSObject, ObservableObject {
 
     /// Start a ride by creating a new local HKWorkoutSession (default path).
     func start(activity: ActivityType) {
-        // Auto-save any existing held ride before starting a new one
+        // Discard any existing held ride (caller must have already confirmed with user)
         if continuationBase == nil {
             autoFinalizeHeldRideIfNeeded()
         }
@@ -1699,6 +1702,15 @@ class WorkoutManager: NSObject, ObservableObject {
         // Re-send to phone so it receives the updated (completed) summary
         let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
         ConnectivityManager.shared.sendRide(summary: completed, trackURL: trackURL)
+    }
+
+    func discardHeldRide(summary: RideSummary) {
+        rideStore?.delete(summary)
+        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
+        try? FileManager.default.removeItem(at: trackURL)
+        // Notify phone to remove it as well
+        ConnectivityManager.shared.sendDiscardRide(rideID: summary.id)
+        print("[Hold] Discarded held ride: \(summary.name)")
     }
 
     func autoFinalizeHeldRideIfNeeded() {
