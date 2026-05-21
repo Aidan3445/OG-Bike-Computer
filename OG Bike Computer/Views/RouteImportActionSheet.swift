@@ -14,6 +14,19 @@ struct RouteImportActionSheet: View {
     @ObservedObject private var rideSession  = RideSessionManager.shared
     @ObservedObject private var connectivity = ConnectivityManager.shared
 
+    /// Per-route resolution. The sheet stays open after each action so the
+    /// rider can verify the result and act on the remaining routes — only
+    /// "Done" dismisses.
+    private enum Resolution: Equatable {
+        case savedToPhone
+        case sentToWatch
+        case sentAndStarted
+        case switched
+        case failed(String)
+    }
+
+    @State private var resolutions: [UUID: Resolution] = [:]
+
     private var canSendToWatch: Bool {
         connectivity.isPaired && connectivity.isWatchAppInstalled
     }
@@ -23,33 +36,36 @@ struct RouteImportActionSheet: View {
             List {
                 ForEach(coordinator.pendingRoutes) { route in
                     Section {
-                        // ── Save only ──────────────────────────────────────
-                        Button {
-                            coordinator.clear()
-                        } label: {
-                            Label("Save to Phone", systemImage: "iphone")
-                        }
+                        if let resolution = resolutions[route.id] {
+                            resolvedRow(for: resolution)
+                        } else {
+                            // ── Save only ──────────────────────────────────────
+                            Button {
+                                resolutions[route.id] = .savedToPhone
+                            } label: {
+                                Label("Save to Phone", systemImage: "iphone")
+                            }
 
-                        // ── Watch actions (only shown when watch is available) ──
-                        if canSendToWatch {
-                            if rideSession.isRideActive {
-                                // Mid-ride: offer a route switch instead
-                                Button {
-                                    sendToWatch(route, pendingAction: "changeRoute")
-                                } label: {
-                                    Label("Switch to This Route", systemImage: "arrow.triangle.swap")
-                                }
-                            } else {
-                                Button {
-                                    sendToWatch(route, pendingAction: nil)
-                                } label: {
-                                    Label("Send to Watch", systemImage: "applewatch")
-                                }
+                            // ── Watch actions (only shown when watch is available) ──
+                            if canSendToWatch {
+                                if rideSession.isRideActive {
+                                    Button {
+                                        sendToWatch(route, pendingAction: "changeRoute")
+                                    } label: {
+                                        Label("Switch to This Route", systemImage: "arrow.triangle.swap")
+                                    }
+                                } else {
+                                    Button {
+                                        sendToWatch(route, pendingAction: nil)
+                                    } label: {
+                                        Label("Send to Watch", systemImage: "applewatch")
+                                    }
 
-                                Button {
-                                    sendToWatch(route, pendingAction: "startRide")
-                                } label: {
-                                    Label("Send + Start Ride", systemImage: "figure.outdoor.cycle")
+                                    Button {
+                                        sendToWatch(route, pendingAction: "startRide")
+                                    } label: {
+                                        Label("Send + Start Ride", systemImage: "figure.outdoor.cycle")
+                                    }
                                 }
                             }
                         }
@@ -69,9 +85,41 @@ struct RouteImportActionSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { coordinator.clear() }
+                    Button("Done") {
+                        resolutions = [:]
+                        coordinator.clear()
+                    }
                 }
             }
+            .onAppear { applyAutoSent() }
+            .onChange(of: coordinator.autoSentRouteIDs) { _, _ in applyAutoSent() }
+        }
+    }
+
+    private func applyAutoSent() {
+        for id in coordinator.autoSentRouteIDs where resolutions[id] == nil {
+            resolutions[id] = .sentToWatch
+        }
+    }
+
+    @ViewBuilder
+    private func resolvedRow(for resolution: Resolution) -> some View {
+        switch resolution {
+        case .savedToPhone:
+            Label("Saved to Phone", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .sentToWatch:
+            Label("Sent to Watch", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .sentAndStarted:
+            Label("Sent — Ride Started on Watch", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .switched:
+            Label("Switched to This Route", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
         }
     }
 
@@ -82,7 +130,19 @@ struct RouteImportActionSheet: View {
             route,
             pendingAction: pendingAction,
             activityType: pendingAction == "startRide" ? "cycling" : nil
-        ) { _ in }
-        coordinator.clear()
+        ) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    switch pendingAction {
+                    case "startRide":   resolutions[route.id] = .sentAndStarted
+                    case "changeRoute": resolutions[route.id] = .switched
+                    default:            resolutions[route.id] = .sentToWatch
+                    }
+                case .failure:
+                    resolutions[route.id] = .failed("Send failed — try again")
+                }
+            }
+        }
     }
 }

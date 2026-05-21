@@ -160,13 +160,13 @@ struct SettingsView: View {
                     }
                 }
 
-                // MARK: - Navigation Alerts
+                // MARK: - Alerts
                 NavigationLink {
                     NavigationAlertSettingsView(userSettings: userSettings)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Navigation Alerts")
+                            Text("Alerts")
                             Text(navigationAlertsSummary)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -343,9 +343,11 @@ struct SettingsView: View {
             ClearRoutesSheet(
                 phoneRouteCount: $routeStore.routes.count,
                 watchRouteCount: connectivity.routeNamesOnWatch.count,
-                onConfirm: { alsoWatch in
-                    routeStore.deleteAll()
-                    if alsoWatch {
+                onConfirm: { deletePhone, deleteWatch in
+                    if deletePhone {
+                        routeStore.deleteAll()
+                    }
+                    if deleteWatch {
                         connectivity.sendClearAllRoutes()
                     }
                 }
@@ -645,10 +647,23 @@ struct RiderProfileView: View {
 struct ClearRoutesSheet: View {
     let phoneRouteCount: Int
     let watchRouteCount: Int
-    let onConfirm: (Bool) -> Void
+    /// Callback receives `(deletePhone, deleteWatch)` — the caller must
+    /// gate each device's deletion on its respective flag. Earlier this
+    /// only carried `deleteWatch` and the phone delete fired
+    /// unconditionally, so picking "watch only" still wiped the phone.
+    let onConfirm: (Bool, Bool) -> Void
     @State private var deleteFromPhone = false
     @State private var deleteFromWatch = false
     @Environment(\.dismiss) private var dismiss
+
+    private var deleteScopeText: String {
+        switch (deleteFromPhone, deleteFromWatch) {
+        case (true, true):   return "This will permanently delete all routes from your phone and your Apple Watch. This cannot be undone."
+        case (true, false):  return "This will permanently delete all routes from your phone. This cannot be undone."
+        case (false, true):  return "This will permanently delete all routes from your Apple Watch. This cannot be undone."
+        case (false, false): return "Select a device above to clear routes from."
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -660,7 +675,7 @@ struct ClearRoutesSheet: View {
                 Text("Delete all \((deleteFromPhone ? phoneRouteCount : 0) + (deleteFromWatch ? watchRouteCount : 0)) routes?")
                     .font(.headline)
 
-                Text("This will permanently delete all routes from your phone. This cannot be undone.")
+                Text(deleteScopeText)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -689,7 +704,7 @@ struct ClearRoutesSheet: View {
 
                 .safeAreaInset(edge: .bottom) {
                     Button(role: .destructive) {
-                        onConfirm(deleteFromWatch)
+                        onConfirm(deleteFromPhone, deleteFromWatch)
                         dismiss()
                     } label: {
                         let targets: [String] = [

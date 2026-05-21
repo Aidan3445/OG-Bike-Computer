@@ -139,11 +139,11 @@ struct WorkoutView<ExtraTab: View>: View {
                 }
             }
             .onChange(of: workout.hasRoute) { hadRoute, hasRoute in
-                    // Only switch to map when a route is freshly loaded (nil → route).
-                    // Swapping routes briefly makes hasRoute false then true; ignoring
-                    // the false→true transition here prevents the tab from jumping
-                    // to map unexpectedly when the rider is on a metrics page.
-                    if hasRoute && !hadRoute && tab > 1 {
+                    // Only auto-switch to the map on a fresh route load *before*
+                    // the ride starts. Mid-ride route swaps may briefly toggle
+                    // hasRoute false→true; jumping the rider's tab back to map
+                    // during a ride is jarring, so we leave them where they are.
+                    if hasRoute && !hadRoute && tab > 1 && !workout.isActive {
                         withAnimation { tab = 1 }
                     }
                 }

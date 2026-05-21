@@ -139,6 +139,15 @@ struct LongPressScrubOverlay: UIViewRepresentable {
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
             true
         }
+
+        // Reserve the leading edge for the NavigationStack swipe-back gesture —
+        // touches that start within 40pt of the left edge never arm the scrubber.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldReceive touch: UITouch) -> Bool {
+            guard let view = view else { return true }
+            let x = touch.location(in: view).x
+            return x >= 40
+        }
     }
 }
 
@@ -183,6 +192,10 @@ struct RideChartsView: View {
     let hasPower: Bool
     /// Scrub position in meters from start; nil when not scrubbing.
     @Binding var scrubDistance: Double?
+    /// Optional binding that surfaces the currently-selected chart's color
+    /// so a parent (e.g. the map view's scrub dot) can match it. The chart
+    /// itself doesn't need this — it's purely for cross-view styling.
+    var scrubColor: Binding<Color>? = nil
 
     @State private var selected: RideChartMetric = .elevation
     @State private var scrubActive = false
@@ -198,6 +211,10 @@ struct RideChartsView: View {
         VStack(spacing: 8) {
             chart
                 .frame(height: 140)
+                .onAppear { scrubColor?.wrappedValue = selected.color }
+                .onChange(of: selected) { _, newValue in
+                    scrubColor?.wrappedValue = newValue.color
+                }
                 .chartOverlay { proxy in
                     GeometryReader { geo in
                         let updateScrub: (CGPoint) -> Void = { loc in
@@ -387,9 +404,11 @@ struct RideChartsView: View {
         }
         .chartXScale(domain: 0...maxDist)
         .chartXAxis {
+            // Anchor labels to the leading edge of their tick so the rightmost
+            // label doesn't get clipped at the chart edge.
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                AxisValueLabel {
+                AxisValueLabel(anchor: .topLeading) {
                     if let v = value.as(Double.self) {
                         Text("\(Int(v)) \(unitLabel)")
                             .font(.system(size: 9))
@@ -543,9 +562,11 @@ struct RouteElevationChartView: View {
         }
         .chartXScale(domain: 0...maxDist)
         .chartXAxis {
+            // Anchor labels to the leading edge of their tick so the rightmost
+            // label doesn't get clipped at the chart edge.
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                AxisValueLabel {
+                AxisValueLabel(anchor: .topLeading) {
                     if let v = value.as(Double.self) {
                         Text("\(Int(v)) \(unitLabel)")
                             .font(.system(size: 9))

@@ -330,12 +330,72 @@ class NavigationTracker: ObservableObject {
     private let candidateRadius: Double = 200
     private let clusterGap: Double = 200
 
+    /// Perpendicular distance from a point to the segment a→b, in meters.
+    /// `withinBounds` is true if the projection falls inside the segment
+    /// (i.e. the perpendicular foot lies between a and b, not past either end).
+    private static func perpendicularDistance(
+        point: CLLocationCoordinate2D,
+        a: CLLocationCoordinate2D,
+        b: CLLocationCoordinate2D
+    ) -> (distance: Double, withinBounds: Bool) {
+        let R = 6_371_000.0
+        let toRad = Double.pi / 180
+        let cosLat = cos(a.latitude * toRad)
+        let bx = (b.longitude - a.longitude) * toRad * cosLat * R
+        let by = (b.latitude - a.latitude) * toRad * R
+        let px = (point.longitude - a.longitude) * toRad * cosLat * R
+        let py = (point.latitude - a.latitude) * toRad * R
+        let segLen2 = bx * bx + by * by
+        if segLen2 < 1e-6 {
+            return (sqrt(px * px + py * py), true)
+        }
+        let t = (px * bx + py * by) / segLen2
+        let tClamped = max(0, min(1, t))
+        let cx = tClamped * bx
+        let cy = tClamped * by
+        let dx = px - cx
+        let dy = py - cy
+        return (sqrt(dx * dx + dy * dy), t >= 0 && t <= 1)
+    }
+
+    /// Given a nearest point-index and a fallback point-to-point distance,
+    /// refine by computing perpendicular distance to the two adjacent
+    /// segments. Handles the GPX-decimation case where the rider sits on a
+    /// long straight segment between two widely-spaced nodes.
+    private func refinedSegmentDistance(
+        index: Int,
+        fallback: Double,
+        location: CLLocation,
+        route: ProcessedRoute
+    ) -> Double {
+        var best = fallback
+        let p = location.coordinate
+        if index > 0 {
+            let r = NavigationTracker.perpendicularDistance(
+                point: p,
+                a: route.points[index - 1].coordinate,
+                b: route.points[index].coordinate)
+            if r.withinBounds && r.distance < best { best = r.distance }
+        }
+        if index < route.points.count - 1 {
+            let r = NavigationTracker.perpendicularDistance(
+                point: p,
+                a: route.points[index].coordinate,
+                b: route.points[index + 1].coordinate)
+            if r.withinBounds && r.distance < best { best = r.distance }
+        }
+        return best
+    }
+
     private func findNearest(
         location: CLLocation,
         in route: ProcessedRoute
     ) -> (index: Int, distance: Double) {
         let riderCourse = location.course
         let currentRouteDist = route.points[max(0, min(currentSegmentIndex, route.points.count - 1))].distanceFromStart
+        let refine: (Int, Double) -> Double = { idx, fallback in
+            self.refinedSegmentDistance(index: idx, fallback: fallback, location: location, route: route)
+        }
 
         // Phase 1: Gather all route points within candidateRadius
         struct Candidate {
@@ -370,7 +430,7 @@ class NavigationTracker: ObservableObject {
                 hasJoinedRoute = true
             }
             jumpCandidate = nil
-            return (globalBestIndex, globalBestDist)
+            return (globalBestIndex, refine(globalBestIndex, globalBestDist))
         }
 
         // Phase 2: Cluster candidates by route distance
@@ -455,7 +515,7 @@ class NavigationTracker: ObservableObject {
                 hasJoinedRoute = true
             }
             jumpCandidate = nil
-            return (winner.index, winner.gpsDist)
+            return (winner.index, refine(winner.index, winner.gpsDist))
         }
 
         // Phase 4: Section jump confirmation
@@ -465,7 +525,7 @@ class NavigationTracker: ObservableObject {
         if isSameSection || isForwardProgress {
             // Same section or moving forward along route — accept immediately
             jumpCandidate = nil
-            return (winner.index, winner.gpsDist)
+            return (winner.index, refine(winner.index, winner.gpsDist))
         }
 
         // Backward jump to different section — require confirmation
@@ -479,7 +539,7 @@ class NavigationTracker: ObservableObject {
                     print("[Nav] Section jump to index \(winner.index) "
                         + "(dist=\(Int(winner.routeDist))m) "
                         + "confirmed after \(newCount) samples")
-                    return (winner.index, winner.gpsDist)
+                    return (winner.index, refine(winner.index, winner.gpsDist))
                 } else {
                     jumpCandidate = (segmentIndex: winner.index, sampleCount: newCount)
                 }
@@ -493,12 +553,12 @@ class NavigationTracker: ObservableObject {
 
         // While confirming, stay on current section if possible
         if let fallback = scored.first(where: { abs($0.routeDist - currentRouteDist) < clusterGap }) {
-            return (fallback.index, fallback.gpsDist)
+            return (fallback.index, refine(fallback.index, fallback.gpsDist))
         }
 
         // No current-section cluster (drifted away) — accept jump immediately
         jumpCandidate = nil
-        return (winner.index, winner.gpsDist)
+        return (winner.index, refine(winner.index, winner.gpsDist))
     }
 
     // Compute clustered rejoin candidates when off-route

@@ -24,18 +24,20 @@ struct NavigationAlertSettingsView: View {
             navigationEventsSection
             waypointAlertsSection
             splitAlertsSection
+            endOfRouteAlertsSection
             autoPauseAlertsSection
+            audioOutputSection
             hapticsSection
 
             if userSettings.settings.navigationAlerts != .default {
                 Section {
-                    Button("Reset Navigation Alerts to Defaults", role: .destructive) {
+                    Button("Reset Alerts to Defaults", role: .destructive) {
                         userSettings.settings.navigationAlerts = .default
                     }
                 }
             }
         }
-        .settingsPageTitle("Navigation Alerts", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Alerts", profile: userSettings.activeProfileName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
@@ -200,6 +202,49 @@ struct NavigationAlertSettingsView: View {
         }
     }
 
+    // MARK: - End of Route Alerts
+
+    @ViewBuilder
+    private var endOfRouteAlertsSection: some View {
+        Section {
+            Toggle("End-of-Route Readout", isOn: prefs.endOfRouteAlerts.enabled)
+
+            if userSettings.settings.navigationAlerts.endOfRouteAlerts.enabled {
+                AlertModePicker(label: "Mode", mode: prefs.endOfRouteAlerts.mode)
+
+                Toggle("Use Split Stats", isOn: prefs.endOfRouteAlerts.useSplitsMetrics)
+
+                if !userSettings.settings.navigationAlerts.endOfRouteAlerts.useSplitsMetrics {
+                    NavigationLink {
+                        SplitMetricPickerView(
+                            metrics: Binding(
+                                get: {
+                                    userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride
+                                        ?? userSettings.settings.navigationAlerts.splitAlerts.metrics
+                                },
+                                set: { userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride = $0 }
+                            ),
+                            userSettings: userSettings
+                        )
+                    } label: {
+                        HStack {
+                            Text("Stats to Read")
+                            Spacer()
+                            let count = (userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride
+                                ?? userSettings.settings.navigationAlerts.splitAlerts.metrics).count
+                            Text("\(count) selected")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Label("End-of-Route Readout", systemImage: "flag.checkered")
+        } footer: {
+            Text("Reads ride stats once after the route is completed. Defaults to mirroring the split/halfway selection.")
+        }
+    }
+
     // MARK: - Auto-Pause Alerts
 
     @ViewBuilder
@@ -299,6 +344,28 @@ struct NavigationAlertSettingsView: View {
             Label("Haptic Feedback", systemImage: "hand.point.up.braille")
         } footer: {
             Text("Controls vibration strength for all navigation haptics.")
+        }
+    }
+
+    // MARK: - Audio Output
+
+    @ViewBuilder
+    private var audioOutputSection: some View {
+        Section {
+            Picker("Audio Source", selection: prefs.audioOutput.source) {
+                ForEach(AlertAudioSource.allCases, id: \.self) { source in
+                    Text(source.label).tag(source)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(userSettings.settings.navigationAlerts.audioOutput.source.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Label("Audio Source", systemImage: "speaker.wave.2")
+        } footer: {
+            Text("Auto plays through headphones if connected to the watch, otherwise the phone, otherwise the watch speaker. For nicer voices, install a Premium voice via Settings → Accessibility → Spoken Content → Voices → English.")
         }
     }
 }

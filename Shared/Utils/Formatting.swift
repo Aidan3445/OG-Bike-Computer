@@ -22,22 +22,35 @@ func formatDistance(_ meters: Double, _ units: Bool = true) -> String {
     }
 }
 
+/// Formats the distance to the next turn for the watch's navigation overlay.
+/// Steps the readout down through tenths of a mile/km before switching to
+/// feet/meters so the rider sees "1.5 mi → 1.0 mi → 0.7 mi → 0.3 mi → 400 ft"
+/// rather than jumping straight to feet. Uses digit forms (0.5 / 0.25) rather
+/// than unicode glyphs (½ / ¼) which render too small on the watch.
 func formatTurnDistance(_ meters: Double) -> String {
     switch currentUnits.distance {
     case .miles:
-        if meters >= 1609 {
-            return String(format: "%.1f", meters / 1609.34)
-        } else {
-            let feet = Int(meters * 3.28084)
-            return "\((feet / 50) * 50) ft"
+        let miles = meters / 1609.34
+        if miles >= 1.0 {
+            return String(format: "%.1f mi", miles)
         }
+        if miles >= 0.1 {
+            let tenths = (miles * 10).rounded() / 10
+            return String(format: "%.1f mi", tenths)
+        }
+        let feet = Int(meters * 3.28084)
+        return "\((feet / 50) * 50) ft"
     case .kilometers:
-        if meters >= 1000 {
-            return String(format: "%.1f", meters / 1000)
-        } else {
-            let m = Int(meters)
-            return "\((m / 50) * 50) m"
+        let km = meters / 1000
+        if km >= 1.0 {
+            return String(format: "%.1f km", km)
         }
+        if km >= 0.1 {
+            let tenths = (km * 10).rounded() / 10
+            return String(format: "%.1f km", tenths)
+        }
+        let m = Int(meters)
+        return "\((m / 50) * 50) m"
     }
 }
 

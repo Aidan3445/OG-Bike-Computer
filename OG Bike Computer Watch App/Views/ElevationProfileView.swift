@@ -15,7 +15,6 @@ struct ElevationProfileView: View {
     }
 
     @State private var mode: ViewMode = .full
-    @State private var initializedDefaultTab = false
 
     private var elevationConfig: ElevationScreenConfig {
         workout.ridePreferences.elevationScreen
@@ -50,9 +49,16 @@ struct ElevationProfileView: View {
             .padding(.top, 4)
             .safeAreaPadding(.top)
             .onAppear {
-                guard !initializedDefaultTab else { return }
-                initializedDefaultTab = true
+                // Re-apply the default each time the screen becomes visible —
+                // manual mode flips only persist within a single visit so the
+                // setting acts like a real "default tab" rather than a one-time
+                // initial selection.
                 mode = elevationConfig.defaultTab == .ahead ? .ahead : .full
+            }
+            .onChange(of: elevationConfig.defaultTab) { _, newValue in
+                // Live-update if the user changes the setting while the view
+                // is already on screen.
+                mode = newValue == .ahead ? .ahead : .full
             }
         } else {
             VStack(spacing: 8) {
@@ -107,6 +113,20 @@ struct ElevationProfileView: View {
                     elevationMarks(pt: pt, metersPerUnit: metersPerUnit, baseline: baseline)
                 }
 
+                // Grade overlay: per-segment colored band along the bottom.
+                // Renders only when the user has the overlay enabled.
+                if elevationConfig.showGrade {
+                    ForEach(Array(gradeSegments(pts: pts).enumerated()), id: \.offset) { _, seg in
+                        RectangleMark(
+                            xStart: .value("Start", seg.startMeters / metersPerUnit),
+                            xEnd: .value("End", seg.endMeters / metersPerUnit),
+                            yStart: .value("Base", baseline),
+                            yEnd: .value("BandTop", baseline + (domain.upperBound - domain.lowerBound) * 0.06)
+                        )
+                        .foregroundStyle(seg.color.opacity(0.85))
+                    }
+                }
+
                 // POI markers
                 ForEach(Array(visiblePOIs.enumerated()), id: \.offset) { _, poi in
                     let x = poi.distanceFromStart / metersPerUnit
@@ -139,7 +159,7 @@ struct ElevationProfileView: View {
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 3)) { value in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                    AxisValueLabel {
+                    AxisValueLabel(anchor: .topLeading) {
                         if let v = value.as(Double.self) {
                             Text("\(Int(v))\(unitLabel)")
                                 .font(.system(size: 8))
@@ -165,12 +185,14 @@ struct ElevationProfileView: View {
 
     private var elevationReadout: some View {
         HStack {
-            Label(formatElevation(currentElev), systemImage: "arrow.up.right")
+            // Current elevation = mountain icon; total gain = up-right arrow.
+            // Previously these were swapped.
+            Label(formatElevation(currentElev), systemImage: "mountain.2")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.green)
             Spacer()
             if elevationConfig.showGainLossReadout, workout.liveElevationGain > 0 {
-                Label(formatElevation(workout.liveElevationGain) + " gain", systemImage: "mountain.2")
+                Label(formatElevation(workout.liveElevationGain) + " gain", systemImage: "arrow.up.right")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -233,5 +255,37 @@ struct ElevationProfileView: View {
             .foregroundStyle(.green)
             .interpolationMethod(.catmullRom)
             .lineStyle(StrokeStyle(lineWidth: 1.5))
+    }
+
+    /// One element per consecutive-sample pair, with the average grade and a
+    /// tier color. Used to render the grade band when the overlay is enabled.
+    private struct GradeSegment {
+        let startMeters: Double
+        let endMeters: Double
+        let color: Color
+    }
+
+    private func gradeSegments(pts: [ElevationSample]) -> [GradeSegment] {
+        guard pts.count >= 2 else { return [] }
+        return zip(pts.dropLast(), pts.dropFirst()).map { a, b in
+            let dx = b.distanceFromStart - a.distanceFromStart
+            let dh = b.elevation - a.elevation
+            let pct = dx > 0 ? dh / dx * 100.0 : 0
+            return GradeSegment(
+                startMeters: a.distanceFromStart,
+                endMeters: b.distanceFromStart,
+                color: gradeColor(pct)
+            )
+        }
+    }
+
+    private func gradeColor(_ pct: Double) -> Color {
+        switch pct {
+        case ..<(-3):     return .blue       // significant descent
+        case ..<3:        return .green      // flat / mild
+        case ..<6:        return .yellow     // moderate climb
+        case ..<10:       return .orange     // steep climb
+        default:          return .red        // very steep climb
+        }
     }
 }

@@ -171,6 +171,25 @@ class RideStore: ObservableObject {
             }
             .sorted { $0.date > $1.date }
 
+        // Auto-discard held rides whose track was wiped by the pre-fix self-copy bug.
+        // A held ride with no track is unrecoverable — Continue can't restore state and
+        // End & Save can't transfer anything. Leaving it in the list just shows a
+        // broken row that no action can clean up.
+        let orphanedHeld = rides.filter { ride in
+            guard ride.onHold else { return false }
+            return !FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent(ride.trackFilename).path)
+        }
+        for ride in orphanedHeld {
+            let jsonURL = directory.appendingPathComponent("\(ride.id.uuidString).json")
+            try? FileManager.default.removeItem(at: jsonURL)
+            logger.log("[RideStore] auto-discarded held ride with missing track: \(ride.name)")
+        }
+        if !orphanedHeld.isEmpty {
+            let orphanedIDs = Set(orphanedHeld.map(\.id))
+            rides.removeAll { orphanedIDs.contains($0.id) }
+        }
+
         logger.log("[RideStore] loadAll:self. loaded \(self.rides.count) rides")
         for ride in rides {
             let trackExists = FileManager.default.fileExists(
