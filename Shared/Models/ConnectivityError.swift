@@ -13,6 +13,7 @@ enum ConnectivityError: LocalizedError {
     case watchAppNotInstalled
     case notReachable
     case encodingFailed
+    case watchOperationFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +27,8 @@ enum ConnectivityError: LocalizedError {
             return "Apple Watch is not reachable right now."
         case .encodingFailed:
             return "Failed to encode route data for transmission."
+        case .watchOperationFailed(let reason):
+            return reason
         }
     }
 }

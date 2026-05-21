@@ -53,8 +53,15 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         }
 
         ConnectivityManager.shared.onDiscardRideRequested = { [weak self] in
-            guard let self = self, self.workout.isActive else { return }
-            self.workout.discard()
+            guard let self = self else { return }
+            // Discard works in two modes:
+            //   1. Active ride → tear down via WorkoutManager.discard()
+            //   2. Held ride (workout not active) → delete the held ride from disk + store
+            if self.workout.isActive {
+                self.workout.discard()
+            } else if let held = self.rideStore.heldRide {
+                self.workout.discardHeldRide(summary: held)
+            }
         }
 
         ConnectivityManager.shared.onHoldRideRequested = { [weak self] in
@@ -62,16 +69,40 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             self.workout.holdRide()
         }
 
-        ConnectivityManager.shared.onContinueHeldRideRequested = { [weak self] rideID in
-            guard let self = self, !self.workout.isActive else { return }
-            guard let held = self.rideStore.heldRide, held.id == rideID else { return }
-            self.workout.continueHeldRide(summary: held)
-        }
+        ConnectivityManager.shared.onContinueHeldRideRequested = { [weak self] rideID, providedSummary, ack in
+            guard let self = self else {
+                ack("Watch app not ready")
+                return
+            }
+            if self.workout.isActive {
+                ack("A workout is already in progress on the watch")
+                return
+            }
 
-        ConnectivityManager.shared.onFinalizeHeldRideRequested = { [weak self] rideID in
-            guard let self = self, !self.workout.isActive else { return }
-            guard let held = self.rideStore.heldRide, held.id == rideID else { return }
-            self.workout.finalizeHeldRide(summary: held)
+            // Resolve the held ride: prefer the watch's own store, fall back to the
+            // summary the phone sent in the message. This handles the case where the
+            // watch's RideStore lost the entry but the phone still has it.
+            let held: RideSummary
+            if let existing = self.rideStore.heldRide, existing.id == rideID {
+                held = existing
+            } else if let provided = providedSummary, provided.id == rideID {
+                self.rideStore.save(provided)
+                held = provided
+            } else {
+                ack("Held ride not found on watch")
+                return
+            }
+
+            // Continuation needs the track file to restore stats. If it's missing on
+            // the watch, fail explicitly rather than silently dropping the request.
+            let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(held.trackFilename)
+            guard FileManager.default.fileExists(atPath: trackURL.path) else {
+                ack("Track file missing on watch — cannot continue")
+                return
+            }
+
+            self.workout.continueHeldRide(summary: held)
+            ack(nil)
         }
 
         workout.recoverCheckpointIfNeeded()

@@ -13,7 +13,10 @@ struct SplitMetricPickerView: View {
 
     private let maxSelection = 5
 
-    /// Metrics that make sense for split readouts
+    /// Metrics with cumulative readouts. Instantaneous-only metrics
+    /// (.grade, .powerEstimate) and ride-only metrics that the watch
+    /// doesn't yet snapshot per-split (avg/max power) are intentionally
+    /// excluded — picking them silently dropped the readout.
     private let availableMetrics: [MetricType] = [
         .movingTime,
         .elapsedTime,
@@ -22,12 +25,9 @@ struct SplitMetricPickerView: View {
         .distance,
         .elevationGain,
         .elevationLoss,
-        .heartRate,
         .averageHeartRate,
         .maxHeartRate,
         .calories,
-        .powerEstimate,
-        .grade,
     ]
 
     var body: some View {
@@ -57,10 +57,13 @@ struct SplitMetricPickerView: View {
                     .onDelete { indices in
                         metrics.remove(atOffsets: indices)
                     }
+                    .onMove { source, destination in
+                        metrics.move(fromOffsets: source, toOffset: destination)
+                    }
                 } header: {
                     Text("Selected Stats")
                 } footer: {
-                    Text("Scope controls whether the stat reads for the split, the whole ride, or both. Split stats are read first, then ride stats.")
+                    Text("Stats read in the order shown — tap Edit to drag and reorder. The same order applies to both split and halfway readouts.")
                 }
             }
 
@@ -102,6 +105,9 @@ struct SplitMetricPickerView: View {
         }
         .navigationTitle("Split Stats")
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                EditButton()
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
                     SettingsPresetsView(userSettings: userSettings)

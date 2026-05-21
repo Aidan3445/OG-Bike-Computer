@@ -72,15 +72,40 @@ final class RouteImportCoordinator: ObservableObject {
 
     @Published var pendingRoutes: [Route] = []
     @Published var showActionSheet = false
+    /// Route IDs that the auto-send setting has already shipped to the watch.
+    /// The action sheet reads this on appear to pre-mark the row as "Sent to
+    /// Watch" so the rider doesn't have to tap the same action twice.
+    @Published var autoSentRouteIDs: Set<UUID> = []
+
+    /// Read by `handle(_:)`. Mirrors the `autoSendRoutesToWatch` `@AppStorage`
+    /// key in `RideSettingsView`. Settings UI writes the key directly; the
+    /// coordinator reads it at import time.
+    static let autoSendDefaultsKey = "autoSendRoutesToWatch"
 
     func handle(_ routes: [Route]) {
         guard !routes.isEmpty else { return }
         pendingRoutes = routes
+        autoSentRouteIDs = []
         showActionSheet = true
+
+        let autoSend = UserDefaults.standard.bool(forKey: Self.autoSendDefaultsKey)
+        guard autoSend else { return }
+        let conn = ConnectivityManager.shared
+        guard conn.isPaired, conn.isWatchAppInstalled else { return }
+        for route in routes {
+            conn.sendRoute(route) { [weak self] result in
+                DispatchQueue.main.async {
+                    if case .success = result {
+                        self?.autoSentRouteIDs.insert(route.id)
+                    }
+                }
+            }
+        }
     }
 
     func clear() {
         pendingRoutes = []
+        autoSentRouteIDs = []
         showActionSheet = false
     }
 }

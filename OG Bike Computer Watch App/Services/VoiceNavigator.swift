@@ -40,6 +40,10 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var announcedArrival = false
     private var announcedOffRoute = false
 
+    /// Keys of POI alerts already fired this ride. Keyed as
+    /// `"<poiIndex>-<tierDistance>"` so each POI fires at most once per tier.
+    private var firedPOIAlerts: Set<String> = []
+
     private var wasOffRoute = false
     private var lastAnnouncementTime: Date = .distantPast
     private var lastTurnAlertTime: Date = .distantPast
@@ -51,6 +55,23 @@ class VoiceNavigator: NSObject, ObservableObject {
     // Alert queue
     private let alertQueue = VoiceAlertQueue()
     private var isProcessingAlert = false
+
+    // Identity of the alert currently being mirrored to the phone, if any.
+    // Set when we send a speech message; cleared on matching ack OR timeout
+    // fallback. Used to discard stale acks and to gate the timeout work.
+    private var inFlightAlertID: UUID?
+    private var inFlightTimeoutWork: DispatchWorkItem?
+    /// In-flight bookkeeping needed to retry on timeout (vs falling back
+    /// to local watch speech). Local fallback can play through the wrong
+    /// audio output when BT headphones are bound to the phone session.
+    private var inFlightText: String?
+    private var inFlightCategory: String?
+    private var inFlightIsCritical = false
+    private var inFlightRetriesLeft = 0
+    /// Retry budget for navigation-critical alerts (off-route, at-turn,
+    /// last-turn-complete). 3 attempts × (estimate + 1.5s) bounds the
+    /// worst-case stuck time before giving up and falling back to local.
+    private static let criticalRetryCount = 3
 
     // Recreated each ride to avoid AVSpeechSynthesizer silent-death bug
     private var synthesizer: AVSpeechSynthesizer
@@ -77,6 +98,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         seenBeforeHalfway = false
         announcedArrival = false
         announcedOffRoute = false
+        firedPOIAlerts.removeAll()
 
         wasOffRoute = false
         lastAnnouncementTime = .distantPast
@@ -84,6 +106,7 @@ class VoiceNavigator: NSObject, ObservableObject {
 
         alertQueue.cancelAll()
         isProcessingAlert = false
+        clearInFlight()
 
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -103,6 +126,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         seenBeforeHalfway = false
         announcedArrival = false
         announcedOffRoute = false
+        firedPOIAlerts.removeAll()
 
         wasOffRoute = false
         lastAnnouncementTime = .distantPast
@@ -142,6 +166,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                     category: "arrival",
                     alertKey: "arrival"
                 ))
+                announceEndOfRouteStats()
             }
             return
         }
@@ -161,7 +186,12 @@ class VoiceNavigator: NSObject, ObservableObject {
                     mode: navEvents.offRouteAlert,
                     category: "offRoute",
                     alertKey: "route-state",
-                    mutualCancelKey: "route-state"
+                    mutualCancelKey: "route-state",
+                    // Drop if the rider has already rejoined the route by
+                    // the time the queue gets to this alert.
+                    relevanceCheck: { [weak self] in
+                        self?.workoutManager?.navigation.isOffRoute == true
+                    }
                 ))
             }
             wasOffRoute = true
@@ -180,13 +210,23 @@ class VoiceNavigator: NSObject, ObservableObject {
 
             let routeBearing = nav.currentBearing
             let continueDirection = voiceDirectionToTarget(heading: heading, bearingToTarget: routeBearing)
+            let backOnRouteText: String
+            if continueDirection == "continue straight" {
+                backOnRouteText = "Back on route."
+            } else {
+                backOnRouteText = "Back on route. \(continueDirection.capitalized)."
+            }
             enqueueAlert(VoiceAlert(
                 priority: .navEvent,
-                text: "Back on route. \(continueDirection.capitalized) to continue.",
+                text: backOnRouteText,
                 mode: navEvents.backOnRouteAlert,
                 category: "backOnRoute",
                 alertKey: "route-state",
-                mutualCancelKey: "route-state"
+                mutualCancelKey: "route-state",
+                // Drop if we've gone off-route again before this even spoke.
+                relevanceCheck: { [weak self] in
+                    self?.workoutManager?.navigation.isOffRoute == false
+                }
             ))
             return
         }
@@ -213,7 +253,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                     let text: String
                     if let ft = followingTurn {
                         groupedApproachTurnIndices.insert(ft.index)
-                        text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn)) then \(ft.direction.voiceLabel)."
+                        text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn)) then \(followingTurnPhrase(for: ft))."
                     } else {
                         text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn))."
                     }
@@ -222,7 +262,12 @@ class VoiceNavigator: NSObject, ObservableObject {
                         text: text,
                         mode: preferences.turnAlerts.mode(forAlertIndex: 0, totalCount: alertDistances.count),
                         category: "turnApproach",
-                        alertKey: "turn-approach-\(turn.index)"
+                        alertKey: "turn-approach-\(turn.index)",
+                        // Drop if we've already moved past this turn by the
+                        // time the queue speaks it.
+                        relevanceCheck: { [weak self] in
+                            self?.currentTurnIndex == turn.index
+                        }
                     ))
                     lastTurnAlertTime = Date()
                     markPassedThresholds(distance: dist, into: &firedTurnAlerts)
@@ -245,7 +290,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                 approachText: { d in
                     if let ft = followingTurn {
                         self.groupedApproachTurnIndices.insert(ft.index)
-                        return "in \(formatVoiceDistance(d)), \(self.voiceText(for: turn)) then \(ft.direction.voiceLabel)."
+                        return "in \(formatVoiceDistance(d)), \(self.voiceText(for: turn)) then \(self.followingTurnPhrase(for: ft))."
                     }
                     return "in \(formatVoiceDistance(d)), \(self.voiceText(for: turn))."
                 }
@@ -309,6 +354,92 @@ class VoiceNavigator: NSObject, ObservableObject {
                 return
             }
         }
+
+        if isActivelyMoving {
+            checkPOIAlerts(nav: nav, route: route)
+        }
+    }
+
+    // MARK: - POI / Waypoint Announcements
+
+    private func checkPOIAlerts(nav: NavigationTracker, route: ProcessedRoute) {
+        let prefs = preferences.waypointAlerts
+        guard prefs.enabled, prefs.mode != .none, !route.pois.isEmpty else { return }
+
+        // Tiers descending (largest distance first) so we pick the earliest
+        // tier the rider has just crossed.
+        var tiers: [Double] = []
+        if prefs.useCustomDistances {
+            if prefs.secondaryApproachEnabled {
+                tiers.append(prefs.secondaryApproachDistance)
+            }
+            tiers.append(prefs.primaryApproachDistance)
+        } else {
+            let turn = preferences.turnAlerts
+            if turn.secondaryApproachEnabled {
+                tiers.append(turn.secondaryApproachDistance)
+            }
+            tiers.append(turn.primaryApproachDistance)
+        }
+        tiers.sort(by: >)
+        guard !tiers.isEmpty else { return }
+
+        for (idx, poi) in route.pois.enumerated() {
+            if poi.offRouteDistance > prefs.maxOffRouteDistance { continue }
+            let ahead = poi.distanceFromStart - nav.distanceAlongRoute
+            guard ahead > 0 else { continue }
+
+            for tier in tiers {
+                guard ahead <= tier else { continue }
+                let key = "\(idx)-\(Int(tier))"
+                if firedPOIAlerts.contains(key) { continue }
+                firedPOIAlerts.insert(key)
+                let text = poiText(poi: poi, ahead: ahead, route: route)
+                enqueueAlert(VoiceAlert(
+                    priority: .stat,
+                    text: text,
+                    mode: prefs.mode,
+                    category: "poi"
+                ))
+                break
+            }
+        }
+    }
+
+    private func poiText(poi: RoutePOI, ahead: Double, route: ProcessedRoute) -> String {
+        let distancePhrase = formatVoiceDistance(ahead)
+        // POIs essentially on the route ("pass …"); else "is …" with bearing.
+        let onRouteThreshold: Double = 30
+        if poi.offRouteDistance <= onRouteThreshold {
+            return "in \(distancePhrase), pass \(poi.name)."
+        }
+        let offPhrase = formatVoiceDistance(poi.offRouteDistance)
+        if let side = poiSide(poi: poi, route: route) {
+            return "in \(distancePhrase) to your \(side), \(offPhrase) off route, is \(poi.name)."
+        }
+        return "in \(distancePhrase), \(offPhrase) off route, is \(poi.name)."
+    }
+
+    private func poiSide(poi: RoutePOI, route: ProcessedRoute) -> String? {
+        guard poi.nearestPointIndex >= 0, poi.nearestPointIndex < route.points.count else { return nil }
+        let basePoint = route.points[poi.nearestPointIndex]
+        let routeBearing = basePoint.bearingToNext
+        let poiBearing = poiBearingDegrees(from: basePoint.coordinate, to: poi.coordinate)
+        var relative = poiBearing - routeBearing
+        while relative > 180 { relative -= 360 }
+        while relative < -180 { relative += 360 }
+        if Swift.abs(relative) < 10 || Swift.abs(relative) > 170 { return nil }
+        return relative > 0 ? "right" : "left"
+    }
+
+    private func poiBearingDegrees(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
+        let lat1 = a.latitude * .pi / 180
+        let lat2 = b.latitude * .pi / 180
+        let dLon = (b.longitude - a.longitude) * .pi / 180
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        let brng = atan2(y, x) * 180 / .pi
+        return (brng + 360).truncatingRemainder(dividingBy: 360)
     }
 
     private func voiceText(for turn: TurnPoint) -> String {
@@ -316,16 +447,81 @@ class VoiceNavigator: NSObject, ObservableObject {
             return turn.direction.voiceLabel
         }
 
-        let lower = desc.lowercased()
+        let pronounced = applyRoadNamePronunciation(desc)
+        let lower = pronounced.lowercased()
 
-        var baseText: String
         if lower.hasPrefix("make a ") {
-            baseText = String(desc.dropFirst(7)).lowercased()
+            return String(pronounced.dropFirst(7))
+        }
+        return pronounced
+    }
+
+    /// Builds the spoken phrase for the *following* turn in a multi-turn announcement.
+    /// Returns `"<direction>"` or `"<direction> onto <name>"` when a name is available.
+    private func followingTurnPhrase(for ft: TurnPoint) -> String {
+        let dir = ft.direction.voiceLabel
+        guard let desc = ft.description,
+              let r = desc.range(of: " onto ", options: .caseInsensitive) else {
+            return dir
+        }
+        let name = String(desc[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return dir }
+        return "\(dir) onto \(applyRoadNamePronunciation(name))"
+    }
+
+    /// Applies highway/road-name pronunciation hints to a turn description so TTS reads
+    /// route shields and abbreviations the way a rider expects:
+    /// - "US 17" / "PA 106" / "I 95" → spelled letters ("U S 17", "P A 106", "I 95")
+    /// - Trailing single direction letter ("Main St N") → compass word ("Main Street north")
+    /// - "St."/"St" disambiguation: first token (or post-comma) → "Saint", otherwise → "Street"
+    /// Operates on the post-"onto " portion when present so the "Turn right onto …" prefix is
+    /// left untouched.
+    fileprivate func applyRoadNamePronunciation(_ text: String) -> String {
+        let prefix: String
+        let namePart: String
+        if let r = text.range(of: " onto ", options: .caseInsensitive) {
+            prefix = String(text[..<r.upperBound])
+            namePart = String(text[r.upperBound...])
         } else {
-            baseText = desc.lowercased()
+            prefix = ""
+            namePart = text
         }
 
-        return baseText
+        var tokens = namePart.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard !tokens.isEmpty else { return text }
+
+        // Two-cap-letter route shield prefix followed by a number.
+        if tokens.count >= 2 {
+            let first = tokens[0]
+            let upper = first.uppercased()
+            let isAllLetters = first.unicodeScalars.allSatisfy { CharacterSet.letters.contains($0) }
+            let nextStartsWithNumber = tokens[1].first.map(\.isNumber) ?? false
+            if first == upper, isAllLetters, first.count >= 1, first.count <= 2, nextStartsWithNumber {
+                tokens[0] = upper.map { String($0) }.joined(separator: " ")
+            }
+        }
+
+        // Trailing direction letter.
+        if tokens.count >= 2 {
+            switch tokens[tokens.count - 1].uppercased() {
+            case "N": tokens[tokens.count - 1] = "north"
+            case "S": tokens[tokens.count - 1] = "south"
+            case "E": tokens[tokens.count - 1] = "east"
+            case "W": tokens[tokens.count - 1] = "west"
+            default: break
+            }
+        }
+
+        // ST. / ST disambiguation.
+        for i in tokens.indices {
+            let stripped = tokens[i].replacingOccurrences(of: ".", with: "").uppercased()
+            guard stripped == "ST" else { continue }
+            let isFirst = (i == 0)
+            let afterComma = (i > 0 && tokens[i - 1].hasSuffix(","))
+            tokens[i] = (isFirst || afterComma) ? "Saint" : "Street"
+        }
+
+        return prefix + tokens.joined(separator: " ")
     }
 
     private func fireDistanceAlert(
@@ -393,7 +589,15 @@ class VoiceNavigator: NSObject, ObservableObject {
                         mode: mode,
                         category: cat,
                         alertKey: "turn-immediate-\(idx)",
-                        replacesKey: "turn-approach-\(idx)"
+                        replacesKey: "turn-approach-\(idx)",
+                        // Drop if the rider has already moved past this turn
+                        // (e.g. queue was blocked behind a long stat readout
+                        // and the rider missed it — announcing "turn left"
+                        // 5s late is misleading; the off-route flow will
+                        // catch it instead).
+                        relevanceCheck: { [weak self] in
+                            self?.currentTurnIndex == idx
+                        }
                     ))
                 } else {
                     enqueueAlert(VoiceAlert(
@@ -401,7 +605,11 @@ class VoiceNavigator: NSObject, ObservableObject {
                         text: text,
                         mode: mode,
                         category: cat,
-                        alertKey: "turn-approach-\(idx)"
+                        alertKey: "turn-approach-\(idx)",
+                        // Drop stale approach alerts for turns we've moved past.
+                        relevanceCheck: { [weak self] in
+                            self?.currentTurnIndex == idx
+                        }
                     ))
                 }
             } else {
@@ -458,7 +666,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     // MARK: - Split / Halfway Announcements
 
     func announceSplit(number: Int, splitDistance: Double, splitStats: SplitStats, rideStats: SplitStats, metrics: [SplitMetricConfig], mode: AlertMode) {
-        let orderedMetrics = metrics.sorted { a, _ in a.metric == .distance }
+        let orderedMetrics = metrics
 
         let header = "\(formatVoiceDistance(splitDistance)) split \(number)."
         enqueueAlert(VoiceAlert(priority: .stat, text: header, mode: mode, category: "lap"))
@@ -487,6 +695,29 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
     }
 
+    private func announceEndOfRouteStats() {
+        let prefs = preferences.endOfRouteAlerts
+        guard prefs.enabled, let wm = workoutManager else { return }
+
+        let metrics: [SplitMetricConfig]
+        if prefs.useSplitsMetrics {
+            metrics = preferences.splitAlerts.metrics
+        } else {
+            metrics = prefs.metricsOverride ?? preferences.splitAlerts.metrics
+        }
+        guard !metrics.isEmpty else { return }
+
+        let rideStats = wm.currentRideStats()
+        var prefixApplied = false
+        for config in metrics {
+            let prefix = prefixApplied ? "" : "ride "
+            if let text = statText(for: config.metric, from: rideStats, label: prefix) {
+                enqueueAlert(VoiceAlert(priority: .stat, text: text, mode: prefs.mode, category: "endOfRoute"))
+                prefixApplied = true
+            }
+        }
+    }
+
     private func announceHalfway(distanceRemaining: Double, mode: AlertMode) {
         let header = "Halfway point. \(formatVoiceDistance(distanceRemaining)) to go."
         enqueueAlert(VoiceAlert(priority: .stat, text: header, mode: mode, category: "halfway"))
@@ -494,21 +725,31 @@ class VoiceNavigator: NSObject, ObservableObject {
         if let wm = workoutManager {
             let splitPrefs = preferences.splitAlerts
             if splitPrefs.enabled, !splitPrefs.metrics.isEmpty {
-                let rideStats = wm.currentRideStats()
-                let orderedMetrics = splitPrefs.metrics.sorted { a, _ in a.metric == .distance }
+                let halfStats = wm.currentRideStats()
+                let orderedMetrics = splitPrefs.metrics
+                // Only the first stat gets the "first half" prefix — once the
+                // rider has the scope, subsequent readings inherit it.
+                var prefixApplied = false
                 for config in orderedMetrics {
-                    if let rv = statText(for: config.metric, from: rideStats, label: "") {
-                        enqueueAlert(VoiceAlert(priority: .stat, text: rv, mode: mode, category: "halfway"))
+                    let prefix = prefixApplied ? "" : "first half "
+                    if let text = statText(for: config.metric, from: halfStats, label: prefix) {
+                        enqueueAlert(VoiceAlert(priority: .stat, text: text, mode: mode, category: "halfway"))
+                        prefixApplied = true
                     }
                 }
             }
         }
     }
 
+    /// Build a spoken phrase for `metric` from `stats`, prefixed by `label`
+    /// (e.g. "split ", "ride ", "first half "). Returns nil when there's no
+    /// meaningful value (e.g. zero max HR — never had any HR data).
     private func statText(for metric: MetricType, from stats: SplitStats, label: String) -> String? {
         switch metric {
         case .movingTime:
             return "\(label)time \(formatVoiceDuration(stats.movingTime))"
+        case .elapsedTime:
+            return "\(label)elapsed \(formatVoiceDuration(stats.elapsedTime))"
         case .averageSpeed:
             return "\(label)average speed \(formatVoiceSpeed(stats.averageSpeed))"
         case .maxSpeed:
@@ -516,19 +757,48 @@ class VoiceNavigator: NSObject, ObservableObject {
             return "\(label)max speed \(formatVoiceSpeed(stats.maxSpeed))"
         case .distance:
             return "\(label)distance \(formatVoiceDistance(stats.distance))"
-        case .heartRate:
+        case .heartRate, .averageHeartRate:
+            // .heartRate kept as alias for back-compat with old saved configs.
             guard stats.averageHeartRate > 0 else { return nil }
-            return "\(label)average heart rate \(Int(stats.averageHeartRate))"
+            return "\(label)average heart rate \(Int(stats.averageHeartRate)) beats per minute"
+        case .maxHeartRate:
+            guard stats.maxHeartRate > 0 else { return nil }
+            return "\(label)max heart rate \(Int(stats.maxHeartRate)) beats per minute"
+        case .elevationGain:
+            guard stats.elevationGain > 0 else { return nil }
+            return "\(label)elevation gain \(formatVoiceElevation(stats.elevationGain))"
+        case .elevationLoss:
+            guard stats.elevationLoss > 0 else { return nil }
+            return "\(label)elevation loss \(formatVoiceElevation(stats.elevationLoss))"
+        case .calories:
+            guard stats.calories > 0 else { return nil }
+            return "\(label)\(Int(stats.calories)) calories"
         default:
+            // Unsupported metrics (.grade, .powerEstimate, etc.) silently skip.
+            // The settings picker filters these out so users don't pick them
+            // expecting a readout — but old saved configs may still have them.
             return nil
         }
     }
 
+    /// Voice-formatted duration. Includes hours once the value is at least
+    /// one hour (rider was getting "92 minutes" before for long rides).
     private func formatVoiceDuration(_ seconds: TimeInterval) -> String {
-        let mins = Int(seconds) / 60
-        let secs = Int(seconds) % 60
+        let total = max(0, Int(seconds))
+        let hours = total / 3600
+        let mins = (total % 3600) / 60
+        let secs = total % 60
+
+        if hours > 0 {
+            // Drop seconds at the hour scale — "1 hour 32 minutes" reads
+            // cleanly; "1 hour 32 minutes 17 seconds" is just noise.
+            if mins == 0 {
+                return "\(hours) hour\(hours == 1 ? "" : "s")"
+            }
+            return "\(hours) hour\(hours == 1 ? "" : "s") \(mins) minute\(mins == 1 ? "" : "s")"
+        }
         if mins == 0 {
-            return "\(secs) seconds"
+            return "\(secs) second\(secs == 1 ? "" : "s")"
         } else if secs == 0 {
             return "\(mins) minute\(mins == 1 ? "" : "s")"
         }
@@ -540,6 +810,16 @@ class VoiceNavigator: NSObject, ObservableObject {
             return String(format: "%.1f miles per hour", mps * 2.23694)
         } else {
             return String(format: "%.1f kilometers per hour", mps * 3.6)
+        }
+    }
+
+    private func formatVoiceElevation(_ meters: Double) -> String {
+        if currentUnits.elevation == .feet {
+            let feet = Int((meters * 3.28084).rounded())
+            return "\(feet) feet"
+        } else {
+            let m = Int(meters.rounded())
+            return "\(m) meter\(m == 1 ? "" : "s")"
         }
     }
 
@@ -563,8 +843,17 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
 
         guard let alert = alertQueue.dequeueNext() else { return }
+
+        // Relevance gate — drop stale alerts (e.g. a turn-approach for a turn
+        // we've already passed, or an off-route alert when we're back on route).
+        if let check = alert.relevanceCheck, !check() {
+            // Skip silently and try the next alert in the same processing tick.
+            processQueue()
+            return
+        }
+
         isProcessingAlert = true
-        audioSpeak(alert.text, mode: alert.mode, category: alert.category)
+        audioSpeak(alert.text, mode: alert.mode, category: alert.category, priority: alert.priority)
     }
 
     fileprivate func finishCurrentAlert() {
@@ -580,7 +869,7 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     // MARK: - Audio Routing
 
-    private func audioSpeak(_ text: String, mode: AlertMode, category: String?) {
+    private func audioSpeak(_ text: String, mode: AlertMode, category: String?, priority: AlertPriority) {
         guard isEnabled, !isStopped else {
             finishCurrentAlert()
             return
@@ -601,26 +890,164 @@ class VoiceNavigator: NSObject, ObservableObject {
             return
         }
 
-        if let wm = workoutManager {
-            wm.sendSpeechToPhone(text, category: category) { [weak self] spoken in
-                guard let self, !self.isStopped else { return }
-                if !spoken {
-                    self.speakLocally(text)
-                } else {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.estimatedSpeechDuration(for: text)) {
-                        self.finishCurrentAlert()
-                    }
-                }
-            }
-        } else {
+        switch resolveAudioRoute() {
+        case .watchLocal:
             speakLocally(text)
+
+        case .phoneMirror(let wm):
+            // Critical (navigation-affecting) alerts retry until acked rather
+            // than falling back to local — local fallback can play on the
+            // watch speaker when BT headphones are bound to the phone session.
+            let isCritical = (priority == .immediateTurn || priority == .navEvent)
+            inFlightText = text
+            inFlightCategory = category
+            inFlightIsCritical = isCritical
+            inFlightRetriesLeft = isCritical ? Self.criticalRetryCount : 0
+            sendInFlightToPhone(wm: wm)
         }
+    }
+
+    /// Send the currently-in-flight speech to the phone and arm the timeout.
+    /// Used both for initial send and for retries. Each call generates a
+    /// fresh UUID so a late ack from a previous send doesn't accidentally
+    /// satisfy the new attempt.
+    private func sendInFlightToPhone(wm: WorkoutManager) {
+        guard let text = inFlightText else { return }
+        let alertID = UUID()
+        inFlightAlertID = alertID
+        wm.sendSpeechToPhone(text, id: alertID, category: inFlightCategory) { [weak self] sent in
+            guard let self, !self.isStopped else { return }
+            guard self.inFlightAlertID == alertID else {
+                // A newer attempt or recovery replaced this one — drop the result.
+                return
+            }
+            if !sent {
+                // Bridge declined the send (no session / not mirroring ready).
+                // Fall back to local even for critical alerts — there's no
+                // phone to retry to.
+                self.clearInFlight()
+                self.speakLocally(text)
+                return
+            }
+            self.scheduleSpeechTimeout(text: text, alertID: alertID)
+        }
+    }
+
+    private func clearInFlight() {
+        inFlightAlertID = nil
+        inFlightTimeoutWork?.cancel()
+        inFlightTimeoutWork = nil
+        inFlightText = nil
+        inFlightCategory = nil
+        inFlightIsCritical = false
+        inFlightRetriesLeft = 0
+    }
+
+    /// Result of routing decision — either keep speech on the watch or send
+    /// it to the phone. The phone case carries the WorkoutManager so callers
+    /// don't have to re-check `workoutManager` after the decision.
+    private enum AudioRoute {
+        case watchLocal
+        case phoneMirror(WorkoutManager)
+    }
+
+    /// Decide where to play this alert. Order:
+    ///   1. User override pins it explicitly to watch or phone (with graceful
+    ///      fallback to local if phone is unavailable).
+    ///   2. Auto: if BT/headphones are connected to the watch, play locally
+    ///      so audio reaches the rider's headphones.
+    ///   3. Auto: phone if mirrored AND link confidence is non-zero. The
+    ///      confidence gate is what prevents the historical <5% success path
+    ///      — when the link is dark (no recent heartbeat), routing straight
+    ///      to the watch avoids a doomed phone send that would end in
+    ///      timeout + late local fallback (often missing the turn).
+    ///   4. Otherwise watch (speaker or whatever AVAudioSession picks).
+    private func resolveAudioRoute() -> AudioRoute {
+        let prefs = preferences
+        let override = prefs.audioOutput.source
+        let confidence = VoiceLinkController.shared.linkConfidence
+
+        if override == .watch { return .watchLocal }
+
+        if override == .phone {
+            // User pinned to phone — try whenever the channel is at least
+            // warm, but if it's completely dark we still fall back to watch
+            // rather than time out into silence.
+            if let wm = workoutManager, wm.isMirroringReady, confidence > .none {
+                return .phoneMirror(wm)
+            }
+            return .watchLocal
+        }
+
+        // .auto — follow priority headphones → phone (if confident) → watch
+        if isWatchUsingExternalAudioOutput() { return .watchLocal }
+        if let wm = workoutManager, wm.isMirroringReady, confidence > .none {
+            return .phoneMirror(wm)
+        }
+        return .watchLocal
+    }
+
+    /// True when the watch's current audio route includes BT or wired
+    /// headphones (i.e. *not* just the built-in speaker). When this is true,
+    /// playing locally on the watch routes through the headphones — usually
+    /// what the rider wants over going through the phone.
+    private func isWatchUsingExternalAudioOutput() -> Bool {
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        return outputs.contains { output in
+            switch output.portType {
+            case .bluetoothA2DP, .bluetoothLE, .bluetoothHFP, .headphones, .airPlay:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Called by WorkoutManager when the phone reports an utterance finished.
+    /// Drives queue advancement off real completion instead of an estimate.
+    func handleSpeechAck(id: UUID) {
+        guard inFlightAlertID == id else { return }   // stale or duplicate
+        clearInFlight()
+        finishCurrentAlert()
+    }
+
+    /// Backstop for failed phone playback. Two paths on timeout:
+    ///   • Critical priority (off-route / immediate-turn / nav-event):
+    ///     retry on the phone until the budget is exhausted. Falling back
+    ///     to local can play on the watch speaker when BT headphones are
+    ///     bound to the phone session — for navigation cues we'd rather
+    ///     keep trying the phone.
+    ///   • Non-critical: fall back to local watch speech immediately.
+    /// The phone-side 3s stale-drop prevents double-audio if a delayed
+    /// message arrives after we've moved on.
+    private func scheduleSpeechTimeout(text: String, alertID: UUID) {
+        inFlightTimeoutWork?.cancel()
+        let timeout = Self.estimatedSpeechDuration(for: text) + 1.5
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isStopped else { return }
+            guard self.inFlightAlertID == alertID else { return }
+
+            if self.inFlightIsCritical, self.inFlightRetriesLeft > 0,
+               let wm = self.workoutManager, wm.isMirroringReady {
+                self.inFlightRetriesLeft -= 1
+                self.inFlightAlertID = nil   // invalidate so a late ack for the
+                                              // previous attempt is ignored
+                self.sendInFlightToPhone(wm: wm)
+                return
+            }
+
+            // Retry budget exhausted (or non-critical) — fall back to local.
+            self.clearInFlight()
+            self.speakLocally(text)
+        }
+        inFlightTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
     }
 
     /// Estimate how long it takes to speak `text` at our utterance rate.
     /// Digits expand ~5× when spoken ("145" → "one hundred forty five"), so they're
-    /// counted as 5 spoken characters each. Underestimating causes the queue to
-    /// dispatch the next alert before the phone finishes the current one.
+    /// counted as 5 spoken characters each. Used now only to size the failure-
+    /// detection timeout, not as the primary queue-advance trigger.
     private static func estimatedSpeechDuration(for text: String) -> TimeInterval {
         let digitCount = text.filter { $0.isNumber }.count
         let spokenCharCount = text.count + digitCount * 4
@@ -648,7 +1075,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
 
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.voice = PreferredVoice.resolved
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
         utterance.pitchMultiplier = 1.05
         utterance.volume = 1.0

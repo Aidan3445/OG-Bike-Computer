@@ -184,12 +184,24 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                 continue
             }
 
-            // Discard stale messages — when this app is killed and relaunched,
-            // HealthKit delivers all queued data at once
+            // Discard stale messages. Tighter threshold for "speech" because
+            // the watch's queue has its own timeout that falls back to local
+            // playback — playing here on top of that would double-speak.
+            // When the watch's predictive arm is currently active (we know
+            // because PhoneSpeechPlayer is holding the audio session), allow
+            // a slightly looser window since the watch genuinely intended
+            // this alert for the phone and dropping it would force a
+            // double-speak via the watch's local fallback.
             if let tsString = payload["ts"], let ts = Double(tsString) {
                 let age = now - ts
-                if age > 10 {
-                    mirrorLogger.info("[Mirroring] Discarding stale message (\(Int(age))s old)")
+                let staleLimit: TimeInterval
+                if type == "speech" {
+                    staleLimit = PhoneSpeechPlayer.shared.isAudioSessionArmedRecently ? 6 : 3
+                } else {
+                    staleLimit = 10
+                }
+                if age > staleLimit {
+                    mirrorLogger.info("[Mirroring] Discarding stale \(type) message (\(String(format: "%.1f", age))s old)")
                     continue
                 }
             }
@@ -197,9 +209,45 @@ extension AppDelegate: HKWorkoutSessionDelegate {
             switch type {
             case "speech":
                 guard let text = payload["text"] else { continue }
+                let alertID = (payload["id"]).flatMap(UUID.init(uuidString:))
                 mirrorLogger.info("[Mirroring] Speaking: \(text)")
-                DispatchQueue.main.async {
-                    PhoneSpeechPlayer.shared.speak(text)
+                DispatchQueue.main.async { [weak workoutSession] in
+                    if let alertID {
+                        PhoneSpeechPlayer.shared.speak(text, id: alertID) { doneID in
+                            // Real-completion ack back to watch so its queue
+                            // advances when speech actually ends. Outer closure
+                            // captured `workoutSession` weakly; reuse that here.
+                            let ack: [String: String] = [
+                                "type": "speechDone",
+                                "id": doneID.uuidString,
+                                "ts": String(Date().timeIntervalSince1970)
+                            ]
+                            guard let data = try? JSONEncoder().encode(ack),
+                                  let session = workoutSession else { return }
+                            session.sendToRemoteWorkoutSession(data: data) { success, error in
+                                if !success {
+                                    if let error {
+                                        mirrorLogger.error("[Mirroring] speechDone ack send error: \(error.localizedDescription) — retrying")
+                                    }
+                                    // One-shot retry — the watch's timeout
+                                    // is short and a lost ack triggers a
+                                    // false "phone failed" fallback. 200ms
+                                    // is well inside the retry budget.
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak session] in
+                                        guard let session else { return }
+                                        session.sendToRemoteWorkoutSession(data: data) { _, retryError in
+                                            if let retryError {
+                                                mirrorLogger.error("[Mirroring] speechDone ack retry failed: \(retryError.localizedDescription)")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Legacy path — no id means no ack expected.
+                        PhoneSpeechPlayer.shared.speak(text)
+                    }
                 }
 
                 // Post turn notification if enabled
@@ -233,6 +281,42 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                 // Connection health check from Watch — no action needed.
                 // Success/failure of the send on Watch side is what matters.
                 break
+
+            case "linkPing":
+                // Heartbeat from VoiceLinkController on the watch — round-
+                // trip so the watch can compute confidence from real ack
+                // latency rather than send-success alone.
+                guard let idStr = payload["id"] else { break }
+                let ack: [String: String] = [
+                    "type": "linkPingAck",
+                    "id": idStr,
+                    "ts": String(Date().timeIntervalSince1970)
+                ]
+                if let data = try? JSONEncoder().encode(ack) {
+                    workoutSession.sendToRemoteWorkoutSession(data: data) { _, _ in }
+                }
+
+            case "linkArm":
+                // Watch is predicting an imminent alert — pre-activate the
+                // AVAudioSession so the first utterance doesn't pay the
+                // route-activation handshake.
+                let ttl = (payload["ttl"]).flatMap(Double.init) ?? 20.0
+                DispatchQueue.main.async {
+                    PhoneSpeechPlayer.shared.prewarmAudioSession(ttl: ttl)
+                }
+                let ack: [String: String] = [
+                    "type": "linkArmAck",
+                    "ts": String(Date().timeIntervalSince1970)
+                ]
+                if let data = try? JSONEncoder().encode(ack) {
+                    workoutSession.sendToRemoteWorkoutSession(data: data) { _, _ in }
+                }
+
+            case "linkDisarm":
+                // Watch sees no imminent alert + cool-down elapsed — release.
+                DispatchQueue.main.async {
+                    PhoneSpeechPlayer.shared.releaseAudioSession()
+                }
 
             default:
                 break

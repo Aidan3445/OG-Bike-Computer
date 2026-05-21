@@ -31,6 +31,12 @@ struct VoiceAlert {
     let mutualCancelKey: String?  // if a queued alert has alertKey == mutualCancelKey, both are removed
     let replacesKey: String?      // if a queued alert has alertKey == replacesKey, remove it (self wins)
 
+    /// Called at dequeue time. Returning false silently drops the alert
+    /// instead of speaking it — used to suppress stale turn-approach,
+    /// off-route, or back-on-route alerts that no longer reflect reality
+    /// by the time the queue gets around to them.
+    let relevanceCheck: (() -> Bool)?
+
     init(
         priority: AlertPriority,
         text: String,
@@ -38,7 +44,8 @@ struct VoiceAlert {
         category: String? = nil,
         alertKey: String? = nil,
         mutualCancelKey: String? = nil,
-        replacesKey: String? = nil
+        replacesKey: String? = nil,
+        relevanceCheck: (() -> Bool)? = nil
     ) {
         self.id = UUID()
         self.priority = priority
@@ -48,6 +55,7 @@ struct VoiceAlert {
         self.alertKey = alertKey
         self.mutualCancelKey = mutualCancelKey
         self.replacesKey = replacesKey
+        self.relevanceCheck = relevanceCheck
     }
 }
 

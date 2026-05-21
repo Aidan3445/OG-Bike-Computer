@@ -12,6 +12,11 @@ struct RideSettingsView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
 
+    /// Phone-only — doesn't ride along to the watch, so we keep it in
+    /// `@AppStorage` rather than `RidePreferences`. Read by
+    /// `RouteImportCoordinator.handle(_:)` via the same defaults key.
+    @AppStorage("autoSendRoutesToWatch") private var autoSendRoutesToWatch: Bool = false
+
     private var prefs: Binding<RidePreferences> {
         $userSettings.settings.ridePreferences
     }
@@ -22,6 +27,7 @@ struct RideSettingsView: View {
             autoPauseSection
             gpsSensorsSection
             displaySection
+            routeSharingSection
             alertsSection
             privacySection
             checkpointSection
@@ -123,6 +129,19 @@ struct RideSettingsView: View {
             .pickerStyle(.segmented)
         } header: {
             Label("Display", systemImage: "map")
+        }
+    }
+
+    // MARK: - Route Sharing
+
+    @ViewBuilder
+    private var routeSharingSection: some View {
+        Section {
+            Toggle("Auto-Send to Watch", isOn: $autoSendRoutesToWatch)
+        } header: {
+            Label("Route Sharing", systemImage: "applewatch.and.arrow.forward")
+        } footer: {
+            Text("When on, every newly imported route is automatically queued for transfer to the watch.")
         }
     }
 

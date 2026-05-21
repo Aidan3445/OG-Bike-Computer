@@ -105,8 +105,13 @@ class WorkoutManager: NSObject, ObservableObject {
     private var lastSplitDistance: Double = 0
     @Published var currentSplitNumber: Int = 0
     private var splitStartMovingTime: TimeInterval = 0
+    private var splitStartElapsedTime: TimeInterval = 0
     private var splitStartDistance: Double = 0
+    private var splitStartElevationGain: Double = 0
+    private var splitStartElevationLoss: Double = 0
+    private var splitStartCalories: Double = 0
     private var splitMaxSpeed: Double = 0
+    private var splitMaxHR: Double = 0
     private var splitHRSum: Double = 0
     private var splitHRCount: Int = 0
     var navigationAlerts: NavigationAlertPreferences = .default {
@@ -117,12 +122,23 @@ class WorkoutManager: NSObject, ObservableObject {
             guard isActive,
                   navigationAlerts.splitAlerts.splitDistance != oldValue.splitAlerts.splitDistance else { return }
             lastSplitDistance = totalDistance
-            splitStartDistance = totalDistance
-            splitStartMovingTime = movingTime
-            splitMaxSpeed = 0
-            splitHRSum = 0
-            splitHRCount = 0
+            resetSplitAccumulators()
         }
+    }
+
+    /// Snapshot the current cumulative ride state into the split-start baselines
+    /// so the next split's stats are measured from this point.
+    private func resetSplitAccumulators() {
+        splitStartDistance = totalDistance
+        splitStartMovingTime = movingTime
+        splitStartElapsedTime = elapsedTime
+        splitStartElevationGain = liveElevationGain
+        splitStartElevationLoss = liveElevationLoss
+        splitStartCalories = activeCalories
+        splitMaxSpeed = 0
+        splitMaxHR = 0
+        splitHRSum = 0
+        splitHRCount = 0
     }
 
     /// Set after ride ends, cleared when user dismisses summary screen
@@ -147,6 +163,11 @@ class WorkoutManager: NSObject, ObservableObject {
     private(set) var session: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
     private var routeBuilder: HKWorkoutRouteBuilder?
+    // Tracks every in-flight insertRouteData call so finishRoute(with:) only
+    // runs after they've all completed. Without this, periodic flushes can
+    // still be in-flight when finishRoute fires, producing a HK workout with
+    // a missing or partial route in the Fitness app.
+    private let routeInsertGroup = DispatchGroup()
 
     private let locationManager = CLLocationManager()
 
@@ -200,7 +221,9 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Mirroring: set true after delay post-mirroring, false on error/disconnect.
     // Re-arms via DispatchWorkItem after 10s to detect phone reconnection.
-    private var isMirroringReady = false
+    // Read-public so VoiceNavigator can route audio based on whether the
+    // phone is reachable; writes stay internal to WorkoutManager.
+    private(set) var isMirroringReady = false
     private var mirroringRetryWorkItem: DispatchWorkItem?
 
     // SIM — only available in debug builds
@@ -229,7 +252,7 @@ class WorkoutManager: NSObject, ObservableObject {
             } else {
                 print("[Sim] Mirroring started: \(success)")
                 if success {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    DispatchQueue.main.async {
                         self?.isMirroringReady = true
                         print("[Sim] Mirroring ready for speech routing")
                     }
@@ -244,6 +267,7 @@ class WorkoutManager: NSObject, ObservableObject {
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.workoutManager = self
+        VoiceLinkController.shared.start(workoutManager: self)
 
         workoutStartDate = Date()
         timerStart = workoutStartDate
@@ -259,11 +283,7 @@ class WorkoutManager: NSObject, ObservableObject {
         skipNextDistanceGap = false
         lastSplitDistance = 0
         currentSplitNumber = 0
-        splitStartMovingTime = 0
-        splitStartDistance = 0
-        splitMaxSpeed = 0
-        splitHRSum = 0
-        splitHRCount = 0
+        resetSplitAccumulators()
         initialRouteName = navigation.processedRoute?.name
         startTelemetryTimer()
         startConnectionCheckTimer()
@@ -295,6 +315,13 @@ class WorkoutManager: NSObject, ObservableObject {
                     speed: self.speed,
                     heading: self.heading,
                     isActivelyMoving: self.autoPauseState == .moving)
+                // Drive predictive warm-up off the same tick so the link is
+                // armed N seconds before VoiceNavigator decides to speak.
+                VoiceLinkController.shared.update(
+                    navigation: self.navigation,
+                    speed: self.speed,
+                    averageSpeed: self.averageSpeed,
+                    grade: self.currentGrade)
             }
 
             // Accumulate distance in simulation mode too
@@ -371,13 +398,19 @@ class WorkoutManager: NSObject, ObservableObject {
 
     private func flushRouteLocations() {
         guard !pendingRouteLocations.isEmpty else { return }
+        guard let routeBuilder = routeBuilder else {
+            pendingRouteLocations = []
+            return
+        }
         let batch = pendingRouteLocations
         pendingRouteLocations = []
 
-        routeBuilder?.insertRouteData(batch) { success, error in
+        routeInsertGroup.enter()
+        routeBuilder.insertRouteData(batch) { [weak self] _, error in
             if let error = error {
                 print("Route insert error: \(error)")
             }
+            self?.routeInsertGroup.leave()
         }
     }
     
@@ -411,44 +444,41 @@ class WorkoutManager: NSObject, ObservableObject {
 
         let splitStats = SplitStats(
             movingTime: splitMovingTime,
+            elapsedTime: elapsedTime - splitStartElapsedTime,
             distance: splitDistance,
             averageSpeed: splitAvgSpeed,
             maxSpeed: splitMaxSpeed,
-            averageHeartRate: splitAvgHR
-        )
-
-        let rideStats = SplitStats(
-            movingTime: movingTime,
-            distance: totalDistance,
-            averageSpeed: movingTime > 0 ? totalDistance / movingTime : 0,
-            maxSpeed: maxSpeed,
-            averageHeartRate: heartRateSampleCount > 0 ? averageHeartRate : 0
+            averageHeartRate: splitAvgHR,
+            maxHeartRate: splitMaxHR,
+            elevationGain: max(0, liveElevationGain - splitStartElevationGain),
+            elevationLoss: max(0, liveElevationLoss - splitStartElevationLoss),
+            calories: max(0, activeCalories - splitStartCalories)
         )
 
         VoiceNavigator.shared.announceSplit(
             number: currentSplitNumber,
             splitDistance: splitDist,
             splitStats: splitStats,
-            rideStats: rideStats,
+            rideStats: currentRideStats(),
             metrics: splitPrefs.metrics,
             mode: splitPrefs.mode
         )
 
-        // Reset split accumulators for next split
-        splitStartMovingTime = movingTime
-        splitStartDistance = totalDistance
-        splitMaxSpeed = 0
-        splitHRSum = 0
-        splitHRCount = 0
+        resetSplitAccumulators()
     }
 
     func currentRideStats() -> SplitStats {
         SplitStats(
             movingTime: movingTime,
+            elapsedTime: elapsedTime,
             distance: totalDistance,
             averageSpeed: movingTime > 0 ? totalDistance / movingTime : 0,
             maxSpeed: maxSpeed,
-            averageHeartRate: heartRateSampleCount > 0 ? averageHeartRate : 0
+            averageHeartRate: heartRateSampleCount > 0 ? averageHeartRate : 0,
+            maxHeartRate: maxHeartRate,
+            elevationGain: liveElevationGain,
+            elevationLoss: liveElevationLoss,
+            calories: activeCalories
         )
     }
 
@@ -527,7 +557,11 @@ class WorkoutManager: NSObject, ObservableObject {
         session?.startMirroringToCompanionDevice { [weak self] success, error in
             print("[Mirroring] Start mirroring result: success=\(success), error=\(String(describing: error))")
             if success {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                DispatchQueue.main.async {
+                    // Set ready immediately — VoiceLinkController's heartbeat
+                    // and the `.warm`/`.primed` confidence signal are what
+                    // actually gate the speech route now; the old 2s arbitrary
+                    // delay was dropping the first turn alert on every ride.
                     self?.isMirroringReady = true
                     print("[Mirroring] Ready for speech routing")
                 }
@@ -553,6 +587,7 @@ class WorkoutManager: NSObject, ObservableObject {
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.workoutManager = self
+        VoiceLinkController.shared.start(workoutManager: self)
 
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
@@ -584,11 +619,7 @@ class WorkoutManager: NSObject, ObservableObject {
             currentSplitNumber = 0
             lastSplitDistance = totalDistance
         }
-        splitStartMovingTime = movingTime
-        splitStartDistance = totalDistance
-        splitMaxSpeed = 0
-        splitHRSum = 0
-        splitHRCount = 0
+        resetSplitAccumulators()
         initialRouteName = navigation.processedRoute?.name
         startTelemetryTimer()
         startConnectionCheckTimer()
@@ -753,6 +784,7 @@ class WorkoutManager: NSObject, ObservableObject {
         // Kill voice and navigation IMMEDIATELY
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.workoutManager = nil
+        VoiceLinkController.shared.stop()
         navigation.reset()
 
         isMirroringReady = false
@@ -790,29 +822,36 @@ class WorkoutManager: NSObject, ObservableObject {
 
             print("[stop] saving ride, \(recordedLocations.count) recorded locations")
 
-            let insertGroup = DispatchGroup()
-            if !finalBatch.isEmpty {
-                insertGroup.enter()
-                routeBuilder?.insertRouteData(finalBatch) { _, error in
+            // Capture this segment's builders so they survive a later session
+            // creation reassigning self.builder/self.routeBuilder before the
+            // async notify fires.
+            let pendingBuilder = builder
+            let pendingRouteBuilder = routeBuilder
+
+            if !finalBatch.isEmpty, let pendingRouteBuilder {
+                routeInsertGroup.enter()
+                pendingRouteBuilder.insertRouteData(finalBatch) { [weak self] _, error in
                     if let error = error {
                         print("[stop] final route insert error: \(error)")
                     }
-                    insertGroup.leave()
+                    self?.routeInsertGroup.leave()
                 }
             }
 
-            insertGroup.notify(queue: .main) { [weak self] in
+            // Wait for all in-flight inserts (timer flushes + final batch) so
+            // the workout's route is complete before we attach it.
+            routeInsertGroup.notify(queue: .main) { [weak self] in
                 guard let self = self else { return }
                 print("[stop] endCollection")
 
-                self.builder?.endCollection(withEnd: endDate) { success, error in
+                pendingBuilder?.endCollection(withEnd: endDate) { success, error in
                     if let error = error {
                         print("[stop] end collection error: \(error)")
                     }
 
                     let finishHealthKit = { [weak self] in
                         guard let self = self else { return }
-                        self.builder?.finishWorkout { [weak self] workout, error in
+                        pendingBuilder?.finishWorkout { [weak self] workout, error in
                             guard let self = self, let workout = workout else {
                                 print("[stop] finish workout error: \(String(describing: error))")
                                 self?.exportAndTransferRide(savedToHealthKit: false)
@@ -822,7 +861,7 @@ class WorkoutManager: NSObject, ObservableObject {
 
                             print("[stop] workout saved, attaching route...")
 
-                            self.routeBuilder?.finishRoute(with: workout, metadata: nil) { route, error in
+                            pendingRouteBuilder?.finishRoute(with: workout, metadata: nil) { route, error in
                                 if let error = error {
                                     print("[stop] finish route error: \(error)")
                                 } else {
@@ -837,7 +876,7 @@ class WorkoutManager: NSObject, ObservableObject {
                     let discardHealthKit = { [weak self] in
                         guard let self = self else { return }
                         print("[stop] discarding HealthKit workout")
-                        self.builder?.discardWorkout()
+                        pendingBuilder?.discardWorkout()
                         self.exportAndTransferRide(savedToHealthKit: false)
                         self.cleanup()
                     }
@@ -1545,7 +1584,10 @@ class WorkoutManager: NSObject, ObservableObject {
 
         let rideID = currentRideID ?? UUID()
         let trackFilename = "\(rideID.uuidString).track"
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(trackFilename)
+        // Write the track directly to the durable rides directory rather than the
+        // temporary directory. Combined with an early RideStore save below, this
+        // ensures the held ride survives a crash anywhere in the async HK chain.
+        let persistentTrackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(trackFilename)
 
         let locationsToSave = recordedLocations
         let hrsToSave = recordedHeartRates
@@ -1578,14 +1620,26 @@ class WorkoutManager: NSObject, ObservableObject {
 
         let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
         do {
-            try trackData.write(to: tempURL)
+            // Atomic write so we never end up with a half-written track file even
+            // if the watch power-cycles during the write.
+            try trackData.write(to: persistentTrackURL, options: .atomic)
         } catch {
             print("[Hold] Failed to write track: \(error)")
             return
         }
 
+        // Persist the held ride to disk + RideStore SYNCHRONOUSLY before any of the
+        // teardown / async HK work. RideStore.update writes the summary JSON to the
+        // same `rides/` directory ConnectivityManager uses. If anything below fails
+        // or the app crashes, the held ride is already durable on the watch and
+        // `retryPendingTransfers` (fired on reachability change) will re-send it to
+        // the phone — TransferLedger keeps the entry pending until acked.
+        rideStore?.update(summary)
+        TransferLedger.shared.recordTransfer(rideID: summary.id)
+
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.workoutManager = nil
+        VoiceLinkController.shared.stop()
         navigation.reset()
         isMirroringReady = false
         mirroringRetryWorkItem?.cancel()
@@ -1599,7 +1653,10 @@ class WorkoutManager: NSObject, ObservableObject {
         stopDisplayTimer()
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
-        deleteCheckpointFiles()
+        // Checkpoint files are only deleted AFTER the held ride is fully durable on
+        // disk AND we've kicked off the transfer to the phone. If we deleted them
+        // up-front and then crashed mid-async, both the checkpoint *and* the in-
+        // flight summary would be gone.
 
         // Finish the HK session for this segment so it saves to Fitness
         let endDate = Date()
@@ -1607,26 +1664,38 @@ class WorkoutManager: NSObject, ObservableObject {
 
         let finalBatch = pendingRouteLocations
         pendingRouteLocations = []
-        let insertGroup = DispatchGroup()
-        if !finalBatch.isEmpty {
-            insertGroup.enter()
-            routeBuilder?.insertRouteData(finalBatch) { _, _ in insertGroup.leave() }
+        // Capture this segment's builders so they survive a later `continueHeldRide`
+        // reassigning self.builder/self.routeBuilder before our async notify fires.
+        let pendingBuilder = builder
+        let pendingRouteBuilder = routeBuilder
+        if !finalBatch.isEmpty, let pendingRouteBuilder {
+            routeInsertGroup.enter()
+            pendingRouteBuilder.insertRouteData(finalBatch) { [weak self] _, _ in
+                self?.routeInsertGroup.leave()
+            }
         }
 
-        insertGroup.notify(queue: .main) { [weak self] in
+        // Wait for ALL in-flight inserts (timer flushes + final batch) before
+        // finishing the route, otherwise the workout saves with a missing or
+        // partial route.
+        routeInsertGroup.notify(queue: .main) { [weak self] in
             guard let self else { return }
-            self.builder?.endCollection(withEnd: endDate) { _, _ in
-                self.builder?.finishWorkout { [weak self] workout, error in
+            pendingBuilder?.endCollection(withEnd: endDate) { _, _ in
+                pendingBuilder?.finishWorkout { [weak self] workout, error in
                     guard let self else { return }
                     if let workout {
-                        self.routeBuilder?.finishRoute(with: workout, metadata: nil) { _, _ in
+                        pendingRouteBuilder?.finishRoute(with: workout, metadata: nil) { _, _ in
                             print("[Hold] HK segment saved to Fitness")
                         }
                     } else {
                         print("[Hold] HK segment not saved: \(String(describing: error))")
                     }
                     DispatchQueue.main.async {
-                        ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
+                        // The track + summary are already on disk and in RideStore;
+                        // sendRide will detect that the destination matches the
+                        // source and skip the copy, then notify + transfer to phone.
+                        ConnectivityManager.shared.sendRide(summary: summary, trackURL: persistentTrackURL)
+                        self.deleteCheckpointFiles()
                         self.cleanup()
                     }
                 }
@@ -1824,7 +1893,7 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Speech routing to phone
 
-    func sendSpeechToPhone(_ text: String, category: String? = nil, completion: @escaping (Bool) -> Void) {
+    func sendSpeechToPhone(_ text: String, id: UUID, category: String? = nil, completion: @escaping (Bool) -> Void) {
         guard let workoutSession = self.session else {
             completion(false)
             return
@@ -1838,6 +1907,7 @@ class WorkoutManager: NSObject, ObservableObject {
         var payload: [String: String] = [
             "type": "speech",
             "text": text,
+            "id": id.uuidString,
             "ts": String(Date().timeIntervalSince1970)
         ]
         if let category {
@@ -1863,11 +1933,18 @@ class WorkoutManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             guard self.isActive else { return }
             self.isMirroringReady = false
+            // Notify the link controller so it ack-probes immediately instead
+            // of waiting up to a full heartbeat tick to refresh confidence.
+            VoiceLinkController.shared.notePhoneSendFailure()
             self.scheduleMirroringRetry()
         }
     }
 
     private func scheduleMirroringRetry() {
+        // Stays opportunistic but short: if the heartbeat-driven confidence
+        // signal is going to re-establish anyway, we just need to flip
+        // isMirroringReady true so the next `sendMirrorPayload` (e.g. the
+        // controller's next ping) can go through.
         mirroringRetryWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.isActive, self.session != nil else { return }
@@ -1875,7 +1952,31 @@ class WorkoutManager: NSObject, ObservableObject {
             self.mirroringRetryWorkItem = nil
         }
         mirroringRetryWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: item)
+    }
+
+    /// Generic send helper used by VoiceLinkController for ping/arm/disarm
+    /// messages. Wraps the same `sendToRemoteWorkoutSession` path as speech
+    /// and telemetry, and signals failure into `markMirroringFailed` so the
+    /// confidence signal degrades on real link issues.
+    func sendMirrorPayload(_ payload: [String: String], completion: ((Bool) -> Void)? = nil) {
+        guard isMirroringReady, let workoutSession = session else {
+            completion?(false)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(payload) else {
+            completion?(false)
+            return
+        }
+        workoutSession.sendToRemoteWorkoutSession(data: data) { [weak self] success, error in
+            if let error = error {
+                print("[VoiceLink] send error: \(error)")
+                self?.markMirroringFailed()
+                completion?(false)
+            } else {
+                completion?(success)
+            }
+        }
     }
 }
 
@@ -1985,6 +2086,51 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
         print("[Mirroring] Disconnected from phone: \(error?.localizedDescription ?? "clean")")
         markMirroringFailed()
     }
+
+    /// Receive messages from the phone (ack channel for mirrored speech, etc.).
+    /// Currently the only message type is "speechDone" — fired when the phone
+    /// finishes playing a mirrored utterance so the watch can advance its
+    /// alert queue based on real completion instead of a duration estimate.
+    func workoutSession(_ workoutSession: HKWorkoutSession,
+                        didReceiveDataFromRemoteWorkoutSession data: [Data]) {
+        let now = Date().timeIntervalSince1970
+
+        for item in data {
+            guard let payload = try? JSONDecoder().decode([String: String].self, from: item),
+                  let type = payload["type"] else {
+                continue
+            }
+
+            // Drop very old messages (e.g. relaunch flush).
+            if let tsString = payload["ts"], let ts = Double(tsString) {
+                if now - ts > 10 { continue }
+            }
+
+            switch type {
+            case "speechDone":
+                guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
+                DispatchQueue.main.async {
+                    VoiceNavigator.shared.handleSpeechAck(id: id)
+                    // Speech-ack also extends the predictive arm cool-down so
+                    // back-to-back alerts (split + turn, off-route + missed-
+                    // turn) share a single AVAudioSession activation.
+                    VoiceLinkController.shared.notePhoneSpeechAck()
+                }
+            case "linkPingAck":
+                guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
+                DispatchQueue.main.async {
+                    VoiceLinkController.shared.handleLinkPingAck(id: id)
+                }
+            case "linkArmAck":
+                let ts = payload["ts"].flatMap(Double.init) ?? 0
+                DispatchQueue.main.async {
+                    VoiceLinkController.shared.handleLinkArmAck(ts: ts)
+                }
+            default:
+                break
+            }
+        }
+    }
 }
 
 extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
@@ -2008,6 +2154,7 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
                         // Per-split HR accumulation
                         self.splitHRSum += hr
                         self.splitHRCount += 1
+                        if hr > self.splitMaxHR { self.splitMaxHR = hr }
                     }
                 case HKQuantityType(.activeEnergyBurned):
                     let unit = HKUnit.kilocalorie()

@@ -25,6 +25,7 @@ struct RideControlView: View {
     @State private var showSettingsRevertPrompt = false
     @State private var showRoutePicker = false
     @State private var showHoldConfirmation = false
+    @State private var showRouteDetail = false
     @State private var activeRoute: Route?
     @State private var selectedPage = 0
 
@@ -215,6 +216,53 @@ struct RideControlView: View {
                 ) { selected in
                     switchRoute(selected)
                 }
+            }
+            .sheet(isPresented: $showRouteDetail) {
+                if let route = activeRoute {
+                    NavigationStack {
+                        RouteDetailView(
+                            route: route,
+                            isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                            isUploading: false,
+                            isQueued: false,
+                            isUploadBlocked: false,
+                            canSendToWatch: connectivity.isPaired && connectivity.isWatchAppInstalled,
+                            onSend: {
+                                ConnectivityManager.shared.sendRoute(route) { _ in }
+                            }
+                        )
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") { showRouteDetail = false }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Quick-link pill: jump to the active route's detail screen
+            // without leaving the ride control flow.
+            if activeRoute != nil {
+                Button {
+                    showRouteDetail = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "map.fill")
+                            .font(.caption)
+                        Text("View Route Details")
+                            .font(.caption.weight(.semibold))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
             }
 
             // Remaining distance / auto-pause row

@@ -192,12 +192,36 @@ struct NavigationEventPreferences: Codable, Equatable, Hashable {
 
 // MARK: - Split Stats (passed from WorkoutManager to VoiceNavigator)
 
+/// Cumulative stats over a window — either a single split, the first half of
+/// the ride (for halfway alerts), or the full ride to date (for ride-scope
+/// stat readouts). Fields default to 0 when there's no data; consumers should
+/// use the unit-appropriate "missing" check (e.g. `> 0`) before reading.
 struct SplitStats {
     let movingTime: TimeInterval
-    let distance: Double        // meters
-    let averageSpeed: Double    // m/s
-    let maxSpeed: Double        // m/s
-    let averageHeartRate: Double // bpm, 0 if no data
+    let elapsedTime: TimeInterval   // wall-clock seconds, includes paused time
+    let distance: Double             // meters
+    let averageSpeed: Double         // m/s
+    let maxSpeed: Double             // m/s
+    let averageHeartRate: Double     // bpm, 0 if no data
+    let maxHeartRate: Double         // bpm, 0 if no data
+    let elevationGain: Double        // meters
+    let elevationLoss: Double        // meters
+    let calories: Double             // kcal
+
+    /// Convenience zero/empty stats — used when no data has been collected
+    /// yet (e.g. very first split or halfway hit instantly at start).
+    static let zero = SplitStats(
+        movingTime: 0,
+        elapsedTime: 0,
+        distance: 0,
+        averageSpeed: 0,
+        maxSpeed: 0,
+        averageHeartRate: 0,
+        maxHeartRate: 0,
+        elevationGain: 0,
+        elevationLoss: 0,
+        calories: 0
+    )
 }
 
 // MARK: - Split Alert Preferences
@@ -220,6 +244,23 @@ struct SplitMetricConfig: Codable, Equatable, Hashable {
     var metric: MetricType
     var scope: StatScope
 }
+
+/// Metrics that the watch can actually read aloud as part of a split or
+/// halfway readout. Kept in sync with `VoiceNavigator.statText` and the
+/// picker UI — anything outside this set silently drops at read time.
+let voiceReadableMetrics: Set<MetricType> = [
+    .movingTime,
+    .elapsedTime,
+    .averageSpeed,
+    .maxSpeed,
+    .distance,
+    .averageHeartRate,
+    .maxHeartRate,
+    .heartRate,            // legacy alias for averageHeartRate
+    .elevationGain,
+    .elevationLoss,
+    .calories
+]
 
 struct SplitAlertPreferences: Codable, Equatable, Hashable {
     var enabled: Bool
@@ -255,13 +296,18 @@ struct SplitAlertPreferences: Codable, Equatable, Hashable {
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         splitDistance = try c.decodeIfPresent(Double.self, forKey: .splitDistance) ?? 1609.34
         // Backward compat: migrate old selectedMetrics to new metrics format
+        let rawMetrics: [SplitMetricConfig]
         if let newMetrics = try c.decodeIfPresent([SplitMetricConfig].self, forKey: .metrics) {
-            metrics = newMetrics
+            rawMetrics = newMetrics
         } else if let oldMetrics = try? c.decodeIfPresent([MetricType].self, forKey: .metrics) {
-            metrics = oldMetrics.map { SplitMetricConfig(metric: $0, scope: .split) }
+            rawMetrics = oldMetrics.map { SplitMetricConfig(metric: $0, scope: .split) }
         } else {
-            metrics = Self.default.metrics
+            rawMetrics = Self.default.metrics
         }
+        // Strip metrics the watch can't actually announce (legacy .grade /
+        // .powerEstimate selections from older builds) so the rider doesn't
+        // think those will be read aloud.
+        metrics = rawMetrics.filter { voiceReadableMetrics.contains($0.metric) }
         mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceOnly
     }
 }
@@ -311,6 +357,91 @@ struct HapticPreferences: Codable, Equatable, Hashable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         intensity = try c.decodeIfPresent(HapticIntensity.self, forKey: .intensity) ?? .medium
+    }
+}
+
+// MARK: - Audio Source
+
+/// Where to play voice alerts. `.auto` follows the rule: BT/headphones on the
+/// watch first, then the phone if mirrored, then the watch speaker. The
+/// explicit modes pin the output regardless of what's connected (with a
+/// graceful fallback if the chosen device isn't available).
+enum AlertAudioSource: String, Codable, CaseIterable, Hashable {
+    case auto
+    case watch
+    case phone
+
+    var label: String {
+        switch self {
+        case .auto:  return "Auto"
+        case .watch: return "Watch"
+        case .phone: return "Phone"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .auto:  return "Headphones, then phone, then watch speaker"
+        case .watch: return "Always play on the watch (or paired headphones)"
+        case .phone: return "Always play on the phone if connected"
+        }
+    }
+}
+
+struct AudioOutputPreferences: Codable, Equatable, Hashable {
+    var source: AlertAudioSource
+
+    static let `default` = AudioOutputPreferences(source: .auto)
+
+    init(source: AlertAudioSource = .auto) {
+        self.source = source
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        source = try c.decodeIfPresent(AlertAudioSource.self, forKey: .source) ?? .auto
+    }
+}
+
+// MARK: - End-of-Route Alert Preferences
+
+/// Reads back ride stats once the route is completed. Defaults to mirroring
+/// the halfway-alert metric list; `useSplitsMetrics = false` lets the rider
+/// override with a custom selection (`metricsOverride`).
+struct EndOfRouteAlertPreferences: Codable, Equatable, Hashable {
+    var enabled: Bool
+    var mode: AlertMode
+    /// When true, use the same metrics the rider picked for split/halfway.
+    var useSplitsMetrics: Bool
+    /// Used only when `useSplitsMetrics` is false. Nil falls back to splits metrics.
+    var metricsOverride: [SplitMetricConfig]?
+
+    static let `default` = EndOfRouteAlertPreferences(
+        enabled: true,
+        mode: .voiceOnly,
+        useSplitsMetrics: true,
+        metricsOverride: nil
+    )
+
+    init(
+        enabled: Bool = true,
+        mode: AlertMode = .voiceOnly,
+        useSplitsMetrics: Bool = true,
+        metricsOverride: [SplitMetricConfig]? = nil
+    ) {
+        self.enabled = enabled
+        self.mode = mode
+        self.useSplitsMetrics = useSplitsMetrics
+        self.metricsOverride = metricsOverride
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceOnly
+        useSplitsMetrics = try c.decodeIfPresent(Bool.self, forKey: .useSplitsMetrics) ?? true
+        let raw = try c.decodeIfPresent([SplitMetricConfig].self, forKey: .metricsOverride)
+        metricsOverride = raw?.filter { voiceReadableMetrics.contains($0.metric) }
     }
 }
 
@@ -379,7 +510,9 @@ struct NavigationAlertPreferences: Codable, Equatable, Hashable {
     var splitAlerts: SplitAlertPreferences
     var autoPauseAlerts: AutoPauseAlertPreferences
     var waypointAlerts: WaypointAlertPreferences
+    var endOfRouteAlerts: EndOfRouteAlertPreferences
     var haptics: HapticPreferences
+    var audioOutput: AudioOutputPreferences
 
     static let `default` = NavigationAlertPreferences(
         turnAlerts: .default,
@@ -387,7 +520,9 @@ struct NavigationAlertPreferences: Codable, Equatable, Hashable {
         splitAlerts: .default,
         autoPauseAlerts: .default,
         waypointAlerts: .default,
-        haptics: .default
+        endOfRouteAlerts: .default,
+        haptics: .default,
+        audioOutput: .default
     )
 
     init(
@@ -396,14 +531,18 @@ struct NavigationAlertPreferences: Codable, Equatable, Hashable {
         splitAlerts: SplitAlertPreferences = .default,
         autoPauseAlerts: AutoPauseAlertPreferences = .default,
         waypointAlerts: WaypointAlertPreferences = .default,
-        haptics: HapticPreferences = .default
+        endOfRouteAlerts: EndOfRouteAlertPreferences = .default,
+        haptics: HapticPreferences = .default,
+        audioOutput: AudioOutputPreferences = .default
     ) {
         self.turnAlerts = turnAlerts
         self.navigationEvents = navigationEvents
         self.splitAlerts = splitAlerts
         self.autoPauseAlerts = autoPauseAlerts
         self.waypointAlerts = waypointAlerts
+        self.endOfRouteAlerts = endOfRouteAlerts
         self.haptics = haptics
+        self.audioOutput = audioOutput
     }
 
     init(from decoder: Decoder) throws {
@@ -413,6 +552,8 @@ struct NavigationAlertPreferences: Codable, Equatable, Hashable {
         splitAlerts = try c.decodeIfPresent(SplitAlertPreferences.self, forKey: .splitAlerts) ?? .default
         autoPauseAlerts = try c.decodeIfPresent(AutoPauseAlertPreferences.self, forKey: .autoPauseAlerts) ?? .default
         waypointAlerts = try c.decodeIfPresent(WaypointAlertPreferences.self, forKey: .waypointAlerts) ?? .default
+        endOfRouteAlerts = try c.decodeIfPresent(EndOfRouteAlertPreferences.self, forKey: .endOfRouteAlerts) ?? .default
         haptics = try c.decodeIfPresent(HapticPreferences.self, forKey: .haptics) ?? .default
+        audioOutput = try c.decodeIfPresent(AudioOutputPreferences.self, forKey: .audioOutput) ?? .default
     }
 }

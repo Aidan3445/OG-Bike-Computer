@@ -352,10 +352,6 @@ struct ContinueHeldRideIntent: AppIntent {
             return .result(dialog: "No held ride found.")
         }
 
-        await MainActor.run {
-            ConnectivityManager.shared.sendContinueHeldRide(rideID: held.id)
-        }
-
         let config = HKWorkoutConfiguration()
         config.activityType = await held.activityType.hkType
         config.locationType = .outdoor
@@ -363,7 +359,20 @@ struct ContinueHeldRideIntent: AppIntent {
             logger.info("[ContinueHeldRide] startWatchApp returned")
         }
 
-        return .result(dialog: "Resuming your held ride.")
+        // Await the watch's actual reply so failures surface to the user instead
+        // of optimistically reporting success.
+        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+            ConnectivityManager.shared.sendContinueHeldRide(summary: held) { result in
+                continuation.resume(returning: result)
+            }
+        }
+
+        switch result {
+        case .success:
+            return .result(dialog: "Resuming your held ride.")
+        case .failure(let error):
+            return .result(dialog: "Could not continue held ride: \(error.localizedDescription)")
+        }
         #elseif os(watchOS)
         return .result(dialog: "Use the phone app to continue a held ride.")
         #endif

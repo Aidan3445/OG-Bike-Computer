@@ -10,12 +10,14 @@ import MapKit
 import CoreLocation
 import Charts
 import AppIntents
+import HealthKit
 
 struct RideDetailView: View {
     let ride: RideSummary
     let rideStore: RideStore
     @ObservedObject private var unitState = UnitState.shared
     @ObservedObject private var uploadManager = UploadManager.shared
+    @Environment(\.dismiss) private var dismiss
 
     enum PanelState {
         case collapsed, compact, expanded
@@ -28,8 +30,14 @@ struct RideDetailView: View {
     @State private var showFinalizeConfirm = false
     @State private var showDiscardConfirm = false
     @State private var uploadError: String?
+    @State private var heldRideError: String?
+    @State private var isContinuing = false
     @ObservedObject private var connectivity = ConnectivityManager.shared
     @State private var coloredSegments: [ColoredSegment] = []
+    /// Pairs of (lastPointBefore, firstPointAfter) for every elapsed-time gap
+    /// larger than `pauseJumpGapSeconds` — rendered as dashed grey to visually
+    /// distinguish pause/hold jumps from actively-ridden segments.
+    @State private var pauseJumps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)] = []
     @State private var startCoord: CLLocationCoordinate2D?
     @State private var endCoord: CLLocationCoordinate2D?
     @State private var elevationExtremes: (high: ElevPoint, low: ElevPoint)?
@@ -40,6 +48,9 @@ struct RideDetailView: View {
     @State private var panelPage = 0
     @State private var scrubDistance: Double? = nil
     @State private var scrubCoordinate: CLLocationCoordinate2D? = nil
+    /// Color of the chart currently being scrubbed (e.g. green for elevation,
+    /// red for HR). Drives the map dot color so the dot matches the chart.
+    @State private var scrubColor: Color = .green
     @State private var allLocations: [CLLocation] = []
 
     var body: some View {
@@ -49,6 +60,11 @@ struct RideDetailView: View {
                 ForEach(coloredSegments) { seg in
                     MapPolyline(coordinates: seg.coords)
                         .stroke(seg.color, lineWidth: 4)
+                }
+                // Pause/hold jumps (long elapsed-time gaps) drawn as dashed grey.
+                ForEach(Array(pauseJumps.enumerated()), id: \.offset) { _, pair in
+                    MapPolyline(coordinates: [pair.0, pair.1])
+                        .stroke(Color.gray, style: StrokeStyle(lineWidth: 3, dash: [4, 3]))
                 }
 
                 if let first = startCoord {
@@ -106,13 +122,13 @@ struct RideDetailView: View {
                     }
                 }
 
-                // Scrub position indicator
+                // Scrub position indicator — outline matches the active chart color
                 if let coord = scrubCoordinate {
                     Annotation("", coordinate: coord) {
                         Circle()
                             .fill(.white)
                             .frame(width: 12, height: 12)
-                            .overlay(Circle().stroke(Color.accentColor, lineWidth: 3))
+                            .overlay(Circle().stroke(scrubColor, lineWidth: 3))
                             .shadow(radius: 3)
                     }
                 }
@@ -137,12 +153,15 @@ struct RideDetailView: View {
             if ride.onHold && connectivity.isReachable {
                 VStack(spacing: 4) {
                     HStack(spacing: 8) {
-                        Button(intent: ContinueHeldRideIntent()) {
-                            Label("Continue", systemImage: "hand.raised.fill")
+                        Button {
+                            continueHeldRide()
+                        } label: {
+                            Label(isContinuing ? "Continuing…" : "Continue", systemImage: "hand.raised.fill")
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.orange)
+                        .disabled(isContinuing)
 
                         Button {
                             showFinalizeConfirm = true
@@ -154,7 +173,8 @@ struct RideDetailView: View {
                         .tint(.green)
                         .confirmationDialog("Save this ride?", isPresented: $showFinalizeConfirm, titleVisibility: .visible) {
                             Button("Save Ride") {
-                                ConnectivityManager.shared.sendFinalizeHeldRide(rideID: ride.id)
+                                ConnectivityManager.shared.sendFinalizeHeldRide(summary: ride, rideStore: rideStore)
+                                dismiss()
                             }
                             Button("Cancel", role: .cancel) {}
                         } message: {
@@ -173,6 +193,9 @@ struct RideDetailView: View {
                     .confirmationDialog("Discard this ride?", isPresented: $showDiscardConfirm, titleVisibility: .visible) {
                         Button("Discard", role: .destructive) {
                             ConnectivityManager.shared.sendDiscardRide(rideID: ride.id)
+                            // Pop the detail screen — the held ride no longer exists, the
+                            // view above us would otherwise read a now-orphaned `ride`.
+                            dismiss()
                         }
                         Button("Cancel", role: .cancel) {}
                     } message: {
@@ -183,6 +206,14 @@ struct RideDetailView: View {
                 .padding(.vertical, 8)
                 .background(.regularMaterial)
             }
+        }
+        .alert("Could not continue ride", isPresented: Binding(
+            get: { heldRideError != nil },
+            set: { if !$0 { heldRideError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(heldRideError ?? "")
         }
         .navigationTitle(ride.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -410,7 +441,8 @@ struct RideDetailView: View {
                     dataPoints: chartData,
                     hasHeartRate: chartHasHR,
                     hasPower: chartHasPower,
-                    scrubDistance: $scrubDistance
+                    scrubDistance: $scrubDistance,
+                    scrubColor: $scrubColor
                 )
                 .onChange(of: scrubDistance) { _, dist in
                     scrubCoordinate = dist.map { interpolateCoordinate(at: $0) } ?? nil
@@ -441,6 +473,29 @@ struct RideDetailView: View {
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(.primary)
             .padding(.top, 8)
+    }
+
+    private func continueHeldRide() {
+        guard !isContinuing else { return }
+        isContinuing = true
+
+        // Wake the watch app so the continue command lands while the app is foregrounded.
+        let config = HKWorkoutConfiguration()
+        config.activityType = ride.activityType.hkType
+        config.locationType = .outdoor
+        HKHealthStore().startWatchApp(with: config) { _, _ in }
+
+        ConnectivityManager.shared.sendContinueHeldRide(summary: ride) { result in
+            DispatchQueue.main.async {
+                isContinuing = false
+                switch result {
+                case .success:
+                    dismiss()
+                case .failure(let error):
+                    heldRideError = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func uploadToStrava() {
@@ -515,7 +570,15 @@ struct RideDetailView: View {
         endCoord          = locations.last?.coordinate
         mileMarkers       = computeRideMileMarkers(locations: locations)
         elevationExtremes = computeElevExtremes(locations: locations)
-        coloredSegments   = buildColoredSegments(locations: locations, segmentCount: 500)
+
+        // Split into ridden runs at large elapsed-time gaps so the speed-
+        // colored polyline doesn't draw a straight line across a pause/hold
+        // jump. The gaps themselves render as dashed grey.
+        let split = splitAtPauseGaps(locations: locations, gapSeconds: 30)
+        pauseJumps = split.gaps
+        coloredSegments = split.runs.flatMap {
+            buildColoredSegments(locations: $0, segmentCount: max(50, 500 / max(split.runs.count, 1)))
+        }
 
         // Build chart data
         let result = buildRideChartData(from: url)
@@ -547,6 +610,32 @@ private struct ColoredSegment: Identifiable {
     let id = UUID()
     let coords: [CLLocationCoordinate2D]
     let color: Color
+}
+
+/// Splits a track into ridden runs separated by long elapsed-time gaps.
+/// Returns both the runs (each ≥1 point) and the gap pairs — adjacent
+/// `(lastPointBeforeGap, firstPointAfterGap)` — so the caller can render
+/// the gaps differently (e.g. dashed grey) from the ridden segments.
+private func splitAtPauseGaps(
+    locations: [CLLocation],
+    gapSeconds: TimeInterval = 30
+) -> (runs: [[CLLocation]], gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)]) {
+    guard locations.count >= 2 else { return (runs: [locations], gaps: []) }
+    var runs: [[CLLocation]] = []
+    var gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)] = []
+    var current: [CLLocation] = [locations[0]]
+    for i in 1..<locations.count {
+        let dt = locations[i].timestamp.timeIntervalSince(locations[i - 1].timestamp)
+        if dt > gapSeconds {
+            if current.count >= 1 { runs.append(current) }
+            gaps.append((locations[i - 1].coordinate, locations[i].coordinate))
+            current = [locations[i]]
+        } else {
+            current.append(locations[i])
+        }
+    }
+    if !current.isEmpty { runs.append(current) }
+    return (runs: runs.filter { $0.count >= 2 }, gaps: gaps)
 }
 
 /// Splits the track into `segmentCount` equal-sized chunks, computes average speed per chunk,

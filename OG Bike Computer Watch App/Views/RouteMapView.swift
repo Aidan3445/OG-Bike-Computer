@@ -159,7 +159,7 @@ struct RouteMapView: View {
                         .opacity(toggleButtonOpacity)
                     }
 
-                    if mapConfig.showHeading && workout.hasRoute {
+                    if mapConfig.showHeading {
                         Text(cardinalDirection)
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.white.opacity(0.7))
@@ -217,22 +217,19 @@ struct RouteMapView: View {
 
     @ViewBuilder
     private var statsOverlay: some View {
-        if workout.navigation.isOffRoute {
+        let offRoute = workout.navigation.isOffRoute
+        if offRoute || workout.navigation.nextTurn != nil || !workout.hasRoute || mapConfig.primaryStat != .none || !mapConfig.secondaryStats.filter({ $0 != .none }).isEmpty {
             VStack(spacing: 1) {
-                Text("OFF ROUTE")
-                    .font(.system(size: 11, weight: .heavy))
-                    .foregroundStyle(.red)
-                Text(formatTurnDistance(workout.navigation.nearestRouteDistance))
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.red.opacity(0.8))
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(.red.opacity(0.15))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        } else if workout.navigation.nextTurn != nil || !workout.hasRoute || mapConfig.primaryStat != .none || !mapConfig.secondaryStats.filter({ $0 != .none }).isEmpty {
-            VStack(spacing: 1) {
+                if offRoute {
+                    Text("OFF ROUTE")
+                        .font(.system(size: 11, weight: .heavy))
+                        .foregroundStyle(.red)
+                    Text(formatTurnDistance(workout.navigation.nearestRouteDistance))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.red.opacity(0.85))
+                    Divider().frame(maxWidth: 60).padding(.vertical, 1)
+                }
                 // Primary stat
                 if mapConfig.primaryStat != .none {
                     let primary = resolveMapStat(mapConfig.primaryStat)
@@ -273,7 +270,7 @@ struct RouteMapView: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
-            .background(.black.opacity(0.6))
+            .background(offRoute ? AnyShapeStyle(.red.opacity(0.18)) : AnyShapeStyle(.black.opacity(0.6)))
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
@@ -390,33 +387,35 @@ private struct FullRouteCanvas: View {
                                    style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 }
 
-            // Mile markers
+            // Mile markers — alternate above/below the route line
             let markers = computeMileMarkers(points: points)
-            for marker in markers {
+            for (idx, marker) in markers.enumerated() {
                 let pt = project(marker.coordinate, transform: transform)
-                // Flag pole
+                let below = idx.isMultiple(of: 2) == false
+                let dir: CGFloat = below ? 1 : -1
+                let poleTip = CGPoint(x: pt.x, y: pt.y + 10 * dir)
+                let flagMid = CGPoint(x: pt.x, y: pt.y + 6 * dir)
+                let flagOuter = CGPoint(x: pt.x + 7, y: pt.y + 8 * dir)
+                let labelPt = CGPoint(x: pt.x + 4, y: pt.y + 14 * dir)
                 context.stroke(
                     Path { p in
                         p.move(to: CGPoint(x: pt.x, y: pt.y))
-                        p.addLine(to: CGPoint(x: pt.x, y: pt.y - 10))
+                        p.addLine(to: poleTip)
                     },
                     with: .color(.orange),
                     style: StrokeStyle(lineWidth: 1.5))
-                // Flag
                 context.fill(
                     Path { p in
-                        p.move(to: CGPoint(x: pt.x, y: pt.y - 10))
-                        p.addLine(to: CGPoint(x: pt.x + 7, y: pt.y - 8))
-                        p.addLine(to: CGPoint(x: pt.x, y: pt.y - 6))
+                        p.move(to: poleTip)
+                        p.addLine(to: flagOuter)
+                        p.addLine(to: flagMid)
                         p.closeSubpath()
                     },
                     with: .color(.orange))
-                // Label
                 let text = Text("\(marker.mile)")
                     .font(.system(size: 7, weight: .bold))
                     .foregroundColor(.white)
-                context.draw(context.resolve(text),
-                             at: CGPoint(x: pt.x + 4, y: pt.y - 14))
+                context.draw(context.resolve(text), at: labelPt)
             }
 
             // POI pins (full route view)
@@ -806,34 +805,36 @@ private struct BreadcrumbCanvas: View {
                 }
 
                 let markers = MileMarkerCache.markers(for: points)
-                for marker in markers {
+                for (idx, marker) in markers.enumerated() {
                     let pt = toScreen(marker.coordinate)
                     // Only draw if on screen
                     guard pt.x >= -10 && pt.x <= screenW + 10 &&
                           pt.y >= -10 && pt.y <= screenH + 10 else { continue }
-                    // Flag pole
+                    let below = idx.isMultiple(of: 2) == false
+                    let dir: CGFloat = below ? 1 : -1
+                    let poleTip = CGPoint(x: pt.x, y: pt.y + 12 * dir)
+                    let flagMid = CGPoint(x: pt.x, y: pt.y + 7 * dir)
+                    let flagOuter = CGPoint(x: pt.x + 8, y: pt.y + 9.5 * dir)
+                    let labelPt = CGPoint(x: pt.x + 5, y: pt.y + 16 * dir)
                     context.stroke(
                         Path { p in
                             p.move(to: CGPoint(x: pt.x, y: pt.y))
-                            p.addLine(to: CGPoint(x: pt.x, y: pt.y - 12))
+                            p.addLine(to: poleTip)
                         },
                         with: .color(.orange),
                         style: StrokeStyle(lineWidth: 1.5))
-                    // Flag
                     context.fill(
                         Path { p in
-                            p.move(to: CGPoint(x: pt.x, y: pt.y - 12))
-                            p.addLine(to: CGPoint(x: pt.x + 8, y: pt.y - 9.5))
-                            p.addLine(to: CGPoint(x: pt.x, y: pt.y - 7))
+                            p.move(to: poleTip)
+                            p.addLine(to: flagOuter)
+                            p.addLine(to: flagMid)
                             p.closeSubpath()
                         },
                         with: .color(.orange))
-                    // Label
                     let text = Text("\(marker.mile)")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundColor(.white)
-                    context.draw(context.resolve(text),
-                                 at: CGPoint(x: pt.x + 5, y: pt.y - 16))
+                    context.draw(context.resolve(text), at: labelPt)
                 }
 
                 if workout.navigation.isOffRoute {
@@ -1029,17 +1030,30 @@ private struct BreadcrumbMapView: View {
                 }
             }
 
-            // Mile markers
+            // Mile markers — alternate above/below the route line
             let markers = computeMileMarkers(points: points)
-            ForEach(markers, id: \.mile) { marker in
-                Annotation("", coordinate: marker.coordinate, anchor: .bottom) {
-                    VStack(spacing: 0) {
-                        Text("\(marker.mile)")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.white)
-                        Image(systemName: "flag.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.orange)
+            ForEach(Array(markers.enumerated()), id: \.element.mile) { idx, marker in
+                let below = idx.isMultiple(of: 2) == false
+                Annotation("", coordinate: marker.coordinate, anchor: below ? .top : .bottom) {
+                    if below {
+                        VStack(spacing: 0) {
+                            Image(systemName: "flag.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.orange)
+                                .rotationEffect(.degrees(180))
+                            Text("\(marker.mile)")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            Text("\(marker.mile)")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white)
+                            Image(systemName: "flag.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.orange)
+                        }
                     }
                 }
             }
