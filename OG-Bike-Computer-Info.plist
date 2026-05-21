@@ -17,6 +17,8 @@
 			</array>
 		</dict>
 	</array>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0.1</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
