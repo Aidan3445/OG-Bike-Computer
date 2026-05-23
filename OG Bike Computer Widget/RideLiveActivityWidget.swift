@@ -18,33 +18,66 @@ struct RideLiveActivityWidget: WidgetBundle {
     }
 }
 
+// MARK: - Theme
+
+private enum Theme {
+    static let primary = Color(red: 0.62, green: 0.38, blue: 0.93)        // vivid purple
+    static let primaryLight = Color(red: 0.78, green: 0.58, blue: 1.0)    // lavender
+    static let primaryDeep = Color(red: 0.38, green: 0.18, blue: 0.62)    // deep purple
+    static let accent = Color(red: 0.55, green: 0.85, blue: 1.0)          // ice cyan (for nav)
+
+    static let lockBackground = LinearGradient(
+        colors: [
+            Color(red: 0.16, green: 0.08, blue: 0.28),
+            Color(red: 0.10, green: 0.05, blue: 0.20),
+            Color(red: 0.18, green: 0.08, blue: 0.32)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+
 struct RideLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: RideActivityAttributes.self) { context in
             // Lock Screen / Banner
             LockScreenView(context: context)
                 .widgetURL(URL(string: "ogbikecomputer://ridecontrol"))
+                .activityBackgroundTint(Color(red: 0.10, green: 0.05, blue: 0.20))
+                .activitySystemActionForegroundColor(Theme.primaryLight)
         } dynamicIsland: { context in
             DynamicIsland {
                 // Expanded
                 DynamicIslandExpandedRegion(.leading) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Label(formatDistance(context.state.totalDistance, imperial: context.attributes.isImperial), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                            .font(.caption.weight(.semibold))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label {
+                            Text(formatDistance(context.state.totalDistance, imperial: context.attributes.isImperial))
+                                .font(.caption.weight(.semibold))
+                                .monospacedDigit()
+                        } icon: {
+                            Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                                .foregroundStyle(Theme.primaryLight)
+                        }
                         Text(formatSpeed(context.state.averageSpeed, imperial: context.attributes.isImperial))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .monospacedDigit()
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text(formatDuration(context.state.movingTime, hideSeconds: false))
-                            .font(.caption.weight(.semibold))
-                            .monospacedDigit()
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Label {
+                            Text(formatDuration(context.state.movingTime, hideSeconds: false))
+                                .font(.caption.weight(.semibold))
+                                .monospacedDigit()
+                        } icon: {
+                            Image(systemName: "timer")
+                                .foregroundStyle(Theme.primaryLight)
+                        }
                         if let hr = context.state.heartRate, hr > 0 {
                             Label("\(Int(hr))", systemImage: "heart.fill")
                                 .font(.caption2)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(.pink)
                         }
                     }
                 }
@@ -52,20 +85,21 @@ struct RideLiveActivity: Widget {
                     if context.state.isOffRoute {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
+                                .foregroundStyle(.orange)
                             Text("Off Route")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(.red)
+                                .foregroundStyle(.orange)
                             if let dist = context.state.distanceOffRoute {
                                 Text("+\(formatDistance(dist, imperial: context.attributes.isImperial))")
                                     .font(.caption2)
-                                    .foregroundStyle(.red.opacity(0.8))
+                                    .foregroundStyle(.orange.opacity(0.8))
                             }
                         }
                     } else if let dir = context.state.nextTurnDirection {
                         HStack(spacing: 4) {
                             Image(systemName: context.state.nextTurnIcon ?? turnIcon(dir))
                                 .font(.caption.weight(.bold))
+                                .foregroundStyle(Theme.primaryLight)
                             Text(dir)
                                 .font(.caption.weight(.medium))
                             if let dist = context.state.distanceToNextTurn {
@@ -77,61 +111,91 @@ struct RideLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    if let cue = context.state.nextTurnCue {
-                        Text(cue)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    HStack(spacing: 8) {
-                        Button(intent: PauseResumeRideIntent()) {
-                            Image(systemName: context.state.isPaused ? "play.fill" : "pause.fill")
-                                .font(.caption2)
-                        }
-                        .tint(context.state.isPaused ? .green : .yellow)
+                    let status = context.state.rideStatus ?? "active"
+                    if status == "active" {
+                        VStack(spacing: 6) {
+                            if let cue = context.state.nextTurnCue {
+                                Text(cue)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            HStack(spacing: 10) {
+                                Button(intent: PauseResumeRideIntent()) {
+                                    Image(systemName: context.state.isPaused ? "play.fill" : "pause.fill")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .tint(context.state.isPaused ? .green : Theme.primaryLight)
 
-                        Button(intent: HoldRideIntent()) {
-                            Image(systemName: "hand.raised.fill")
-                                .font(.caption2)
-                        }
-                        .tint(.orange)
+                                Button(intent: HoldRideIntent()) {
+                                    Image(systemName: "hand.raised.fill")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .tint(.orange)
 
-                        Button(intent: EndRideIntent()) {
-                            Image(systemName: "stop.fill")
-                                .font(.caption2)
+                                Button(intent: EndRideIntent()) {
+                                    Image(systemName: "stop.fill")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .tint(.red)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .buttonBorderShape(.capsule)
                         }
-                        .tint(.red)
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: status == "completed" ? "checkmark.circle.fill" : "bicycle")
+                                .foregroundStyle(Theme.primaryLight)
+                            Text(status == "completed" ? "Ride Complete" : "No Active Ride")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             } compactLeading: {
-                if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
+                let status = context.state.rideStatus ?? "active"
+                if status == "completed" {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.primaryLight)
+                } else if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
                     Image(systemName: icon)
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(Theme.primaryLight)
                 } else {
                     Image(systemName: "bicycle")
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(Theme.primaryLight)
                 }
             } compactTrailing: {
-                if let dist = context.state.distanceToNextTurn {
+                let status = context.state.rideStatus ?? "active"
+                if status == "completed" {
+                    Text("Done")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.primaryLight)
+                } else if let dist = context.state.distanceToNextTurn {
                     Text(formatDistance(dist, imperial: context.attributes.isImperial))
                         .font(.caption2.weight(.semibold))
                         .monospacedDigit()
+                        .foregroundStyle(Theme.primaryLight)
                 } else {
                     Text(formatDistanceCompact(context.state.totalDistance, imperial: context.attributes.isImperial))
                         .font(.caption2.weight(.semibold))
                         .monospacedDigit()
+                        .foregroundStyle(Theme.primaryLight)
                 }
             } minimal: {
-                if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
+                let status = context.state.rideStatus ?? "active"
+                if status == "completed" {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.primaryLight)
+                } else if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
                     Image(systemName: icon)
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(Theme.primaryLight)
                 } else {
                     Image(systemName: "bicycle")
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(Theme.primaryLight)
                 }
             }
             .widgetURL(URL(string: "ogbikecomputer://ridecontrol"))
+            .keylineTint(Theme.primary)
         }
     }
 }
@@ -146,139 +210,290 @@ private struct LockScreenView: View {
     private var isImperial: Bool { context.attributes.isImperial }
     private var statSlots: [String] { context.attributes.statSlots }
     private var hasNav: Bool { state.nextTurnDirection != nil || state.isOffRoute }
+    private var isActive: Bool { (state.rideStatus ?? "active") == "active" }
+    private var isCompleted: Bool { state.rideStatus == "completed" }
 
     var body: some View {
+        Group {
+            if isActive {
+                activeBody
+            } else {
+                inactiveBody
+            }
+        }
+        .background {
+            ZStack {
+                Theme.lockBackground
+                RadialGradient(
+                    colors: [Theme.primary.opacity(0.35), .clear],
+                    center: .topTrailing,
+                    startRadius: 0,
+                    endRadius: 180
+                )
+                .blendMode(.plusLighter)
+            }
+        }
+    }
+
+    // MARK: - Inactive / Completed state
+
+    private var inactiveBody: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.primaryLight, Theme.primary],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 36, height: 36)
+                    .shadow(color: Theme.primary.opacity(0.6), radius: 5, y: 1)
+                Image(systemName: isCompleted ? "checkmark" : "bicycle")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isCompleted ? "Ride Complete" : "No Active Ride")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(isCompleted
+                     ? "Tap to open ride details"
+                     : "Start a ride from the app or watch")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if isCompleted {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.primaryLight)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    private var activeBody: some View {
         VStack(spacing: 6) {
-            // Top bar: nav info (if route) with compact controls, or nothing
-            if !isLuminanceReduced {
-                if hasNav {
-                    // Nav bar with compact round buttons in trailing corner
-                    HStack(spacing: 0) {
-                        turnNavigationContent
-                        Spacer(minLength: 4)
-                        compactControls
-                    }
-                } else {
-                    // No nav — nothing up top, buttons at bottom
-                    EmptyView()
-                }
+            // Header row: brand mark + status pill (only when no nav — nav banner takes its place)
+            if !isLuminanceReduced && !hasNav {
+                headerBar
+            }
+
+            // Nav banner (only when active) — includes status pill in trailing edge
+            if !isLuminanceReduced, hasNav {
+                navBanner
             }
 
             // Stats grid — configurable 2 rows of 3
             statsGrid
 
-            // Route remaining / auto-pause row (hidden in dim mode)
-            if !isLuminanceReduced, state.routeDistanceRemaining != nil || state.isAutoPaused {
-                HStack {
+            // Route remaining / auto-pause row (hidden in dim mode, also hidden when nav banner present to save space)
+            if !isLuminanceReduced, !hasNav, state.routeDistanceRemaining != nil || state.isAutoPaused {
+                HStack(spacing: 6) {
                     if let remaining = state.routeDistanceRemaining {
                         Image(systemName: "flag.checkered")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text("\(formatDistance(remaining, imperial: isImperial)) remaining")
+                            .foregroundStyle(Theme.primaryLight.opacity(0.8))
+                        Text("\(formatDistance(remaining, imperial: isImperial)) to finish")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .monospacedDigit()
                     }
                     Spacer()
                     if state.isAutoPaused {
-                        Label("Auto", systemImage: "pause.circle.fill")
+                        Label("Auto Pause", systemImage: "pause.circle.fill")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.yellow)
                     }
                 }
+                .padding(.horizontal, 2)
             }
 
-            // Full-width pill buttons only when there's NO nav (plenty of space)
-            if !isLuminanceReduced && !hasNav {
-                HStack(spacing: 12) {
-                    Button(intent: PauseResumeRideIntent()) {
-                        Label(
-                            state.isPaused ? "Resume" : "Pause",
-                            systemImage: state.isPaused ? "play.fill" : "pause.fill"
-                        )
-                        .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                    }
-                    .tint(state.isPaused ? .green : .yellow)
-
-                    Button(intent: EndRideIntent()) {
-                        Label("End", systemImage: "stop.fill")
-                            .font(.caption.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .tint(.red)
-                }
-                .buttonStyle(.borderedProminent)
+            // Controls row
+            if !isLuminanceReduced {
+                controlBar
             }
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
-    // MARK: - Turn Navigation Content (no outer wrapper)
+    // MARK: - Header
+
+    private var headerBar: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.primaryLight, Theme.primary],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 22, height: 22)
+                    .shadow(color: Theme.primary.opacity(0.6), radius: 4, y: 1)
+                Image(systemName: "bicycle")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            Text("Riding")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.95))
+            Spacer()
+            statusPill
+        }
+    }
 
     @ViewBuilder
-    private var turnNavigationContent: some View {
-        if state.isOffRoute {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.body.weight(.bold))
-                    .foregroundStyle(.red)
+    private var statusPill: some View {
+        if state.isPaused {
+            pill(text: "PAUSED", icon: "pause.fill", color: .yellow)
+        } else if state.isAutoPaused {
+            pill(text: "AUTO", icon: "pause.circle.fill", color: .yellow)
+        } else {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: .green.opacity(0.8), radius: 3)
+                Text("LIVE")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .tracking(0.5)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(.white.opacity(0.08))
+                    .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+            )
+        }
+    }
+
+    private func pill(text: String, icon: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption2.weight(.bold))
+            Text(text)
+                .font(.caption2.weight(.bold))
+                .tracking(0.5)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            Capsule()
+                .fill(color.opacity(0.15))
+                .overlay(Capsule().stroke(color.opacity(0.4), lineWidth: 0.5))
+        )
+    }
+
+    // MARK: - Nav Banner
+
+    @ViewBuilder
+    private var navBanner: some View {
+        HStack(spacing: 10) {
+            if state.isOffRoute {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.orange.opacity(0.25))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(.orange)
+                }
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Off Route")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.orange)
                     if let dist = state.distanceOffRoute {
                         Text("+\(formatDistance(dist, imperial: isImperial)) from route")
                             .font(.caption2)
-                            .foregroundStyle(.red.opacity(0.75))
+                            .foregroundStyle(.orange.opacity(0.8))
                     }
                 }
-            }
-        } else if let dir = state.nextTurnDirection {
-            HStack(spacing: 6) {
-                Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
-                    .font(.body.weight(.bold))
-                    .foregroundStyle(.cyan)
+                Spacer()
+                statusPill
+            } else if let dir = state.nextTurnDirection {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Theme.primary.opacity(0.4), Theme.primaryDeep.opacity(0.3)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 28, height: 28)
+                    Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(Theme.primaryLight)
+                }
                 VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         Text(dir.capitalized)
                             .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
                         if let dist = state.distanceToNextTurn {
-                            Text("in \(formatDistance(dist, imperial: isImperial))")
+                            Text("· \(formatDistance(dist, imperial: isImperial))")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.primaryLight)
+                                .monospacedDigit()
                         }
                     }
                     if let cue = state.nextTurnCue, !cue.isEmpty {
                         Text(cue)
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.white.opacity(0.6))
                             .lineLimit(1)
                     }
                 }
+                Spacer()
+                statusPill
             }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.primary.opacity(0.25), lineWidth: 0.5)
+                )
+        )
     }
 
-    // MARK: - Compact Round Controls (used when nav is active)
+    // MARK: - Control Bar
 
-    private var compactControls: some View {
-        HStack(spacing: 6) {
+    private var controlBar: some View {
+        HStack(spacing: 8) {
             Button(intent: PauseResumeRideIntent()) {
-                Image(systemName: state.isPaused ? "play.fill" : "pause.fill")
-                    .font(.caption2.weight(.semibold))
-                    .frame(width: 28, height: 28)
+                Label(
+                    state.isPaused ? "Resume" : "Pause",
+                    systemImage: state.isPaused ? "play.fill" : "pause.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
             }
-            .tint(state.isPaused ? .green : .yellow)
+            .tint(state.isPaused ? .green : Theme.primary)
 
             Button(intent: EndRideIntent()) {
-                Image(systemName: "stop.fill")
-                    .font(.caption2.weight(.semibold))
-                    .frame(width: 28, height: 28)
+                Label("End", systemImage: "stop.fill")
+                    .font(.caption.weight(.semibold))
+                    .frame(maxWidth: .infinity)
             }
-            .tint(.red)
+            .tint(.red.opacity(0.85))
         }
         .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.circle)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
     }
 
     // MARK: - Configurable Stats Grid
@@ -288,27 +503,16 @@ private struct LockScreenView: View {
         let topRow = Array(statSlots.prefix(3))
         let bottomRow = Array(statSlots.dropFirst(3).prefix(3))
 
-        VStack(spacing: 0) {
-            // Top row
-            HStack(spacing: 0) {
-                ForEach(Array(topRow.enumerated()), id: \.offset) { i, slot in
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                ForEach(Array(topRow.enumerated()), id: \.offset) { _, slot in
                     statCell(for: slot)
-                    if i < topRow.count - 1 {
-                        Divider().frame(height: 32)
-                    }
                 }
             }
-
             if !bottomRow.isEmpty {
-                Divider().padding(.horizontal, 16)
-
-                // Bottom row
-                HStack(spacing: 0) {
-                    ForEach(Array(bottomRow.enumerated()), id: \.offset) { i, slot in
+                HStack(spacing: 4) {
+                    ForEach(Array(bottomRow.enumerated()), id: \.offset) { _, slot in
                         statCell(for: slot)
-                        if i < bottomRow.count - 1 {
-                            Divider().frame(height: 32)
-                        }
                     }
                 }
             }
@@ -318,16 +522,36 @@ private struct LockScreenView: View {
     private func statCell(for slotRawValue: String) -> some View {
         let label = metricLabel(slotRawValue)
         let value = resolveMetricValue(slotRawValue)
+        let icon = metricIcon(slotRawValue)
+        let tint = metricTint(slotRawValue)
 
-        return VStack(spacing: 2) {
+        return VStack(spacing: 1) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(label)
+                    .font(.system(size: 8, weight: .bold))
+                    .tracking(0.4)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
             Text(value)
-                .font(.subheadline.weight(.semibold))
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(.white.opacity(0.08), lineWidth: 0.5)
+                )
+        )
     }
 
     /// Resolve a metric raw value to its display string from ContentState.
@@ -481,6 +705,37 @@ private func metricLabel(_ rawValue: String) -> String {
     case "nextTurnDirection": return "TURN DIR"
     case "heading": return "HEADING"
     default: return rawValue.uppercased()
+    }
+}
+
+private func metricIcon(_ rawValue: String) -> String {
+    switch rawValue {
+    case "speed", "averageSpeed", "maxSpeed": return "speedometer"
+    case "distance": return "point.topleft.down.to.point.bottomright.curvepath"
+    case "distanceRemaining": return "flag.checkered"
+    case "elapsedTime", "movingTime": return "timer"
+    case "heartRate", "averageHeartRate", "maxHeartRate": return "heart.fill"
+    case "calories": return "flame.fill"
+    case "currentElevation", "highestElevation": return "mountain.2.fill"
+    case "elevationGain": return "arrow.up.right"
+    case "elevationLoss": return "arrow.down.right"
+    case "grade": return "angle"
+    case "powerEstimate": return "bolt.fill"
+    case "nextTurnDistance", "nextTurnDirection": return "arrow.triangle.turn.up.right.diamond.fill"
+    case "heading": return "location.north.fill"
+    default: return "circle.fill"
+    }
+}
+
+private func metricTint(_ rawValue: String) -> Color {
+    switch rawValue {
+    case "heartRate", "averageHeartRate", "maxHeartRate": return .pink
+    case "calories": return .orange
+    case "powerEstimate": return .yellow
+    case "elevationGain": return .green
+    case "elevationLoss": return .blue
+    case "grade": return .mint
+    default: return Theme.primaryLight
     }
 }
 

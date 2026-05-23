@@ -1,0 +1,6 @@
+Target dependency graph (3 targets)
+Target 'OG Bike Computer' in project 'OG Bike Computer'
+➜ Explicit dependency on target 'OG Bike Computer Watch App' in project 'OG Bike Computer'
+➜ Explicit dependency on target 'OG Bike Computer WidgetExtension' in project 'OG Bike Computer'
+Target 'OG Bike Computer WidgetExtension' in project 'OG Bike Computer' (no dependencies)
+Target 'OG Bike Computer Watch App' in project 'OG Bike Computer' (no dependencies)

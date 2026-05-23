@@ -71,7 +71,8 @@ class LiveActivityManager {
             isOffRoute: false,
             distanceOffRoute: nil,
             riderLatitude: nil,
-            riderLongitude: nil
+            riderLongitude: nil,
+            rideStatus: "active"
         )
 
         let content = ActivityContent(state: initialState, staleDate: nil)
@@ -118,7 +119,8 @@ class LiveActivityManager {
             isOffRoute: telemetry["isOffRoute"] == "true",
             distanceOffRoute: Double(telemetry["distOffRoute"] ?? ""),
             riderLatitude: Double(telemetry["lat"] ?? ""),
-            riderLongitude: Double(telemetry["lon"] ?? "")
+            riderLongitude: Double(telemetry["lon"] ?? ""),
+            rideStatus: "active"
         )
 
         let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(10))
@@ -129,15 +131,31 @@ class LiveActivityManager {
     }
 
     func endActivity() {
-        // End ALL activities of this type — catches orphans from crashes or double-starts
+        // End ALL activities of this type — catches orphans from crashes or double-starts.
+        // Push a "completed" state first so any lingering UI shows a finish message
+        // instead of the stale pause/resume controls, then schedule auto-dismissal.
         let allActivities = Activity<RideActivityAttributes>.activities
         if allActivities.isEmpty {
             print("[LiveActivity] No activities to end")
         } else {
             print("[LiveActivity] Ending \(allActivities.count) activity(ies)")
+            let dismissAt = Date().addingTimeInterval(60)
             for activity in allActivities {
                 Task {
-                    await activity.end(nil, dismissalPolicy: .immediate)
+                    var finalState = activity.content.state
+                    finalState.rideStatus = "completed"
+                    finalState.isPaused = false
+                    finalState.isAutoPaused = false
+                    finalState.isOffRoute = false
+                    finalState.nextTurnDirection = nil
+                    finalState.nextTurnIcon = nil
+                    finalState.nextTurnCue = nil
+                    finalState.distanceToNextTurn = nil
+                    await activity.update(ActivityContent(state: finalState, staleDate: nil))
+                    await activity.end(
+                        ActivityContent(state: finalState, staleDate: nil),
+                        dismissalPolicy: .after(dismissAt)
+                    )
                 }
             }
         }

@@ -58,6 +58,11 @@ struct RideActivityAttributes: ActivityAttributes {
         // Rider location for potential map rendering
         var riderLatitude: Double?
         var riderLongitude: Double?
+
+        /// Lifecycle status. nil/"active" = ride in progress; "completed" = ride
+        /// has ended (widget shows a summary message); "inactive" = no ride.
+        /// Optional for back-compat with previously-encoded states.
+        var rideStatus: String?
     }
 }
 #endif

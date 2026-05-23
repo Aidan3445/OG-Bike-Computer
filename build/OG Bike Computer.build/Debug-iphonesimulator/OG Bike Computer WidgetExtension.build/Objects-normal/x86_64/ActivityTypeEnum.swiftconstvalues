@@ -1,0 +1,277 @@
+[
+  {
+    "typeName": "OG_Bike_Computer_WidgetExtension.ActivityTypeEnum",
+    "mangledTypeName": "32OG_Bike_Computer_WidgetExtension16ActivityTypeEnumO",
+    "kind": "enum",
+    "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ActivityTypeEnum.swift",
+    "line": 11,
+    "conformances": [
+      "Swift.Equatable",
+      "Swift.Hashable",
+      "Swift.RawRepresentable",
+      "AppIntents.AppEnum",
+      "AppIntents.AppValue",
+      "AppIntents.StaticDisplayRepresentable",
+      "AppIntents.PersistentlyIdentifiable",
+      "AppIntents.TypeDisplayRepresentable",
+      "AppIntents._IntentValue",
+      "Swift.Sendable",
+      "AppIntents.CaseDisplayRepresentable",
+      "Swift.SendableMetatype",
+      "Foundation.CustomLocalizedStringResourceConvertible",
+      "Swift.CaseIterable",
+      "Swift.BitwiseCopyable"
+    ],
+    "allConformances": [
+      {
+        "protocolName": "Swift.Equatable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.Hashable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.RawRepresentable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.AppEnum",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.AppValue",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.StaticDisplayRepresentable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.PersistentlyIdentifiable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.TypeDisplayRepresentable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents._IntentValue",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.Sendable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.CaseDisplayRepresentable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.SendableMetatype",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Foundation.CustomLocalizedStringResourceConvertible",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.CaseIterable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.BitwiseCopyable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      }
+    ],
+    "associatedTypeAliases": [
+      {
+        "typeAliasName": "RawValue",
+        "substitutedTypeName": "Swift.String",
+        "substitutedMangledTypeName": "SS"
+      },
+      {
+        "typeAliasName": "ValueType",
+        "substitutedTypeName": "OG_Bike_Computer_WidgetExtension.ActivityTypeEnum",
+        "substitutedMangledTypeName": "32OG_Bike_Computer_WidgetExtension16ActivityTypeEnumO"
+      },
+      {
+        "typeAliasName": "UnwrappedType",
+        "substitutedTypeName": "OG_Bike_Computer_WidgetExtension.ActivityTypeEnum",
+        "substitutedMangledTypeName": "32OG_Bike_Computer_WidgetExtension16ActivityTypeEnumO"
+      },
+      {
+        "typeAliasName": "Specification",
+        "substitutedTypeName": "some AppIntents.ResolverSpecification",
+        "substitutedMangledTypeName": "10AppIntents0A4EnumPAAE28defaultResolverSpecificationQrvpZQOy32OG_Bike_Computer_WidgetExtension012ActivityTypeC0O_Qo_",
+        "opaqueTypeProtocolRequirements": [
+          "AppIntents.ResolverSpecification"
+        ],
+        "opaqueTypeSameTypeRequirements": []
+      },
+      {
+        "typeAliasName": "AllCases",
+        "substitutedTypeName": "Swift.Array<OG_Bike_Computer_WidgetExtension.ActivityTypeEnum>",
+        "substitutedMangledTypeName": "Say32OG_Bike_Computer_WidgetExtension16ActivityTypeEnumOG"
+      }
+    ],
+    "properties": [
+      {
+        "label": "typeDisplayRepresentation",
+        "type": "AppIntents.TypeDisplayRepresentation",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ActivityTypeEnum.swift",
+        "line": 17,
+        "valueKind": "InitCall",
+        "value": {
+          "type": "AppIntents.TypeDisplayRepresentation",
+          "arguments": [
+            {
+              "label": "name",
+              "type": "Foundation.LocalizedStringResource",
+              "valueKind": "RawLiteral",
+              "value": "Activity Type"
+            },
+            {
+              "label": "numericFormat",
+              "type": "Swift.Optional<Foundation.LocalizedStringResource>",
+              "valueKind": "NilLiteral"
+            }
+          ]
+        }
+      },
+      {
+        "label": "caseDisplayRepresentations",
+        "type": "Swift.Dictionary<OG_Bike_Computer_WidgetExtension.ActivityTypeEnum, AppIntents.DisplayRepresentation>",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ActivityTypeEnum.swift",
+        "line": 19,
+        "valueKind": "Dictionary",
+        "value": [
+          {
+            "key": {
+              "valueKind": "Enum",
+              "value": {
+                "name": "cycling"
+              }
+            },
+            "value": {
+              "valueKind": "RawLiteral",
+              "value": "Cycling"
+            }
+          },
+          {
+            "key": {
+              "valueKind": "Enum",
+              "value": {
+                "name": "running"
+              }
+            },
+            "value": {
+              "valueKind": "RawLiteral",
+              "value": "Running"
+            }
+          },
+          {
+            "key": {
+              "valueKind": "Enum",
+              "value": {
+                "name": "walking"
+              }
+            },
+            "value": {
+              "valueKind": "RawLiteral",
+              "value": "Walking"
+            }
+          },
+          {
+            "key": {
+              "valueKind": "Enum",
+              "value": {
+                "name": "hiking"
+              }
+            },
+            "value": {
+              "valueKind": "RawLiteral",
+              "value": "Hiking"
+            }
+          }
+        ]
+      },
+      {
+        "label": "activityType",
+        "type": "OG_Bike_Computer_WidgetExtension.ActivityType",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "false",
+        "isComputed": "true",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ActivityTypeEnum.swift",
+        "line": 26,
+        "valueKind": "Runtime"
+      },
+      {
+        "label": "allCases",
+        "type": "Swift.Array<OG_Bike_Computer_WidgetExtension.ActivityTypeEnum>",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "true",
+        "valueKind": "Array",
+        "value": [
+          {
+            "valueKind": "Enum",
+            "value": {
+              "name": "cycling"
+            }
+          },
+          {
+            "valueKind": "Enum",
+            "value": {
+              "name": "running"
+            }
+          },
+          {
+            "valueKind": "Enum",
+            "value": {
+              "name": "walking"
+            }
+          },
+          {
+            "valueKind": "Enum",
+            "value": {
+              "name": "hiking"
+            }
+          }
+        ]
+      },
+      {
+        "label": "rawValue",
+        "type": "Swift.String",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "false",
+        "isComputed": "true",
+        "valueKind": "Runtime"
+      }
+    ],
+    "cases": [
+      {
+        "name": "cycling",
+        "rawValue": "cycling"
+      },
+      {
+        "name": "running",
+        "rawValue": "running"
+      },
+      {
+        "name": "walking",
+        "rawValue": "walking"
+      },
+      {
+        "name": "hiking",
+        "rawValue": "hiking"
+      }
+    ]
+  }
+]

@@ -1,0 +1,48 @@
+{
+  "source": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ActivityTypeEnum.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Activity Type",
+        "location": {
+          "startingColumn": 76,
+          "startingLine": 17
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cycling",
+        "location": {
+          "startingColumn": 19,
+          "startingLine": 20
+        }
+      },
+      {
+        "comment": "",
+        "key": "Running",
+        "location": {
+          "startingColumn": 19,
+          "startingLine": 21
+        }
+      },
+      {
+        "comment": "",
+        "key": "Walking",
+        "location": {
+          "startingColumn": 19,
+          "startingLine": 22
+        }
+      },
+      {
+        "comment": "",
+        "key": "Hiking",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 23
+        }
+      }
+    ]
+  },
+  "version": 1
+}

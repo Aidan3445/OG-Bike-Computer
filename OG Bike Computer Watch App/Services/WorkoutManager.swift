@@ -267,7 +267,7 @@ class WorkoutManager: NSObject, ObservableObject {
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.workoutManager = self
-        VoiceLinkController.shared.start(workoutManager: self)
+        VoiceAlertTransport.shared.start()
 
         workoutStartDate = Date()
         timerStart = workoutStartDate
@@ -295,7 +295,14 @@ class WorkoutManager: NSObject, ObservableObject {
     func processLocation(_ location: CLLocation) {
         DispatchQueue.main.async {
             self.currentLocation = location
-            self.speed = max(location.speed, 0)
+            // CLLocation.speed can be stale or unreliable when stationary.
+            // Reject readings with invalid speedAccuracy so they don't keep the
+            // display pinned to an old value and block auto-pause from firing.
+            if location.speedAccuracy < 0 {
+                self.speed = 0
+            } else {
+                self.speed = max(location.speed, 0)
+            }
 
             self.updateExtendedMetrics(location)
 
@@ -315,13 +322,6 @@ class WorkoutManager: NSObject, ObservableObject {
                     speed: self.speed,
                     heading: self.heading,
                     isActivelyMoving: self.autoPauseState == .moving)
-                // Drive predictive warm-up off the same tick so the link is
-                // armed N seconds before VoiceNavigator decides to speak.
-                VoiceLinkController.shared.update(
-                    navigation: self.navigation,
-                    speed: self.speed,
-                    averageSpeed: self.averageSpeed,
-                    grade: self.currentGrade)
             }
 
             // Accumulate distance in simulation mode too
@@ -332,6 +332,13 @@ class WorkoutManager: NSObject, ObservableObject {
             }
 
             self.updateAutoPause()
+
+            // While auto-paused, force the displayed speed to 0 regardless of
+            // what GPS reports — stale/noisy CL readings shouldn't show motion
+            // when the rider is stopped.
+            if self.autoPauseState == .paused {
+                self.speed = 0
+            }
 
             // Recording + distance based on auto-pause state
             switch self.autoPauseState {
@@ -558,10 +565,12 @@ class WorkoutManager: NSObject, ObservableObject {
             print("[Mirroring] Start mirroring result: success=\(success), error=\(String(describing: error))")
             if success {
                 DispatchQueue.main.async {
-                    // Set ready immediately — VoiceLinkController's heartbeat
-                    // and the `.warm`/`.primed` confidence signal are what
-                    // actually gate the speech route now; the old 2s arbitrary
-                    // delay was dropping the first turn alert on every ride.
+                    // Mirroring is what launches and keeps the phone app alive.
+                    // Once startMirroringToCompanionDevice's callback fires
+                    // success=true, WCSession.isReachable will become true
+                    // shortly after and stay true for the duration of the
+                    // ride. The plan's transport layer (VoiceAlertTransport)
+                    // is what actually decides phone vs watch per-alert.
                     self?.isMirroringReady = true
                     print("[Mirroring] Ready for speech routing")
                 }
@@ -587,7 +596,10 @@ class WorkoutManager: NSObject, ObservableObject {
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.configureAudioSession()
         VoiceNavigator.shared.workoutManager = self
-        VoiceLinkController.shared.start(workoutManager: self)
+        // Arm the WCSession alert transport for this ride. Snapshots
+        // companion-app-installed at this moment + listens for didStart
+        // acks coming back from the phone.
+        VoiceAlertTransport.shared.start()
 
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
@@ -784,7 +796,7 @@ class WorkoutManager: NSObject, ObservableObject {
         // Kill voice and navigation IMMEDIATELY
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.workoutManager = nil
-        VoiceLinkController.shared.stop()
+        VoiceAlertTransport.shared.stop()
         navigation.reset()
 
         isMirroringReady = false
@@ -1639,7 +1651,7 @@ class WorkoutManager: NSObject, ObservableObject {
 
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.workoutManager = nil
-        VoiceLinkController.shared.stop()
+        VoiceAlertTransport.shared.stop()
         navigation.reset()
         isMirroringReady = false
         mirroringRetryWorkItem?.cancel()
@@ -1891,60 +1903,18 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
-    // Speech routing to phone
-
-    func sendSpeechToPhone(_ text: String, id: UUID, category: String? = nil, completion: @escaping (Bool) -> Void) {
-        guard let workoutSession = self.session else {
-            completion(false)
-            return
-        }
-
-        guard isMirroringReady else {
-            completion(false)
-            return
-        }
-
-        var payload: [String: String] = [
-            "type": "speech",
-            "text": text,
-            "id": id.uuidString,
-            "ts": String(Date().timeIntervalSince1970)
-        ]
-        if let category {
-            payload["cat"] = category
-        }
-        guard let data = try? JSONEncoder().encode(payload) else {
-            completion(false)
-            return
-        }
-
-        workoutSession.sendToRemoteWorkoutSession(data: data) { [weak self] success, error in
-            if let error = error {
-                print("[Speech] send error: \(error)")
-                self?.markMirroringFailed()
-                completion(false)
-            } else {
-                completion(success)
-            }
-        }
-    }
-
     private func markMirroringFailed() {
         DispatchQueue.main.async {
             guard self.isActive else { return }
             self.isMirroringReady = false
-            // Notify the link controller so it ack-probes immediately instead
-            // of waiting up to a full heartbeat tick to refresh confidence.
-            VoiceLinkController.shared.notePhoneSendFailure()
             self.scheduleMirroringRetry()
         }
     }
 
     private func scheduleMirroringRetry() {
-        // Stays opportunistic but short: if the heartbeat-driven confidence
-        // signal is going to re-establish anyway, we just need to flip
-        // isMirroringReady true so the next `sendMirrorPayload` (e.g. the
-        // controller's next ping) can go through.
+        // Workout mirroring should keep the phone alive end-to-end. If a
+        // single send fails, give the link a short cool-down then optimistic-
+        // ally re-enable — the next send will tell us if it's actually back.
         mirroringRetryWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.isActive, self.session != nil else { return }
@@ -1952,31 +1922,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.mirroringRetryWorkItem = nil
         }
         mirroringRetryWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: item)
-    }
-
-    /// Generic send helper used by VoiceLinkController for ping/arm/disarm
-    /// messages. Wraps the same `sendToRemoteWorkoutSession` path as speech
-    /// and telemetry, and signals failure into `markMirroringFailed` so the
-    /// confidence signal degrades on real link issues.
-    func sendMirrorPayload(_ payload: [String: String], completion: ((Bool) -> Void)? = nil) {
-        guard isMirroringReady, let workoutSession = session else {
-            completion?(false)
-            return
-        }
-        guard let data = try? JSONEncoder().encode(payload) else {
-            completion?(false)
-            return
-        }
-        workoutSession.sendToRemoteWorkoutSession(data: data) { [weak self] success, error in
-            if let error = error {
-                print("[VoiceLink] send error: \(error)")
-                self?.markMirroringFailed()
-                completion?(false)
-            } else {
-                completion?(success)
-            }
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
     }
 }
 
@@ -2106,25 +2052,19 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 if now - ts > 10 { continue }
             }
 
+            // Speech itself flows watch→phone via WCSession (plan §1).
+            // But the phone→watch ACK comes back through the HK mirror
+            // channel: real-world telemetry showed WCSession sendMessage
+            // hitting WCErrorCodeDeliveryFailed on phone→watch even
+            // mid-mirrored-workout. The HK mirror channel is reliable
+            // bidirectionally for the duration of the workout, so we use
+            // it for the small ack hop and let VoiceAlertTransport
+            // dispatch via the same hook either path would have used.
             switch type {
-            case "speechDone":
+            case "alertAck":
                 guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
                 DispatchQueue.main.async {
-                    VoiceNavigator.shared.handleSpeechAck(id: id)
-                    // Speech-ack also extends the predictive arm cool-down so
-                    // back-to-back alerts (split + turn, off-route + missed-
-                    // turn) share a single AVAudioSession activation.
-                    VoiceLinkController.shared.notePhoneSpeechAck()
-                }
-            case "linkPingAck":
-                guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
-                DispatchQueue.main.async {
-                    VoiceLinkController.shared.handleLinkPingAck(id: id)
-                }
-            case "linkArmAck":
-                let ts = payload["ts"].flatMap(Double.init) ?? 0
-                DispatchQueue.main.async {
-                    VoiceLinkController.shared.handleLinkArmAck(ts: ts)
+                    ConnectivityManager.shared.onAlertAckReceived?(id)
                 }
             default:
                 break

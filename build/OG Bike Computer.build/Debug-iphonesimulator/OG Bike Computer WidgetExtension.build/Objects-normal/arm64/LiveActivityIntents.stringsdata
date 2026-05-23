@@ -1,0 +1,80 @@
+{
+  "source": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Pause or Resume Ride",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 62
+        }
+      },
+      {
+        "comment": "",
+        "key": "Toggles pause/resume on the current ride.",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 63
+        }
+      },
+      {
+        "comment": "",
+        "key": "Hold Ride",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 83
+        }
+      },
+      {
+        "comment": "",
+        "key": "Puts the current ride on hold to continue later.",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 84
+        }
+      },
+      {
+        "comment": "",
+        "key": "Ride on hold. Resume it later from the app or ride list.",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 91
+        }
+      },
+      {
+        "comment": "",
+        "key": "End Ride",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 98
+        }
+      },
+      {
+        "comment": "",
+        "key": "Ends the current ride and saves it.",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 99
+        }
+      },
+      {
+        "comment": "",
+        "key": "Ride was under 1 minute and has been discarded.",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 113
+        }
+      },
+      {
+        "comment": "",
+        "key": "Ride ended and saved.",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 116
+        }
+      }
+    ]
+  },
+  "version": 1
+}
