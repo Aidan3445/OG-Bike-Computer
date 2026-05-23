@@ -1,0 +1,51 @@
+{
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/Waypoint.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/Waypoint.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/Waypoint.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/Waypoint.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/Waypoint.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/Waypoint.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/WorkoutTabOrder.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/WorkoutTabOrder.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/WorkoutTabOrder.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/WorkoutTabOrder.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/WorkoutTabOrder.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/WorkoutTabOrder.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/ConnectivityManager.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/ConnectivityManager.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/ConnectivityManager.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/ConnectivityManager.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/ConnectivityManager.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/ConnectivityManager.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/GPXExporter.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/GPXExporter.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/GPXExporter.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/GPXExporter.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/GPXExporter.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/GPXExporter.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/RouteElevationSimplifier.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteElevationSimplifier.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteElevationSimplifier.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteElevationSimplifier.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteElevationSimplifier.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteElevationSimplifier.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/RouteProcessor.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteProcessor.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteProcessor.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteProcessor.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteProcessor.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/RouteProcessor.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/TrackEncoder.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/TrackEncoder.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/TrackEncoder.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/TrackEncoder.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/TrackEncoder.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer Watch App.build/Objects-normal/x86_64/TrackEncoder.swiftdeps"
+  }
+}

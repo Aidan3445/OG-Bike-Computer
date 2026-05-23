@@ -30,6 +30,7 @@ struct ContentView: View {
     @State private var serviceRoutePickerService: IntegrationServiceID?
 
     @StateObject private var rideSession = RideSessionManager.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = 0
     @State private var navigationPath = NavigationPath()
@@ -190,6 +191,10 @@ struct ContentView: View {
                 hasSeenSettingsRec = true
             }
         }
+        .onAppear { consumePendingNavigation() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { consumePendingNavigation() }
+        }
         .fullScreenCover(isPresented: $showRideControlFullScreen) {
             NavigationStack {
                 RideControlView(metricConfig: metricConfig, userSettings: userSettings, routeStore: routeStore)
@@ -201,6 +206,20 @@ struct ContentView: View {
                         }
                     }
             }
+        }
+    }
+
+    /// If a LiveActivityIntent requested a tab switch, honor it once.
+    private func consumePendingNavigation() {
+        let defaults = UserDefaults(suiteName: "group.com.aidan3445.computa")
+        guard let dest = defaults?.string(forKey: "pendingAppNavigation"), !dest.isEmpty else { return }
+        defaults?.removeObject(forKey: "pendingAppNavigation")
+        switch dest {
+        case "rides":
+            showRideControlFullScreen = false
+            selectedTab = 1
+        default:
+            break
         }
     }
 

@@ -1,0 +1,30 @@
+{
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ActivityTypeEnum.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityTypeEnum.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityTypeEnum.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityTypeEnum.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityTypeEnum.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityTypeEnum.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/LiveActivityIntents.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/LiveActivityIntents.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/LiveActivityIntents.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/LiveActivityIntents.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/LiveActivityIntents.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/ActivityType.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityType.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityType.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityType.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityType.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ActivityType.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/AlertContext.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertContext.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertContext.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertContext.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertContext.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertContext.swiftdeps"
+  }
+}

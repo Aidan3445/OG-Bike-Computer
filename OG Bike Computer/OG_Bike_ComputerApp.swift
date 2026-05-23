@@ -30,21 +30,21 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         ConnectivityManager.shared.activate()
+        // Install the WCSession→PhoneSpeechPlayer bridge for voice alerts.
+        // Must be done after activate() so the callback is wired before
+        // the first message can arrive.
+        PhoneAlertReceiver.shared.install()
         locationManager.requestWhenInUseAuthorization()
 
         let warmup = MKMapView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
         _ = warmup.region
 
-        // Configure audio session category ONCE at launch.
-        // This registers us as a ducking session before any workout starts.
-        // If we wait until the first speech arrives, the category change itself
-        // causes a full interruption to the music app instead of a duck.
-        let audioSession = AVAudioSession.sharedInstance()
-        do {
-            try audioSession.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .allowBluetoothA2DP])
-        } catch {
-            print("[Audio] session config error: \(error)")
-        }
+        // Configure audio session category ONCE at launch via
+        // PhoneSpeechPlayer (single source of truth). This registers us as a
+        // ducking session before any workout starts — if we wait until the
+        // first speech arrives, the category change itself causes a full
+        // interruption to the music app instead of a duck.
+        PhoneSpeechPlayer.shared.configureAudioSessionIfNeeded()
 
         let typesToShare: Set<HKSampleType> = [HKQuantityType.workoutType()]
         let typesToRead: Set<HKObjectType> = [
@@ -101,25 +101,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         lastPhoneAlertMode = newMode
         print("[AppDelegate] Phone alert mode changed: \(oldMode) → \(newMode)")
 
-        // Stop whatever was running
-        if oldMode == .liveActivity {
-            #if canImport(ActivityKit)
-            LiveActivityManager.shared.endActivity()
-            #endif
-        } else if oldMode == .turnNotifications {
+        // Live Activity is ALWAYS running for the duration of a ride (to
+        // satisfy the HK mirroring grace window — plan §2.7) so we no
+        // longer start/stop it on mode change. Telemetry updates continue
+        // regardless; rich vs minimal slot config is only used at start.
+        if oldMode == .turnNotifications {
             TurnNotificationManager.shared.clearAll()
         }
-
-        // Start the new mode
-        if newMode == .liveActivity {
-            #if canImport(ActivityKit)
-            let phonePrefs = loadPhoneAlertPreferences()
-            let unitPrefs = loadUnitPreferences()
-            let isImperial = unitPrefs.distance == .miles
-            let slots = phonePrefs.liveActivitySlots.map(\.metricType.rawValue)
-            LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial, statSlots: slots)
-            #endif
-        } else if newMode == .turnNotifications {
+        if newMode == .turnNotifications {
             TurnNotificationManager.shared.requestPermission()
         }
     }
@@ -184,87 +173,19 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                 continue
             }
 
-            // Discard stale messages. Tighter threshold for "speech" because
-            // the watch's queue has its own timeout that falls back to local
-            // playback — playing here on top of that would double-speak.
-            // When the watch's predictive arm is currently active (we know
-            // because PhoneSpeechPlayer is holding the audio session), allow
-            // a slightly looser window since the watch genuinely intended
-            // this alert for the phone and dropping it would force a
-            // double-speak via the watch's local fallback.
+            // Voice alerts no longer flow through HK mirroring — they're
+            // on WCSession now via PhoneAlertReceiver (plan §1, §2.4). The
+            // HK channel is reserved for telemetry/ping only. Stale-drop
+            // threshold therefore uses the looser 10s for everything.
             if let tsString = payload["ts"], let ts = Double(tsString) {
                 let age = now - ts
-                let staleLimit: TimeInterval
-                if type == "speech" {
-                    staleLimit = PhoneSpeechPlayer.shared.isAudioSessionArmedRecently ? 6 : 3
-                } else {
-                    staleLimit = 10
-                }
-                if age > staleLimit {
+                if age > 10 {
                     mirrorLogger.info("[Mirroring] Discarding stale \(type) message (\(String(format: "%.1f", age))s old)")
                     continue
                 }
             }
 
             switch type {
-            case "speech":
-                guard let text = payload["text"] else { continue }
-                let alertID = (payload["id"]).flatMap(UUID.init(uuidString:))
-                mirrorLogger.info("[Mirroring] Speaking: \(text)")
-                DispatchQueue.main.async { [weak workoutSession] in
-                    if let alertID {
-                        PhoneSpeechPlayer.shared.speak(text, id: alertID) { doneID in
-                            // Real-completion ack back to watch so its queue
-                            // advances when speech actually ends. Outer closure
-                            // captured `workoutSession` weakly; reuse that here.
-                            let ack: [String: String] = [
-                                "type": "speechDone",
-                                "id": doneID.uuidString,
-                                "ts": String(Date().timeIntervalSince1970)
-                            ]
-                            guard let data = try? JSONEncoder().encode(ack),
-                                  let session = workoutSession else { return }
-                            session.sendToRemoteWorkoutSession(data: data) { success, error in
-                                if !success {
-                                    if let error {
-                                        mirrorLogger.error("[Mirroring] speechDone ack send error: \(error.localizedDescription) — retrying")
-                                    }
-                                    // One-shot retry — the watch's timeout
-                                    // is short and a lost ack triggers a
-                                    // false "phone failed" fallback. 200ms
-                                    // is well inside the retry budget.
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak session] in
-                                        guard let session else { return }
-                                        session.sendToRemoteWorkoutSession(data: data) { _, retryError in
-                                            if let retryError {
-                                                mirrorLogger.error("[Mirroring] speechDone ack retry failed: \(retryError.localizedDescription)")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Legacy path — no id means no ack expected.
-                        PhoneSpeechPlayer.shared.speak(text)
-                    }
-                }
-
-                // Post turn notification if enabled
-                let phonePrefs = self.loadPhoneAlertPreferences()
-                if phonePrefs.mode == .turnNotifications, let cat = payload["cat"] {
-                    DispatchQueue.main.async {
-                        switch cat {
-                        case "offRoute":
-                            TurnNotificationManager.shared.postOffRoute(message: text)
-                        case "atTurn", "turnApproach", "backOnRoute":
-                            TurnNotificationManager.shared.post(text: text)
-                        default:
-                            break // lap, halfway, arrival — not navigation turn alerts
-                        }
-                    }
-                }
-
             case "telemetry":
                 PhoneTelemetryStore.shared.update(from: payload)
                 #if canImport(ActivityKit)
@@ -282,42 +203,6 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                 // Success/failure of the send on Watch side is what matters.
                 break
 
-            case "linkPing":
-                // Heartbeat from VoiceLinkController on the watch — round-
-                // trip so the watch can compute confidence from real ack
-                // latency rather than send-success alone.
-                guard let idStr = payload["id"] else { break }
-                let ack: [String: String] = [
-                    "type": "linkPingAck",
-                    "id": idStr,
-                    "ts": String(Date().timeIntervalSince1970)
-                ]
-                if let data = try? JSONEncoder().encode(ack) {
-                    workoutSession.sendToRemoteWorkoutSession(data: data) { _, _ in }
-                }
-
-            case "linkArm":
-                // Watch is predicting an imminent alert — pre-activate the
-                // AVAudioSession so the first utterance doesn't pay the
-                // route-activation handshake.
-                let ttl = (payload["ttl"]).flatMap(Double.init) ?? 20.0
-                DispatchQueue.main.async {
-                    PhoneSpeechPlayer.shared.prewarmAudioSession(ttl: ttl)
-                }
-                let ack: [String: String] = [
-                    "type": "linkArmAck",
-                    "ts": String(Date().timeIntervalSince1970)
-                ]
-                if let data = try? JSONEncoder().encode(ack) {
-                    workoutSession.sendToRemoteWorkoutSession(data: data) { _, _ in }
-                }
-
-            case "linkDisarm":
-                // Watch sees no imminent alert + cool-down elapsed — release.
-                DispatchQueue.main.async {
-                    PhoneSpeechPlayer.shared.releaseAudioSession()
-                }
-
             default:
                 break
             }
@@ -331,15 +216,26 @@ extension AppDelegate: HKWorkoutSessionDelegate {
         lastPhoneAlertMode = phonePrefs.mode
         print("[AppDelegate] startPhoneAlerts called: mode=\(phonePrefs.mode)")
 
+        // ALWAYS start a Live Activity when the mirrored workout begins
+        // (plan §2.7). The 10s HK-mirroring grace window requires the
+        // companion iPhone app to either start a Live Activity or risk
+        // session teardown. We start unconditionally; the user pref only
+        // controls whether the activity gets rich live-data updates or
+        // remains a minimal "ride in progress" pill.
+        //
+        // Rich updates path: telemetry handler calls LiveActivityManager
+        // .update() — that already happens regardless of pref.
         #if canImport(ActivityKit)
-        if phonePrefs.mode == .liveActivity {
-            let unitPrefs = loadUnitPreferences()
-            let isImperial = unitPrefs.distance == .miles
-            let slots = phonePrefs.liveActivitySlots.map(\.metricType.rawValue)
-            print("[AppDelegate] Starting Live Activity (imperial=\(isImperial))")
-            // Route name not available here — telemetry will provide context
-            LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial, statSlots: slots)
-        }
+        let unitPrefs = loadUnitPreferences()
+        let isImperial = unitPrefs.distance == .miles
+        // Use the user's configured slots when rich mode is on; otherwise
+        // a sensible default so the lock-screen UI still has something
+        // meaningful to show.
+        let slots = (phonePrefs.mode == .liveActivity)
+            ? phonePrefs.liveActivitySlots.map(\.metricType.rawValue)
+            : LiveActivitySlot.defaultSlots.map(\.metricType.rawValue)
+        print("[AppDelegate] Starting Live Activity (imperial=\(isImperial), mode=\(phonePrefs.mode))")
+        LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial, statSlots: slots)
         #else
         print("[AppDelegate] ActivityKit not available on this build")
         #endif

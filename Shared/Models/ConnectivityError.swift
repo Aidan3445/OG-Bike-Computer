@@ -11,7 +11,9 @@ enum ConnectivityError: LocalizedError {
     case notSupported
     case notPaired
     case watchAppNotInstalled
+    case companionAppNotInstalled
     case notReachable
+    case notActivated
     case encodingFailed
     case watchOperationFailed(String)
 
@@ -23,8 +25,12 @@ enum ConnectivityError: LocalizedError {
             return "No Apple Watch is paired with this iPhone."
         case .watchAppNotInstalled:
             return "The OG Bike Computer app is not installed on your Apple Watch."
+        case .companionAppNotInstalled:
+            return "The companion iPhone app is not installed."
         case .notReachable:
-            return "Apple Watch is not reachable right now."
+            return "Companion device is not reachable right now."
+        case .notActivated:
+            return "WCSession has not been activated yet."
         case .encodingFailed:
             return "Failed to encode route data for transmission."
         case .watchOperationFailed(let reason):

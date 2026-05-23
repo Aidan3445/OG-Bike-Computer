@@ -1,0 +1,23 @@
+{
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/AlertPayload.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertPayload.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertPayload.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertPayload.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertPayload.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/AlertPayload.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/ConnectivityError.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ConnectivityError.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ConnectivityError.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ConnectivityError.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ConnectivityError.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/ConnectivityError.swiftdeps"
+  },
+  "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/IntegrationTypes.swift" : {
+    "const-values" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/IntegrationTypes.swiftconstvalues",
+    "dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/IntegrationTypes.d",
+    "diagnostics" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/IntegrationTypes.dia",
+    "object" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/IntegrationTypes.o",
+    "swift-dependencies" : "/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG Bike Computer.build/Debug-iphonesimulator/OG Bike Computer WidgetExtension.build/Objects-normal/x86_64/IntegrationTypes.swiftdeps"
+  }
+}

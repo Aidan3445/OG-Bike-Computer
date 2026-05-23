@@ -34,6 +34,12 @@ private enum RideCommandBridge {
         defaults?.set(command, forKey: "pendingRideCommand")
     }
 
+    /// Request the host app navigate to a specific screen on next foreground.
+    /// Consumed by ContentView when the scene becomes active.
+    static func requestNavigation(_ destination: String) {
+        defaults?.set(destination, forKey: "pendingAppNavigation")
+    }
+
     /// Write optimistic state so the widget extension's next render reflects
     /// the action immediately (before the main app processes the command).
     static func writeOptimisticIsPaused(_ isPaused: Bool) {
@@ -91,12 +97,16 @@ struct HoldRideIntent: LiveActivityIntent {
 struct EndRideIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "End Ride"
     static var description: IntentDescription = "Ends the current ride and saves it."
-    
+
     // Hide from shortcuts/automations
     static var isDiscoverable: Bool = false
 
+    /// Foreground the host app so the user lands on the Rides list after ending.
+    static var openAppWhenRun: Bool = true
+
     func perform() async throws -> some IntentResult {
         let movingTime = await RideCommandBridge.readMovingTime()
+        await RideCommandBridge.requestNavigation("rides")
         if movingTime < 60 {
             // Short ride — tell the app to discard both HK workout and app recording
             await RideCommandBridge.send("discard")

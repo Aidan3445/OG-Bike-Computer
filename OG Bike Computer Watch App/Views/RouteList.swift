@@ -89,7 +89,10 @@ struct RouteList: View {
                         }
                         #endif
 
-                        Text(formattedStorageSize(store.storageSize))
+                        VStack(spacing: 2) {
+                            Text(formattedStorageSize(store.storageSize))
+                            Text(appVersionString)
+                        }
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .listRowBackground(Color.clear)
@@ -105,6 +108,13 @@ struct RouteList: View {
                 }
             }
         }
+    }
+
+    private var appVersionString: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "v\(version) (\(build))"
     }
 
     @ViewBuilder

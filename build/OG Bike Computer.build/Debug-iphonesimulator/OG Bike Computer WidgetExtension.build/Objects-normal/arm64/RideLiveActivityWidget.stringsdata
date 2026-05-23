@@ -1,0 +1,176 @@
+{
+  "source": "/Users/aidan/Documents/CS/OG-Bike-Computer/OG Bike Computer Widget/RideLiveActivityWidget.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 78
+        }
+      },
+      {
+        "comment": "",
+        "key": "Off Route",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 89
+        }
+      },
+      {
+        "comment": "",
+        "key": "+%@",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 93
+        }
+      },
+      {
+        "comment": "",
+        "key": "in %@",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 106
+        }
+      },
+      {
+        "comment": "",
+        "key": "Ride Complete",
+        "location": {
+          "startingColumn": 58,
+          "startingLine": 149
+        }
+      },
+      {
+        "comment": "",
+        "key": "No Active Ride",
+        "location": {
+          "startingColumn": 76,
+          "startingLine": 149
+        }
+      },
+      {
+        "comment": "",
+        "key": "Done",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 170
+        }
+      },
+      {
+        "comment": "",
+        "key": "Ride Complete",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 258
+        }
+      },
+      {
+        "comment": "",
+        "key": "No Active Ride",
+        "location": {
+          "startingColumn": 54,
+          "startingLine": 258
+        }
+      },
+      {
+        "comment": "",
+        "key": "Tap to open ride details",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 262
+        }
+      },
+      {
+        "comment": "",
+        "key": "Start a ride from the app or watch",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 263
+        }
+      },
+      {
+        "comment": "",
+        "key": "%@ to finish",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 301
+        }
+      },
+      {
+        "comment": "",
+        "key": "Auto Pause",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 308
+        }
+      },
+      {
+        "comment": "",
+        "key": "Riding",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 344
+        }
+      },
+      {
+        "comment": "",
+        "key": "LIVE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 364
+        }
+      },
+      {
+        "comment": "",
+        "key": "Off Route",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 412
+        }
+      },
+      {
+        "comment": "",
+        "key": "+%@ from route",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 416
+        }
+      },
+      {
+        "comment": "",
+        "key": "· %@",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 444
+        }
+      },
+      {
+        "comment": "",
+        "key": "Resume",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 479
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pause",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 479
+        }
+      },
+      {
+        "comment": "",
+        "key": "End",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 488
+        }
+      }
+    ]
+  },
+  "version": 1
+}

@@ -1,0 +1,331 @@
+[
+  {
+    "typeName": "OG_Bike_Computer_WidgetExtension.PauseResumeRideIntent",
+    "mangledTypeName": "32OG_Bike_Computer_WidgetExtension21PauseResumeRideIntentV",
+    "kind": "struct",
+    "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+    "line": 61,
+    "conformances": [
+      "AppIntents.LiveActivityIntent",
+      "AppIntents.SystemIntent",
+      "AppIntents.AppIntent",
+      "AppIntents.PersistentlyIdentifiable",
+      "AppIntents._SupportsAppDependencies",
+      "Swift.Sendable",
+      "Swift.SendableMetatype",
+      "Swift.BitwiseCopyable"
+    ],
+    "allConformances": [
+      {
+        "protocolName": "AppIntents.LiveActivityIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.SystemIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.AppIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.PersistentlyIdentifiable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents._SupportsAppDependencies",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.Sendable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.SendableMetatype",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.BitwiseCopyable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      }
+    ],
+    "associatedTypeAliases": [
+      {
+        "typeAliasName": "PerformResult",
+        "substitutedTypeName": "some AppIntents.IntentResult",
+        "substitutedMangledTypeName": "32OG_Bike_Computer_WidgetExtension21PauseResumeRideIntentV7performQryYaKFQOy_Qo_",
+        "opaqueTypeProtocolRequirements": [
+          "AppIntents.IntentResult"
+        ],
+        "opaqueTypeSameTypeRequirements": []
+      },
+      {
+        "typeAliasName": "SummaryContent",
+        "substitutedTypeName": "some AppIntents.ParameterSummary",
+        "substitutedMangledTypeName": "10AppIntents0A6IntentPAAE16parameterSummaryQrvpZQOy32OG_Bike_Computer_WidgetExtension015PauseResumeRideC0V_Qo_",
+        "opaqueTypeProtocolRequirements": [
+          "AppIntents.ParameterSummary"
+        ],
+        "opaqueTypeSameTypeRequirements": []
+      }
+    ],
+    "properties": [
+      {
+        "label": "title",
+        "type": "Foundation.LocalizedStringResource",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 62,
+        "valueKind": "RawLiteral",
+        "value": "Pause or Resume Ride"
+      },
+      {
+        "label": "description",
+        "type": "AppIntents.IntentDescription",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 63,
+        "valueKind": "RawLiteral",
+        "value": "Toggles pause/resume on the current ride."
+      },
+      {
+        "label": "isDiscoverable",
+        "type": "Swift.Bool",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 66,
+        "valueKind": "RawLiteral",
+        "value": "false"
+      }
+    ]
+  },
+  {
+    "typeName": "OG_Bike_Computer_WidgetExtension.HoldRideIntent",
+    "mangledTypeName": "32OG_Bike_Computer_WidgetExtension14HoldRideIntentV",
+    "kind": "struct",
+    "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+    "line": 82,
+    "conformances": [
+      "AppIntents.LiveActivityIntent",
+      "AppIntents.SystemIntent",
+      "AppIntents.AppIntent",
+      "AppIntents.PersistentlyIdentifiable",
+      "AppIntents._SupportsAppDependencies",
+      "Swift.Sendable",
+      "Swift.SendableMetatype",
+      "Swift.BitwiseCopyable"
+    ],
+    "allConformances": [
+      {
+        "protocolName": "AppIntents.LiveActivityIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.SystemIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.AppIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.PersistentlyIdentifiable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents._SupportsAppDependencies",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.Sendable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.SendableMetatype",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.BitwiseCopyable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      }
+    ],
+    "associatedTypeAliases": [
+      {
+        "typeAliasName": "PerformResult",
+        "substitutedTypeName": "some AppIntents.IntentResult",
+        "substitutedMangledTypeName": "32OG_Bike_Computer_WidgetExtension14HoldRideIntentV7performQryYaKFQOy_Qo_",
+        "opaqueTypeProtocolRequirements": [
+          "AppIntents.IntentResult"
+        ],
+        "opaqueTypeSameTypeRequirements": []
+      },
+      {
+        "typeAliasName": "SummaryContent",
+        "substitutedTypeName": "some AppIntents.ParameterSummary",
+        "substitutedMangledTypeName": "10AppIntents0A6IntentPAAE16parameterSummaryQrvpZQOy32OG_Bike_Computer_WidgetExtension08HoldRideC0V_Qo_",
+        "opaqueTypeProtocolRequirements": [
+          "AppIntents.ParameterSummary"
+        ],
+        "opaqueTypeSameTypeRequirements": []
+      }
+    ],
+    "properties": [
+      {
+        "label": "title",
+        "type": "Foundation.LocalizedStringResource",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 83,
+        "valueKind": "RawLiteral",
+        "value": "Hold Ride"
+      },
+      {
+        "label": "description",
+        "type": "AppIntents.IntentDescription",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 84,
+        "valueKind": "RawLiteral",
+        "value": "Puts the current ride on hold to continue later."
+      },
+      {
+        "label": "isDiscoverable",
+        "type": "Swift.Bool",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 87,
+        "valueKind": "RawLiteral",
+        "value": "false"
+      }
+    ]
+  },
+  {
+    "typeName": "OG_Bike_Computer_WidgetExtension.EndRideIntent",
+    "mangledTypeName": "32OG_Bike_Computer_WidgetExtension13EndRideIntentV",
+    "kind": "struct",
+    "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+    "line": 97,
+    "conformances": [
+      "AppIntents.LiveActivityIntent",
+      "AppIntents.SystemIntent",
+      "AppIntents.AppIntent",
+      "AppIntents.PersistentlyIdentifiable",
+      "AppIntents._SupportsAppDependencies",
+      "Swift.Sendable",
+      "Swift.SendableMetatype",
+      "Swift.BitwiseCopyable"
+    ],
+    "allConformances": [
+      {
+        "protocolName": "AppIntents.LiveActivityIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.SystemIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.AppIntent",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents.PersistentlyIdentifiable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "AppIntents._SupportsAppDependencies",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.Sendable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.SendableMetatype",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      },
+      {
+        "protocolName": "Swift.BitwiseCopyable",
+        "conformanceDefiningModule": "OG_Bike_Computer_WidgetExtension"
+      }
+    ],
+    "associatedTypeAliases": [
+      {
+        "typeAliasName": "PerformResult",
+        "substitutedTypeName": "some AppIntents.IntentResult",
+        "substitutedMangledTypeName": "32OG_Bike_Computer_WidgetExtension13EndRideIntentV7performQryYaKFQOy_Qo_",
+        "opaqueTypeProtocolRequirements": [
+          "AppIntents.IntentResult"
+        ],
+        "opaqueTypeSameTypeRequirements": []
+      },
+      {
+        "typeAliasName": "SummaryContent",
+        "substitutedTypeName": "some AppIntents.ParameterSummary",
+        "substitutedMangledTypeName": "10AppIntents0A6IntentPAAE16parameterSummaryQrvpZQOy32OG_Bike_Computer_WidgetExtension07EndRideC0V_Qo_",
+        "opaqueTypeProtocolRequirements": [
+          "AppIntents.ParameterSummary"
+        ],
+        "opaqueTypeSameTypeRequirements": []
+      }
+    ],
+    "properties": [
+      {
+        "label": "title",
+        "type": "Foundation.LocalizedStringResource",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 98,
+        "valueKind": "RawLiteral",
+        "value": "End Ride"
+      },
+      {
+        "label": "description",
+        "type": "AppIntents.IntentDescription",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 99,
+        "valueKind": "RawLiteral",
+        "value": "Ends the current ride and saves it."
+      },
+      {
+        "label": "isDiscoverable",
+        "type": "Swift.Bool",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 102,
+        "valueKind": "RawLiteral",
+        "value": "false"
+      },
+      {
+        "label": "openAppWhenRun",
+        "type": "Swift.Bool",
+        "mangledTypeName": "n/a - deprecated",
+        "isStatic": "true",
+        "isComputed": "false",
+        "file": "/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift",
+        "line": 105,
+        "valueKind": "RawLiteral",
+        "value": "true"
+      }
+    ]
+  }
+]

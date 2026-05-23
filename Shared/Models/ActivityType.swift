@@ -6,9 +6,7 @@
 //
 
 import Foundation
-#if canImport(HealthKit)
 import HealthKit
-#endif
 
 enum ActivityType: String, CaseIterable, Codable, Identifiable {
     case cycling

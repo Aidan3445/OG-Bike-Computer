@@ -25,6 +25,18 @@ final class ConnectivityManager: NSObject, ObservableObject {
     var onMetricConfigReceived: ((Data) -> Void)?
     var onUserSettingsReceived: ((Data) -> Void)?
     #if os(iOS)
+    /// Phone-side hook: a voice alert just arrived from the watch. The
+    /// receiver decides what to do with it (dedupe, expire-check, hand to
+    /// speech synthesizer). See PhoneAlertReceiver.
+    var onVoiceAlertReceived: ((AlertPayload) -> Void)?
+    #endif
+    #if os(watchOS)
+    /// Watch-side hook: phone confirmed AVSpeechSynthesizer.didStart for an
+    /// alert id. The transport uses this to cancel the matching fallback
+    /// timer and let VoiceNavigator advance its queue.
+    var onAlertAckReceived: ((UUID) -> Void)?
+    #endif
+    #if os(iOS)
     var onRideReceived: ((RideSummary) -> Void)?
     /// Ride IDs currently being transferred from the watch (file in flight).
     @Published var pendingTransferRideIDs: Set<UUID> = []
@@ -284,6 +296,30 @@ extension ConnectivityManager {
         }
     }
 
+    // MARK: - Voice Alert Ack (iOS → Watch)
+
+    /// Phone-side: tell the watch we've started speaking utterance `id`.
+    /// Fired from PhoneSpeechPlayer's didStart callback. The watch uses
+    /// this ack to cancel its FallbackTimer for the same id. Best-effort —
+    /// if the ack itself is lost, the watch's fallback will fire and
+    /// double-speak; that's preferable to silence.
+    func sendAlertAck(id: UUID) {
+        guard WCSession.default.activationState == .activated else { return }
+        guard WCSession.default.isReachable else {
+            // Watch unreachable from phone — rare during a mirrored workout.
+            // Fall back to userInfo so the watch sees it eventually for
+            // telemetry, but it won't help cancel the fallback (already fired
+            // by then).
+            WCSession.default.transferUserInfo(AlertAck(id: id).toDict())
+            return
+        }
+        WCSession.default.sendMessage(
+            AlertAck(id: id).toDict(),
+            replyHandler: nil,
+            errorHandler: { _ in /* best-effort, watch fallback will speak */ }
+        )
+    }
+
     // MARK: - Ride Commands (iOS → Watch)
     /// Send a ride control command to the watch (startRide, changeRoute, toggleVoice).
     func sendRideCommand(_ message: [String: Any]) {
@@ -439,6 +475,52 @@ extension ConnectivityManager {
 
 #if os(watchOS)
 extension ConnectivityManager {
+
+    // MARK: - Voice Alerts (Watch → Phone)
+    //
+    // Two transports per plan §3.4:
+    //  • .immediate → sendMessage. Requires isReachable; failure is racey
+    //    by design (watch caller arms a FallbackTimer alongside the send).
+    //  • .soon → transferUserInfo. Guaranteed delivery, no reachability
+    //    requirement, may arrive seconds later. Receiver enforces expiry.
+
+    /// Send an alert that needs sub-second delivery. Returns immediately;
+    /// failure modes:
+    ///   • `isReachable == false` or `isCompanionAppInstalled == false`
+    ///     → completion(false, .notReachable). Caller falls back to local.
+    ///   • sendMessage errored synchronously
+    ///     → completion(false, error). Caller falls back to local.
+    ///   • Phone replied to the message
+    ///     → completion(true, nil). (Note: this is NOT the speech ack —
+    ///     the watch must still wait for `onAlertAckReceived` to be sure
+    ///     the phone actually started speaking.)
+    func sendImmediateAlert(_ payload: AlertPayload, completion: @escaping (Bool, Error?) -> Void) {
+        guard WCSession.default.activationState == .activated else {
+            completion(false, ConnectivityError.notActivated)
+            return
+        }
+        guard WCSession.default.isCompanionAppInstalled else {
+            completion(false, ConnectivityError.companionAppNotInstalled)
+            return
+        }
+        guard WCSession.default.isReachable else {
+            completion(false, ConnectivityError.notReachable)
+            return
+        }
+        WCSession.default.sendMessage(
+            payload.toDict(),
+            replyHandler: { _ in completion(true, nil) },
+            errorHandler: { error in completion(false, error) }
+        )
+    }
+
+    /// Send an alert that can tolerate queued delivery (split announcements,
+    /// stat readouts). Guaranteed eventual delivery; receiver drops on
+    /// expiresAt.
+    func sendQueuedAlert(_ payload: AlertPayload) {
+        guard WCSession.default.activationState == .activated else { return }
+        WCSession.default.transferUserInfo(payload.toDict())
+    }
 
     /// Notify phone that a held ride was discarded on the watch so it can remove its copy.
     func sendDiscardRide(rideID: UUID) {
@@ -719,6 +801,18 @@ extension ConnectivityManager: WCSessionDelegate {
             self.lastEvent = "got userInfo: \(userInfo.keys)"
         }
 
+        // Voice alert via the queued path. Phone may receive these well
+        // after they were sent (transferUserInfo is "guaranteed eventually")
+        // so the receiver must check expiresAt and drop stale ones.
+        #if os(iOS)
+        if let payload = AlertPayload.fromDict(userInfo) {
+            DispatchQueue.main.async {
+                self.onVoiceAlertReceived?(payload)
+            }
+            return
+        }
+        #endif
+
         if let type = userInfo["type"] as? String,
            type == "metricConfig",
            let base64 = userInfo["data"] as? String,
@@ -846,6 +940,32 @@ extension ConnectivityManager: WCSessionDelegate {
             replyHandler(["awake": true])
             return
         }
+
+        // Voice alert (watch → phone). The replyHandler returns
+        // immediately so the watch knows the message was received; the
+        // separate `didStart` ack (sent via sendMessage from iOS) is what
+        // actually cancels the watch's fallback timer.
+        #if os(iOS)
+        if let payload = AlertPayload.fromDict(message) {
+            DispatchQueue.main.async {
+                self.onVoiceAlertReceived?(payload)
+            }
+            replyHandler(["received": true, "id": payload.id.uuidString])
+            return
+        }
+        #endif
+
+        // Voice alert ack (phone → watch). Phone fired didStart for a
+        // specific utterance id.
+        #if os(watchOS)
+        if let ack = AlertAck.fromDict(message) {
+            DispatchQueue.main.async {
+                self.onAlertAckReceived?(ack.id)
+            }
+            replyHandler(["received": true])
+            return
+        }
+        #endif
 
         // Handle metric config on both platforms
         if let type = message["type"] as? String,

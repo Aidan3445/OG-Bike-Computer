@@ -1,0 +1,69 @@
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Intents/WatchAppShortcuts.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Intents/WatchWorkoutIntents.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Services/BatteryManager.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Services/NavigationTracker.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Services/VoiceAlertQueue.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Services/VoiceAlertTransport.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Services/VoiceNavigator.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Services/WorkoutManager.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Simulator/RideSimulator.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Simulator/SimGPXLoader.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Simulator/SimulationView.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/ElevationProfileView.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/MidRideRouteList.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/MiniStat.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/OffRouteView.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/PreviewWorkout.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/RideSummaryView.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/RouteList.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/RouteMapView.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/StartRideView.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/Views/WorkoutView.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/ContentView.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/OG\ Bike\ Computer\ Watch\ App/OG_Bike_ComputerApp.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Entities/BikeEntity.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Entities/RouteEntity.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Entities/SettingsProfileEntity.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ActivityTypeEnum.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ChangeSettingIntent.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/LiveActivityIntents.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/ProfileIntents.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Intents/RideIntents.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/ActivityType.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/AlertContext.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/AlertPayload.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/ConnectivityError.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/IntegrationTypes.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/MapScreenConfig.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/MetricPageConfig.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/MetricType.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/NavigationAlertPreferences.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/PhoneAlertPreferences.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/ProcessedRoute.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/RideActivityAttributes.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/RidePreferences.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/RideSummary.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/Route.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/SettingsPreset.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/TrackPoint.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/UnitPreferences.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/Waypoint.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Models/WorkoutTabOrder.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/ConnectivityManager.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/GPXExporter.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/RouteElevationSimplifier.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/RouteProcessor.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/TrackEncoder.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Services/TransferLedger.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Stores/MetricConfigStore.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Stores/RideStore.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Stores/RouteStore.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Stores/UserSettingsStore.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Utils/DateSection.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Utils/Formatting.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Utils/MetricResolver.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Utils/MileMarkers.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Utils/PreferredVoice.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Utils/RoadNameExpander.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/Shared/Views/MetricRow.swift
+/Users/aidan/Documents/CS/OG-Bike-Computer/build/OG\ Bike\ Computer.build/Debug-iphonesimulator/OG\ Bike\ Computer\ Watch\ App.build/DerivedSources/GeneratedAssetSymbols.swift

@@ -56,22 +56,11 @@ class VoiceNavigator: NSObject, ObservableObject {
     private let alertQueue = VoiceAlertQueue()
     private var isProcessingAlert = false
 
-    // Identity of the alert currently being mirrored to the phone, if any.
-    // Set when we send a speech message; cleared on matching ack OR timeout
-    // fallback. Used to discard stale acks and to gate the timeout work.
+    // Identity of the alert currently in-flight on VoiceAlertTransport.
+    // Used to ignore late completions for an alert that's been superseded
+    // (e.g. ride reset cancelled all in-flight, but a stray completion
+    // races back to us afterward).
     private var inFlightAlertID: UUID?
-    private var inFlightTimeoutWork: DispatchWorkItem?
-    /// In-flight bookkeeping needed to retry on timeout (vs falling back
-    /// to local watch speech). Local fallback can play through the wrong
-    /// audio output when BT headphones are bound to the phone session.
-    private var inFlightText: String?
-    private var inFlightCategory: String?
-    private var inFlightIsCritical = false
-    private var inFlightRetriesLeft = 0
-    /// Retry budget for navigation-critical alerts (off-route, at-turn,
-    /// last-turn-complete). 3 attempts × (estimate + 1.5s) bounds the
-    /// worst-case stuck time before giving up and falling back to local.
-    private static let criticalRetryCount = 3
 
     // Recreated each ride to avoid AVSpeechSynthesizer silent-death bug
     private var synthesizer: AVSpeechSynthesizer
@@ -894,97 +883,107 @@ class VoiceNavigator: NSObject, ObservableObject {
         case .watchLocal:
             speakLocally(text)
 
-        case .phoneMirror(let wm):
-            // Critical (navigation-affecting) alerts retry until acked rather
-            // than falling back to local — local fallback can play on the
-            // watch speaker when BT headphones are bound to the phone session.
-            let isCritical = (priority == .immediateTurn || priority == .navEvent)
-            inFlightText = text
-            inFlightCategory = category
-            inFlightIsCritical = isCritical
-            inFlightRetriesLeft = isCritical ? Self.criticalRetryCount : 0
-            sendInFlightToPhone(wm: wm)
-        }
-    }
-
-    /// Send the currently-in-flight speech to the phone and arm the timeout.
-    /// Used both for initial send and for retries. Each call generates a
-    /// fresh UUID so a late ack from a previous send doesn't accidentally
-    /// satisfy the new attempt.
-    private func sendInFlightToPhone(wm: WorkoutManager) {
-        guard let text = inFlightText else { return }
-        let alertID = UUID()
-        inFlightAlertID = alertID
-        wm.sendSpeechToPhone(text, id: alertID, category: inFlightCategory) { [weak self] sent in
-            guard let self, !self.isStopped else { return }
-            guard self.inFlightAlertID == alertID else {
-                // A newer attempt or recovery replaced this one — drop the result.
-                return
+        case .phoneMirror:
+            // Build the wire payload and hand it to VoiceAlertTransport.
+            // The transport handles the race-and-fallback: phone if
+            // reachable AND acks didStart within 800ms, else local TTS.
+            let payload = AlertPayload(
+                kind: alertKind(for: category, priority: priority),
+                priority: alertTransportPriority(for: priority),
+                text: text,
+                ttl: 15
+            )
+            inFlightAlertID = payload.id
+            VoiceAlertTransport.shared.deliver(payload) { [weak self] outcome in
+                guard let self, !self.isStopped else { return }
+                // Stale completion (e.g. ride reset between deliver and
+                // outcome) — drop silently to avoid double-advance.
+                guard self.inFlightAlertID == payload.id else { return }
+                self.inFlightAlertID = nil
+                switch outcome {
+                case .phoneSpoke:
+                    // Phone is speaking — advance the watch queue
+                    // immediately. AVSpeechSynthesizer on the phone owns
+                    // ordering of any subsequent utterances we send while
+                    // it's still mid-stream.
+                    self.finishCurrentAlert()
+                case .localFallback(let fallbackText, _):
+                    // Phone path failed. Speak on watch; speechSynthesizer
+                    // didFinish will call finishCurrentAlert.
+                    self.speakLocally(fallbackText)
+                }
             }
-            if !sent {
-                // Bridge declined the send (no session / not mirroring ready).
-                // Fall back to local even for critical alerts — there's no
-                // phone to retry to.
-                self.clearInFlight()
-                self.speakLocally(text)
-                return
-            }
-            self.scheduleSpeechTimeout(text: text, alertID: alertID)
         }
     }
 
     private func clearInFlight() {
         inFlightAlertID = nil
-        inFlightTimeoutWork?.cancel()
-        inFlightTimeoutWork = nil
-        inFlightText = nil
-        inFlightCategory = nil
-        inFlightIsCritical = false
-        inFlightRetriesLeft = 0
+    }
+
+    /// Map a watch-internal AlertPriority + category string to the
+    /// AlertPayload's wire schema. The wire schema's `kind` is what the
+    /// phone uses for things like notification routing and telemetry; the
+    /// watch's priority enum is queue-arbitration state that doesn't
+    /// cross the link.
+    private func alertKind(for category: String?, priority: AlertPriority) -> AlertKind {
+        switch category {
+        case "atTurn":         return .turnImmediate
+        case "turnApproach":   return .turnApproach
+        case "offRoute":       return .offRoute
+        case "backOnRoute":    return .backOnRoute
+        case "arrival":        return .arrival
+        case "halfway":        return .halfway
+        case "lap":            return .split
+        case "autoPause", "autoResume": return .autoPause
+        case "waypoint":       return .waypoint
+        default:
+            // Fall back from priority when category is nil (e.g. "Last
+            // turn complete. 200m to finish." doesn't carry a category).
+            switch priority {
+            case .immediateTurn: return .turnImmediate
+            case .turnApproach:  return .turnApproach
+            case .navEvent:      return .lastTurn
+            case .autoPause:     return .autoPause
+            case .stat:          return .info
+            }
+        }
+    }
+
+    /// Map watch queue priority → transport priority.
+    /// Stat readouts go .soon (transferUserInfo) so they don't churn the
+    /// sendMessage queue during a split announcement. Everything else is
+    /// .immediate (sendMessage + 800ms race).
+    private func alertTransportPriority(for priority: AlertPriority) -> AlertTransportPriority {
+        switch priority {
+        case .immediateTurn, .navEvent, .turnApproach, .autoPause:
+            return .immediate
+        case .stat:
+            return .soon
+        }
     }
 
     /// Result of routing decision — either keep speech on the watch or send
-    /// it to the phone. The phone case carries the WorkoutManager so callers
-    /// don't have to re-check `workoutManager` after the decision.
+    /// it via the transport.
     private enum AudioRoute {
         case watchLocal
-        case phoneMirror(WorkoutManager)
+        case phoneMirror
     }
 
-    /// Decide where to play this alert. Order:
-    ///   1. User override pins it explicitly to watch or phone (with graceful
-    ///      fallback to local if phone is unavailable).
-    ///   2. Auto: if BT/headphones are connected to the watch, play locally
-    ///      so audio reaches the rider's headphones.
-    ///   3. Auto: phone if mirrored AND link confidence is non-zero. The
-    ///      confidence gate is what prevents the historical <5% success path
-    ///      — when the link is dark (no recent heartbeat), routing straight
-    ///      to the watch avoids a doomed phone send that would end in
-    ///      timeout + late local fallback (often missing the turn).
-    ///   4. Otherwise watch (speaker or whatever AVAudioSession picks).
+    /// Decide where to play this alert. Phone-vs-watch decision lives here;
+    /// the transport handles the "phone path actually worked or not"
+    /// question on top.
+    ///
+    /// Order:
+    ///   1. User override pins to .watch → always local.
+    ///   2. Auto + watch BT/headphones connected → local (audio goes to
+    ///      headphones rather than dropping to phone).
+    ///   3. Otherwise hand to transport (it will either get a didStart ack
+    ///      from the phone or fall back to local on timeout).
     private func resolveAudioRoute() -> AudioRoute {
-        let prefs = preferences
-        let override = prefs.audioOutput.source
-        let confidence = VoiceLinkController.shared.linkConfidence
-
+        let override = preferences.audioOutput.source
         if override == .watch { return .watchLocal }
-
-        if override == .phone {
-            // User pinned to phone — try whenever the channel is at least
-            // warm, but if it's completely dark we still fall back to watch
-            // rather than time out into silence.
-            if let wm = workoutManager, wm.isMirroringReady, confidence > .none {
-                return .phoneMirror(wm)
-            }
-            return .watchLocal
-        }
-
-        // .auto — follow priority headphones → phone (if confident) → watch
-        if isWatchUsingExternalAudioOutput() { return .watchLocal }
-        if let wm = workoutManager, wm.isMirroringReady, confidence > .none {
-            return .phoneMirror(wm)
-        }
-        return .watchLocal
+        if override == .auto, isWatchUsingExternalAudioOutput() { return .watchLocal }
+        return .phoneMirror
     }
 
     /// True when the watch's current audio route includes BT or wired
@@ -1001,57 +1000,6 @@ class VoiceNavigator: NSObject, ObservableObject {
                 return false
             }
         }
-    }
-
-    /// Called by WorkoutManager when the phone reports an utterance finished.
-    /// Drives queue advancement off real completion instead of an estimate.
-    func handleSpeechAck(id: UUID) {
-        guard inFlightAlertID == id else { return }   // stale or duplicate
-        clearInFlight()
-        finishCurrentAlert()
-    }
-
-    /// Backstop for failed phone playback. Two paths on timeout:
-    ///   • Critical priority (off-route / immediate-turn / nav-event):
-    ///     retry on the phone until the budget is exhausted. Falling back
-    ///     to local can play on the watch speaker when BT headphones are
-    ///     bound to the phone session — for navigation cues we'd rather
-    ///     keep trying the phone.
-    ///   • Non-critical: fall back to local watch speech immediately.
-    /// The phone-side 3s stale-drop prevents double-audio if a delayed
-    /// message arrives after we've moved on.
-    private func scheduleSpeechTimeout(text: String, alertID: UUID) {
-        inFlightTimeoutWork?.cancel()
-        let timeout = Self.estimatedSpeechDuration(for: text) + 1.5
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.isStopped else { return }
-            guard self.inFlightAlertID == alertID else { return }
-
-            if self.inFlightIsCritical, self.inFlightRetriesLeft > 0,
-               let wm = self.workoutManager, wm.isMirroringReady {
-                self.inFlightRetriesLeft -= 1
-                self.inFlightAlertID = nil   // invalidate so a late ack for the
-                                              // previous attempt is ignored
-                self.sendInFlightToPhone(wm: wm)
-                return
-            }
-
-            // Retry budget exhausted (or non-critical) — fall back to local.
-            self.clearInFlight()
-            self.speakLocally(text)
-        }
-        inFlightTimeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
-    }
-
-    /// Estimate how long it takes to speak `text` at our utterance rate.
-    /// Digits expand ~5× when spoken ("145" → "one hundred forty five"), so they're
-    /// counted as 5 spoken characters each. Used now only to size the failure-
-    /// detection timeout, not as the primary queue-advance trigger.
-    private static func estimatedSpeechDuration(for text: String) -> TimeInterval {
-        let digitCount = text.filter { $0.isNumber }.count
-        let spokenCharCount = text.count + digitCount * 4
-        return max(1.5, Double(spokenCharCount) * 0.08)
     }
 
     private func scheduleWakeNotification(body: String) {
