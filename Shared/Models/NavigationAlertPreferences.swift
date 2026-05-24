@@ -362,10 +362,21 @@ struct HapticPreferences: Codable, Equatable, Hashable {
 
 // MARK: - Audio Source
 
-/// Where to play voice alerts. `.auto` follows the rule: BT/headphones on the
-/// watch first, then the phone if mirrored, then the watch speaker. The
-/// explicit modes pin the output regardless of what's connected (with a
-/// graceful fallback if the chosen device isn't available).
+/// Where to play voice alerts.
+///
+/// `.auto` — If headphones are paired directly to the watch, play on the
+/// watch (so audio reaches those headphones). Otherwise hand the alert to
+/// the iPhone, which plays through whatever audio output it's connected to
+/// (wired, AirPods, BT, CarPlay, or its own speaker if nothing's connected).
+/// If the iPhone doesn't ack within ~1.5s the watch speaks locally as a
+/// fallback.
+///
+/// `.watch` — Always speak on the watch (or its paired headphones). Never
+/// route to the iPhone, even when reachable.
+///
+/// `.phone` — Always route to the iPhone first; same ~1.5s fallback to
+/// watch if the phone can't be reached. Ignores headphones paired to the
+/// watch.
 enum AlertAudioSource: String, Codable, CaseIterable, Hashable {
     case auto
     case watch
@@ -381,9 +392,9 @@ enum AlertAudioSource: String, Codable, CaseIterable, Hashable {
 
     var detail: String {
         switch self {
-        case .auto:  return "Headphones, then phone, then watch speaker"
-        case .watch: return "Always play on the watch (or paired headphones)"
-        case .phone: return "Always play on the phone if connected"
+        case .auto:  return "Watch headphones, otherwise iPhone audio"
+        case .watch: return "Always play on the watch"
+        case .phone: return "Always play on the iPhone"
         }
     }
 }

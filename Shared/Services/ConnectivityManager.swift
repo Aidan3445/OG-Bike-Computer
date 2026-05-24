@@ -408,6 +408,10 @@ extension ConnectivityManager {
     }
 
     /// Tell the watch to discard a held ride and delete the phone's local copy.
+    /// Uses the `deleteHeldRide` message rather than `discardRide`: the watch's
+    /// `deleteHeldRide` handler deletes by rideID directly off the disk + RideStore,
+    /// whereas `discardRide` relies on `rideStore.heldRide` being populated at the
+    /// moment the message lands — which is racey on background wake.
     func sendDiscardRide(rideID: UUID) {
         deleteLocalRide(rideID: rideID, dir: Self.ridesDirectory, fm: FileManager.default)
         DispatchQueue.main.async {
@@ -417,7 +421,7 @@ extension ConnectivityManager {
             }
         }
         guard WCSession.default.activationState == .activated else { return }
-        let msg: [String: Any] = ["type": "discardRide", "rideID": rideID.uuidString]
+        let msg: [String: Any] = ["type": "deleteHeldRide", "rideID": rideID.uuidString]
         if WCSession.default.isReachable {
             WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
                 WCSession.default.transferUserInfo(msg)
@@ -1204,6 +1208,10 @@ private extension ConnectivityManager {
         // If rideStore is attached, update in-memory immediately
         DispatchQueue.main.async {
             self.pendingTransferRideIDs.remove(summary.id)
+            // A delivered ride (held or completed) supersedes the "waiting for ride
+            // from watch" placeholder. Without this, the placeholder can linger
+            // alongside the actual held-ride row until the awaiting timeout fires.
+            self.clearAwaitingIncomingRide()
             if let store = self.rideStore {
                 if let idx = store.rides.firstIndex(where: { $0.id == summary.id }) {
                     store.rides[idx] = summary  // update existing (e.g. held → completed)

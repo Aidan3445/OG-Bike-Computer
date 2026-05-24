@@ -168,7 +168,7 @@ struct ContentView: View {
             .tag(0)
 
             NavigationStack {
-                RideHistoryView(rideStore: rideStore)
+                RideHistoryView(rideStore: rideStore, routeStore: routeStore)
             }
             .tabItem {
                 Label("Rides", systemImage: "bicycle")

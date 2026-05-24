@@ -130,6 +130,29 @@ class LiveActivityManager {
         }
     }
 
+    /// Push a "completed" state to all activities WITHOUT dismissing them.
+    /// Call this as early as possible in the end-ride flow so the user sees a
+    /// "Ride Complete" message immediately, before HK teardown / dismissal.
+    func markCompleted() {
+        let allActivities = Activity<RideActivityAttributes>.activities
+        guard !allActivities.isEmpty else { return }
+        for activity in allActivities {
+            var state = activity.content.state
+            state.rideStatus = "completed"
+            state.isPaused = false
+            state.isAutoPaused = false
+            state.isOffRoute = false
+            state.nextTurnDirection = nil
+            state.nextTurnIcon = nil
+            state.nextTurnCue = nil
+            state.distanceToNextTurn = nil
+            let finalState = state
+            Task {
+                await activity.update(ActivityContent(state: finalState, staleDate: nil))
+            }
+        }
+    }
+
     func endActivity() {
         // End ALL activities of this type — catches orphans from crashes or double-starts.
         // Push a "completed" state first so any lingering UI shows a finish message
