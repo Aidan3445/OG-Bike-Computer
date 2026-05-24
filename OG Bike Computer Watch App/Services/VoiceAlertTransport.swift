@@ -60,13 +60,16 @@ final class VoiceAlertTransport {
     }
     private var inFlight: [UUID: InFlight] = [:]
 
-    /// Fallback deadline for .immediate alerts. Plan §3.4 suggests 0.5–1.0s,
-    /// but real-world telemetry shows watch→didStart latency landing around
-    /// 800–1100ms with WCSession.sendMessage during a mirrored workout.
-    /// 1.5s gives comfortable headroom above the observed P95 without
-    /// blowing past the rider's perception window for "this turn alert is
-    /// late." Adjust based on telemetry of real ack latencies.
-    private static let immediateFallbackSeconds: TimeInterval = 1.5
+    /// Fallback deadline for .immediate alerts.
+    ///
+    /// 1.5s was too tight: phone's `didStart` typically fires at ~880ms, but
+    /// the ack roundtrip back over the HK mirror channel can add another
+    /// 500ms–1s+ in real-world conditions. When phone reliability is near
+    /// 100% (current state), most fallback fires are false positives that
+    /// produce phone+watch double-speak instead of catching real failures.
+    /// 2.5s gives the ack comfortable headroom while only penalizing the
+    /// rare genuine-phone-failure case by an extra second.
+    private static let immediateFallbackSeconds: TimeInterval = 2.5
 
     private init() {}
 

@@ -207,9 +207,6 @@ class WorkoutManager: NSObject, ObservableObject {
     // Telemetry for phone Live Activity
     private var telemetryTimer: Timer?
 
-    // Periodic voice alert connection check (proactive ping)
-    private var connectionCheckTimer: Timer?
-
     // Checkpoint / crash recovery
     private var checkpointTimer: Timer?
     private var lastCheckpointLocationCount = 0
@@ -286,7 +283,6 @@ class WorkoutManager: NSObject, ObservableObject {
         resetSplitAccumulators()
         initialRouteName = navigation.processedRoute?.name
         startTelemetryTimer()
-        startConnectionCheckTimer()
     }
     #else
     let isSimulating = false
@@ -634,7 +630,6 @@ class WorkoutManager: NSObject, ObservableObject {
         resetSplitAccumulators()
         initialRouteName = navigation.processedRoute?.name
         startTelemetryTimer()
-        startConnectionCheckTimer()
 
         // Only assign a fresh ride ID and reset checkpoint counter when NOT continuing a held ride
         if continuationBase == nil {
@@ -784,7 +779,6 @@ class WorkoutManager: NSObject, ObservableObject {
         timerStart = nil
         stopDisplayTimer()
         stopTelemetryTimer()
-        stopConnectionCheckTimer()
         stopCheckpointTimer()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
@@ -1385,21 +1379,6 @@ class WorkoutManager: NSObject, ObservableObject {
         telemetryTimer = nil
     }
 
-    // MARK: - Connection Check (Proactive Ping)
-
-    private func startConnectionCheckTimer() {
-        connectionCheckTimer?.invalidate()
-        guard ridePreferences.voiceAlertConnectionCheck else { return }
-        connectionCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
-            self?.sendConnectionPing()
-        }
-    }
-
-    private func stopConnectionCheckTimer() {
-        connectionCheckTimer?.invalidate()
-        connectionCheckTimer = nil
-    }
-
     // MARK: - Checkpoint (Crash Recovery)
 
     private var checkpointTrackURL: URL {
@@ -1586,7 +1565,6 @@ class WorkoutManager: NSObject, ObservableObject {
 
         stopCheckpointTimer()
         stopTelemetryTimer()
-        stopConnectionCheckTimer()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
 
@@ -1648,6 +1626,26 @@ class WorkoutManager: NSObject, ObservableObject {
         // the phone — TransferLedger keeps the entry pending until acked.
         rideStore?.update(summary)
         TransferLedger.shared.recordTransfer(rideID: summary.id)
+
+        // Surface a held-ride summary screen so the user sees feedback after the
+        // countdown — without this, holdRide silently tears down and the view
+        // jumps back to the route list with no acknowledgment that anything happened.
+        // The cleanup() check `if completedRideSummary == nil` keeps `isActive` true
+        // while a summary is showing, so ContentView routes to RideSummaryView.
+        completedRideSummary = WatchRideSummary(
+            distance: totalDistance,
+            movingTime: movingTime,
+            elapsedTime: elapsedTime,
+            avgSpeed: movingTime > 0 ? totalDistance / movingTime : 0,
+            maxSpeed: maxSpeed,
+            elevationGain: liveElevationGain,
+            calories: activeCalories,
+            avgHeartRate: heartRateSampleCount > 0 ? averageHeartRate : 0,
+            maxHeartRate: maxHeartRate > 0 ? maxHeartRate : 0,
+            avgPower: powerSampleCount > 0 ? averagePower : 0,
+            maxPower: maxPower > 0 ? maxPower : 0,
+            isHeld: true
+        )
 
         VoiceNavigator.shared.reset()
         VoiceNavigator.shared.workoutManager = nil
@@ -1805,34 +1803,6 @@ class WorkoutManager: NSObject, ObservableObject {
         let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(held.trackFilename)
         ConnectivityManager.shared.sendRide(summary: completed, trackURL: trackURL)
         print("[Hold] Auto-finalized held ride before new ride: \(held.name)")
-    }
-
-    private func sendConnectionPing() {
-        guard isActive else { return }
-
-        // Re-arm the watch audio session — this is the primary goal: recover
-        // from AVAudioSession interruptions (phone calls, podcasts, etc.) that
-        // would otherwise silence all voice alerts for the remainder of the ride.
-        VoiceNavigator.shared.configureAudioSession()
-        print("[ConnectionCheck] Audio session re-armed")
-
-        // Also ping the phone if mirroring is up, to detect silent drops.
-        guard isMirroringReady, let workoutSession = session else { return }
-
-        let payload: [String: String] = [
-            "type": "ping",
-            "ts": String(Date().timeIntervalSince1970)
-        ]
-        guard let data = try? JSONEncoder().encode(payload) else { return }
-
-        workoutSession.sendToRemoteWorkoutSession(data: data) { [weak self] success, error in
-            if let error = error {
-                print("[ConnectionCheck] Ping failed: \(error)")
-                self?.markMirroringFailed()
-            } else if success {
-                print("[ConnectionCheck] Ping OK")
-            }
-        }
     }
 
     private func sendTelemetry() {

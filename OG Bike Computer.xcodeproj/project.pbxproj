@@ -85,6 +85,7 @@
 				Intents/ChangeSettingIntent.swift,
 				Intents/ProfileIntents.swift,
 				Intents/RideIntents.swift,
+				Models/SampleProcessedRoute.swift,
 				Models/SettingsPreset.swift,
 				Services/ConnectivityManager.swift,
 				Services/GPXExporter.swift,
@@ -96,6 +97,7 @@
 				Stores/UserSettingsStore.swift,
 				Utils/MetricResolver.swift,
 				Utils/MileMarkers.swift,
+				Views/RouteMapCanvases.swift,
 			);
 			target = DD21F8092F7984D10001B407 /* OG Bike Computer WidgetExtension */;
 		};
@@ -386,7 +388,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = "OG Bike Computer WidgetExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "OG Bike Computer Widget/Info.plist";
@@ -400,7 +402,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.2;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aidan3445.computa.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -422,7 +424,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = "OG Bike Computer WidgetExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "OG Bike Computer Widget/Info.plist";
@@ -436,7 +438,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.2;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aidan3445.computa.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -580,7 +582,7 @@
 				CODE_SIGN_ENTITLEMENTS = "OG Bike Computer Watch App/OG Bike Computer Watch App.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -622,7 +624,7 @@
 				CODE_SIGN_ENTITLEMENTS = "OG Bike Computer Watch App/OG Bike Computer Watch App.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -665,7 +667,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = "OG Bike Computer/OG Bike Computer.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -715,7 +717,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = "OG Bike Computer/OG Bike Computer.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 30;
+				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = AXZR9KKTUD;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;

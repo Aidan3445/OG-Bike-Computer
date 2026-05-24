@@ -9,6 +9,7 @@ import SwiftUI
 
 struct RideHistoryView: View {
     @ObservedObject var rideStore: RideStore
+    @ObservedObject var routeStore: RouteStore
     @ObservedObject private var connectivity = ConnectivityManager.shared
 
     private var heldRides: [RideSummary] {
@@ -26,9 +27,12 @@ struct RideHistoryView: View {
 
     /// Show the generic "waiting for ride from watch" placeholder only when we're
     /// expecting a ride but no summary has arrived yet (no row to update in place).
+    /// Held rides count as "arrived" — if one is already showing, the placeholder
+    /// is redundant and should be hidden even if the awaiting flag is still set.
     private var showAwaitingPlaceholder: Bool {
         connectivity.isAwaitingIncomingRide &&
-            connectivity.pendingTransferRideIDs.isEmpty
+            connectivity.pendingTransferRideIDs.isEmpty &&
+            heldRides.isEmpty
     }
 
     var body: some View {
@@ -96,5 +100,10 @@ struct RideHistoryView: View {
             }
         }
         .navigationTitle("Rides")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                ConnectionStatusButton(connectivity: connectivity, routeStore: routeStore)
+            }
+        }
     }
 }

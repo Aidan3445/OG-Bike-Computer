@@ -113,34 +113,12 @@ struct RideLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     let status = context.state.rideStatus ?? "active"
                     if status == "active" {
-                        VStack(spacing: 6) {
-                            if let cue = context.state.nextTurnCue {
-                                Text(cue)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            HStack(spacing: 10) {
-                                Button(intent: PauseResumeRideIntent()) {
-                                    Image(systemName: context.state.isPaused ? "play.fill" : "pause.fill")
-                                        .font(.caption.weight(.semibold))
-                                }
-                                .tint(context.state.isPaused ? .green : Theme.primaryLight)
-
-                                Button(intent: HoldRideIntent()) {
-                                    Image(systemName: "hand.raised.fill")
-                                        .font(.caption.weight(.semibold))
-                                }
-                                .tint(.orange)
-
-                                Button(intent: EndRideIntent()) {
-                                    Image(systemName: "stop.fill")
-                                        .font(.caption.weight(.semibold))
-                                }
-                                .tint(.red)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .buttonBorderShape(.capsule)
+                        if let cue = context.state.nextTurnCue, !cue.isEmpty {
+                            Text(cue)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .center)
                         }
                     } else {
                         HStack(spacing: 6) {
@@ -291,35 +269,23 @@ private struct LockScreenView: View {
             // Stats grid — configurable 2 rows of 3
             statsGrid
 
-            // Route remaining / auto-pause row (hidden in dim mode, also hidden when nav banner present to save space)
-            if !isLuminanceReduced, !hasNav, state.routeDistanceRemaining != nil || state.isAutoPaused {
+            // Route remaining row (only when no nav banner showing — nav banner has its own context)
+            if !isLuminanceReduced, !hasNav, let remaining = state.routeDistanceRemaining {
                 HStack(spacing: 6) {
-                    if let remaining = state.routeDistanceRemaining {
-                        Image(systemName: "flag.checkered")
-                            .font(.caption2)
-                            .foregroundStyle(Theme.primaryLight.opacity(0.8))
-                        Text("\(formatDistance(remaining, imperial: isImperial)) to finish")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.7))
-                            .monospacedDigit()
-                    }
+                    Image(systemName: "flag.checkered")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.primaryLight.opacity(0.8))
+                    Text("\(formatDistance(remaining, imperial: isImperial)) to finish")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .monospacedDigit()
                     Spacer()
-                    if state.isAutoPaused {
-                        Label("Auto Pause", systemImage: "pause.circle.fill")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.yellow)
-                    }
                 }
                 .padding(.horizontal, 2)
             }
-
-            // Controls row
-            if !isLuminanceReduced {
-                controlBar
-            }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
     }
 
     // MARK: - Header
@@ -354,7 +320,7 @@ private struct LockScreenView: View {
         if state.isPaused {
             pill(text: "PAUSED", icon: "pause.fill", color: .yellow)
         } else if state.isAutoPaused {
-            pill(text: "AUTO", icon: "pause.circle.fill", color: .yellow)
+            pill(text: "AUTO PAUSED", icon: "pause.circle.fill", color: .yellow)
         } else {
             HStack(spacing: 5) {
                 Circle()
@@ -468,32 +434,6 @@ private struct LockScreenView: View {
                         .stroke(Theme.primary.opacity(0.25), lineWidth: 0.5)
                 )
         )
-    }
-
-    // MARK: - Control Bar
-
-    private var controlBar: some View {
-        HStack(spacing: 8) {
-            Button(intent: PauseResumeRideIntent()) {
-                Label(
-                    state.isPaused ? "Resume" : "Pause",
-                    systemImage: state.isPaused ? "play.fill" : "pause.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .frame(maxWidth: .infinity)
-            }
-            .tint(state.isPaused ? .green : Theme.primary)
-
-            Button(intent: EndRideIntent()) {
-                Label("End", systemImage: "stop.fill")
-                    .font(.caption.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .tint(.red.opacity(0.85))
-        }
-        .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.capsule)
-        .controlSize(.small)
     }
 
     // MARK: - Configurable Stats Grid

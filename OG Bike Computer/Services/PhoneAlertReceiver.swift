@@ -116,15 +116,14 @@ final class PhoneAlertReceiver: @unchecked Sendable {
         }
     }
 
-    /// Post a system notification for turn alerts if the user has that
-    /// mode enabled. The phone-alerts preference can be `.turnNotifications`
-    /// which pops Apple-style banner notifications in addition to (or in
-    /// place of) voice. Done here for both transport paths so behavior
-    /// matches what the legacy HK mirror path used to do.
+    /// Post a system notification for turn alerts when the user has
+    /// `showTurnNotifications` enabled. Live Activity is always on; this
+    /// is the user's opt-in for additional banner notifications on each
+    /// navigation event.
     private func postNotificationIfNeeded(_ payload: AlertPayload) {
         guard let data = UserDefaults.standard.data(forKey: "phoneAlerts"),
               let phonePrefs = try? JSONDecoder().decode(PhoneAlertPreferences.self, from: data),
-              phonePrefs.mode == .turnNotifications else { return }
+              phonePrefs.showTurnNotifications else { return }
         switch payload.kind {
         case .offRoute:
             TurnNotificationManager.shared.postOffRoute(message: payload.text)

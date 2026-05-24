@@ -17,47 +17,34 @@ struct PhoneAlertSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Label("Phone alerts increase battery usage on both devices.", systemImage: "battery.25")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
+                Toggle("Turn Notifications", isOn: prefs.showTurnNotifications)
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Post a banner notification on the iPhone for each upcoming turn, in addition to the spoken alert. Requires a loaded route.")
             }
 
             Section {
-                Picker("Mode", selection: prefs.mode) {
-                    ForEach(PhoneAlertMode.allCases, id: \.self) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
+                Toggle("Show Map Preview", isOn: prefs.liveActivityShowMap)
 
-                if userSettings.settings.phoneAlerts.mode == .liveActivity {
-                    Toggle("Show Map Preview", isOn: prefs.liveActivityShowMap)
-
-                    NavigationLink {
-                        LiveActivityCustomizationView(userSettings: userSettings)
-                    } label: {
-                        HStack {
-                            Text("Customize Stats")
-                            Spacer()
-                            Text(userSettings.settings.phoneAlerts.liveActivitySlots.prefix(3).map(\.metricType.label).joined(separator: ", "))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                NavigationLink {
+                    LiveActivityCustomizationView(userSettings: userSettings)
+                } label: {
+                    HStack {
+                        Text("Customize Stats")
+                        Spacer()
+                        Text(userSettings.settings.phoneAlerts.liveActivitySlots.prefix(3).map(\.metricType.label).joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
             } header: {
-                Text("Phone Alert Mode")
+                Text("Live Activity")
             } footer: {
-                switch userSettings.settings.phoneAlerts.mode {
-                case .off:
-                    Text("No alerts will be sent to your iPhone during rides.")
-                case .liveActivity:
-                    Text("Shows ride stats on your iPhone Lock Screen and Dynamic Island. When a route is loaded, also shows upcoming turn details and an optional map preview.")
-                case .turnNotifications:
-                    Text("Sends a single updating notification for each upcoming turn. Requires a loaded route — not available during free rides.")
-                }
+                Text("The Live Activity is shown on the Lock Screen and Dynamic Island whenever a ride is in progress. When a route is loaded, it also displays the next turn and an optional map preview.")
             }
+
             if userSettings.settings.phoneAlerts != .default {
                 Section {
                     Button("Reset Phone Alerts to Defaults", role: .destructive) {

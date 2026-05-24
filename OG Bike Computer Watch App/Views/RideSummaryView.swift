@@ -21,6 +21,9 @@ struct WatchRideSummary {
     let maxHeartRate: Double
     let avgPower: Double
     let maxPower: Double
+    /// When true, the summary represents a held (paused-and-saved) ride
+    /// rather than a fully ended ride — shown with orange + hand icon.
+    var isHeld: Bool = false
 }
 
 struct RideSummaryView: View {
@@ -33,11 +36,11 @@ struct RideSummaryView: View {
         ScrollView {
             VStack(spacing: 12) {
                 // Header
-                Image(systemName: "flag.checkered")
+                Image(systemName: summary.isHeld ? "hand.raised.fill" : "flag.checkered")
                     .font(.system(size: 32))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(summary.isHeld ? .orange : .green)
 
-                Text("Ride Complete")
+                Text(summary.isHeld ? "Held Ride" : "Ride Complete")
                     .font(.headline)
 
                 Divider()
@@ -75,7 +78,14 @@ struct RideSummaryView: View {
                     onDismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.green)
+                .tint(summary.isHeld ? .orange : .green)
+
+                if summary.isHeld {
+                    Text("Resume from the route list or your phone.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

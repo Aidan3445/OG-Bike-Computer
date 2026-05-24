@@ -25,15 +25,9 @@ struct BatterySettingsView: View {
                 )
                 batteryTipRow(
                     title: "Live Activity Updates",
-                    value: userSettings.settings.phoneAlerts.mode == .off
-                        ? "Disabled"
-                        : userSettings.settings.ridePreferences.telemetryRate.label,
-                    impact: userSettings.settings.phoneAlerts.mode == .off
-                        ? "Least demanding"
-                        : userSettings.settings.ridePreferences.telemetryRate.batteryImpact,
-                    instruction: userSettings.settings.phoneAlerts.mode == .off
-                        ? "Live Activity is off. Enable in Phone Alerts."
-                        : "Change below in Efficiency Settings."
+                    value: userSettings.settings.ridePreferences.telemetryRate.label,
+                    impact: userSettings.settings.ridePreferences.telemetryRate.batteryImpact,
+                    instruction: "Change below in Efficiency Settings."
                 )
                 batteryTipRow(
                     title: "Map Detail",
@@ -48,12 +42,12 @@ struct BatterySettingsView: View {
                     instruction:
                         "Adjust on Watch via Settings \u{2192} Display & Brightness."
                 )
-                if userSettings.settings.phoneAlerts.mode != .off {
+                if userSettings.settings.phoneAlerts.showTurnNotifications {
                     batteryTipRow(
-                        title: "Phone Alerts",
-                        value: userSettings.settings.phoneAlerts.mode.label,
-                        impact: "High",
-                        instruction: "Change in Phone Alerts settings."
+                        title: "Turn Notifications",
+                        value: "On",
+                        impact: "Low",
+                        instruction: "Toggle off in Phone Alerts settings."
                     )
                 }
             } header: {
@@ -62,15 +56,6 @@ struct BatterySettingsView: View {
 
             // MARK: - Efficiency Settings
             Section {
-                Toggle(isOn: $userSettings.settings.ridePreferences.voiceAlertConnectionCheck) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Voice Alert Connection Checks")
-                        Text("Periodically verify phone connection is stable")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
                 Toggle(isOn: $userSettings.settings.ridePreferences.dynamicGPSOptimization) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Dynamic GPS Optimization")
@@ -139,7 +124,7 @@ struct BatterySettingsView: View {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Phone Alerts")
-                            Text("Live Activity, notifications — high battery impact")
+                            Text("Live Activity stats and optional turn notifications")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

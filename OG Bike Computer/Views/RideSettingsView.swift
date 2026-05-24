@@ -203,14 +203,16 @@ struct RideSettingsView: View {
                 HStack {
                     Text("Phone Alerts")
                     Spacer()
-                    Text(userSettings.settings.phoneAlerts.mode.label)
+                    Text(userSettings.settings.phoneAlerts.showTurnNotifications
+                         ? "Notifications on"
+                         : "Live Activity")
                         .foregroundStyle(.secondary)
                 }
             }
         } header: {
             Label("Phone", systemImage: "iphone")
         } footer: {
-            Text("Show turn-by-turn alerts on your iPhone during rides. Requires phone nearby.")
+            Text("Customize the ride Live Activity and turn notifications on your iPhone.")
         }
     }
 }

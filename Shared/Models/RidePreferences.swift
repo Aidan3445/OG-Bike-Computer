@@ -263,7 +263,6 @@ struct RidePreferences: Codable, Equatable, Hashable {
     var mapRotation: MapRotation
     var wakeOnAlert: Bool
     var ridePrivacy: RidePrivacy
-    var voiceAlertConnectionCheck: Bool
     var dynamicGPSOptimization: Bool
     var telemetryRate: TelemetryRate
     var offRouteGraceSamples: Int
@@ -282,7 +281,6 @@ struct RidePreferences: Codable, Equatable, Hashable {
         mapRotation: .headingUp,
         wakeOnAlert: true,
         ridePrivacy: .off,
-        voiceAlertConnectionCheck: true,
         dynamicGPSOptimization: true,
         telemetryRate: .standard,
         offRouteGraceSamples: 3,
@@ -300,7 +298,6 @@ struct RidePreferences: Codable, Equatable, Hashable {
         mapRotation: MapRotation = .headingUp,
         wakeOnAlert: Bool = true,
         ridePrivacy: RidePrivacy = .off,
-        voiceAlertConnectionCheck: Bool = true,
         dynamicGPSOptimization: Bool = true,
         telemetryRate: TelemetryRate = .standard,
         offRouteGraceSamples: Int = 3,
@@ -316,7 +313,6 @@ struct RidePreferences: Codable, Equatable, Hashable {
         self.mapRotation = mapRotation
         self.wakeOnAlert = wakeOnAlert
         self.ridePrivacy = ridePrivacy
-        self.voiceAlertConnectionCheck = voiceAlertConnectionCheck
         self.dynamicGPSOptimization = dynamicGPSOptimization
         self.telemetryRate = telemetryRate
         self.offRouteGraceSamples = offRouteGraceSamples
@@ -335,7 +331,6 @@ struct RidePreferences: Codable, Equatable, Hashable {
         mapRotation = try c.decodeIfPresent(MapRotation.self, forKey: .mapRotation) ?? .headingUp
         wakeOnAlert = try c.decodeIfPresent(Bool.self, forKey: .wakeOnAlert) ?? true
         ridePrivacy = try c.decodeIfPresent(RidePrivacy.self, forKey: .ridePrivacy) ?? .off
-        voiceAlertConnectionCheck = try c.decodeIfPresent(Bool.self, forKey: .voiceAlertConnectionCheck) ?? true
         dynamicGPSOptimization = try c.decodeIfPresent(Bool.self, forKey: .dynamicGPSOptimization) ?? true
         telemetryRate = try c.decodeIfPresent(TelemetryRate.self, forKey: .telemetryRate) ?? .standard
         offRouteGraceSamples = try c.decodeIfPresent(Int.self, forKey: .offRouteGraceSamples) ?? 3

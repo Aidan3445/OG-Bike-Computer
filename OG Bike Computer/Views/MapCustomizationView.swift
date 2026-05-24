@@ -38,6 +38,7 @@ struct MapCustomizationView: View {
             routeColorSection
             waypointSection
             overlaySection
+            elevationScreenPreviewSection
             elevationScreenSection
             resetSection
         }
@@ -326,24 +327,35 @@ struct MapCustomizationView: View {
     }
 
     @ViewBuilder
-    private var elevationScreenSection: some View {
-        Section {
-            Toggle("Show Elevation Screen", isOn: elevationConfig.enabled)
-
-            if userSettings.settings.ridePreferences.elevationScreen.enabled {
+    private var elevationScreenPreviewSection: some View {
+        if userSettings.settings.ridePreferences.elevationScreen.enabled {
+            Section {
                 ElevationScreenPreview(
                     config: userSettings.settings.ridePreferences.elevationScreen,
                     waypointDisplay: userSettings.settings.ridePreferences.mapScreen.waypointDisplay
                 )
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+            }
+        }
+    }
 
-                Picker("Default Tab", selection: elevationConfig.defaultTab) {
-                    ForEach(ElevationDefaultTab.allCases) { tab in
-                        Text(tab.label).tag(tab)
+    @ViewBuilder
+    private var elevationScreenSection: some View {
+        Section {
+            Toggle("Show Elevation Screen", isOn: elevationConfig.enabled)
+
+            if userSettings.settings.ridePreferences.elevationScreen.enabled {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Default View Mode")
+                    Picker("Default View Mode", selection: elevationConfig.defaultTab) {
+                        ForEach(ElevationDefaultTab.allCases) { tab in
+                            Text(tab.label).tag(tab)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                 }
-                .pickerStyle(.segmented)
 
                 LookaheadDistancePicker(meters: elevationConfig.aheadLookahead)
 
@@ -388,12 +400,44 @@ struct MapScreenPreview: View {
     @State private var showFullRoute = false
     @State private var zoomIndex: Int = -1   // -1 means default
 
+    /// Shared sample route used to render the preview through the same
+    /// canvases the watch uses, so what you see matches the watch UI.
+    private let sampleRider = SampleProcessedRoute.riderState(at: 0.42)
+
+    private var routeMapData: RouteMapData {
+        RouteMapData(
+            currentLocation: sampleRider.location,
+            processedRoute: SampleProcessedRoute.processed,
+            currentSegmentIndex: sampleRider.segmentIndex,
+            distanceAlongRoute: sampleRider.distanceAlongRoute,
+            heading: sampleRider.heading,
+            speed: 5,
+            recordedLocations: [],
+            isOffRoute: false,
+            rejoinCandidateCoords: [],
+            showWaypointsOnRouteMap: config.waypointDisplay.showsOnRouteMap)
+    }
+
     private var resolvedZoomIndex: Int {
         zoomIndex < 0 ? config.defaultZoomIndex : min(zoomIndex, config.computedZoomLevels.count - 1)
     }
 
+    private var currentViewDistance: Double {
+        let levels = config.computedZoomLevels
+        guard !levels.isEmpty else { return 400 }
+        return levels[resolvedZoomIndex]
+    }
+
     private var canZoomIn: Bool { resolvedZoomIndex > 0 }
     private var canZoomOut: Bool { resolvedZoomIndex < config.computedZoomLevels.count - 1 }
+
+    /// Cardinal direction string for the sample rider's heading.
+    private var sampleCardinalDirection: String {
+        let heading = sampleRider.heading
+        let dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        let idx = Int(((heading + 22.5).truncatingRemainder(dividingBy: 360)) / 45)
+        return dirs[max(0, min(idx, dirs.count - 1))]
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -507,16 +551,25 @@ struct MapScreenPreview: View {
                 mockMapBackground
             }
 
-            // Mock route line — full-route view shows a more zoomed-out shape,
-            // breadcrumb view shows the segment near the rider, and zoom level
-            // affects the apparent scale.
-            if showFullRoute {
-                mockFullRouteLine
-            } else {
-                mockRouteLine
-                    .scaleEffect(zoomScale, anchor: UnitPoint(x: 0.5, y: 0.75))
-                    .animation(.easeOut(duration: 0.2), value: zoomIndex)
+            // Real route canvases driven by sample data — same renderers the
+            // watch uses, so zoom actually changes the visible window and the
+            // full-route view is geometry-aligned to the rider dot.
+            Group {
+                if showFullRoute {
+                    RouteMapFullRouteCanvas(
+                        data: routeMapData,
+                        routeAheadColor: config.routeAheadColor)
+                } else {
+                    RouteMapBreadcrumbCanvas(
+                        data: routeMapData,
+                        viewDistance: currentViewDistance,
+                        useCompassHeading: true,
+                        routeAheadColor: config.routeAheadColor,
+                        animated: false)
+                        .animation(.easeOut(duration: 0.2), value: zoomIndex)
+                }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 23))
 
             // Stats overlay (top-left)
             VStack(spacing: 0) {
@@ -577,7 +630,7 @@ struct MapScreenPreview: View {
                         }
 
                         if config.showHeading {
-                            Text("NE")
+                            Text(sampleCardinalDirection)
                                 .font(.system(size: 8, weight: .bold))
                                 .foregroundStyle(.white.opacity(0.7))
                         }
@@ -624,69 +677,6 @@ struct MapScreenPreview: View {
                 }
             }
 
-            // Rider dot
-            Circle()
-                .fill(.white)
-                .frame(width: 8, height: 8)
-                .overlay(
-                    Circle().fill(.blue).frame(width: 6, height: 6)
-                )
-                .offset(y: watchHeight * 0.05)
-        }
-    }
-
-    /// 1.0 at default zoom; >1 closer in, <1 zoomed out.
-    private var zoomScale: CGFloat {
-        let levels = config.computedZoomLevels
-        guard !levels.isEmpty else { return 1 }
-        let defaultMeters = levels[config.defaultZoomIndex]
-        let currentMeters = levels[resolvedZoomIndex]
-        return CGFloat(defaultMeters / currentMeters)
-    }
-
-    /// Full-route mock — shows the entire route fitted in view. The route line is
-    /// fully colored as "ahead" (no completed/behind portion) and the rider dot sits
-    /// roughly in the middle.
-    private var mockFullRouteLine: some View {
-        Canvas { context, size in
-            var path = Path()
-            let p1 = CGPoint(x: size.width * 0.15, y: size.height * 0.85)
-            let p2 = CGPoint(x: size.width * 0.40, y: size.height * 0.55)
-            let p3 = CGPoint(x: size.width * 0.65, y: size.height * 0.30)
-            let p4 = CGPoint(x: size.width * 0.85, y: size.height * 0.15)
-            path.move(to: p1)
-            path.addQuadCurve(to: p2, control: CGPoint(x: size.width * 0.35, y: size.height * 0.75))
-            path.addQuadCurve(to: p3, control: CGPoint(x: size.width * 0.60, y: size.height * 0.45))
-            path.addQuadCurve(to: p4, control: CGPoint(x: size.width * 0.78, y: size.height * 0.20))
-            context.stroke(path, with: .color(config.routeAheadColor.color),
-                           style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-        }
-    }
-
-    private var mockRouteLine: some View {
-        Canvas { context, size in
-            let midX = (size.width / 2) - 1 // -1 offset to align with dot
-            let bottom = size.height * 1
-            let top = 0
-
-            // Behind (green, faded)
-            var behind = Path()
-            behind.move(to: CGPoint(x: midX - 5, y: bottom))
-            behind.addQuadCurve(
-                to: CGPoint(x: midX, y: size.height * 0.55),
-                control: CGPoint(x: midX + 15, y: size.height * 0.65))
-            context.stroke(behind, with: .color(.green.opacity(0.4)),
-                          style: StrokeStyle(lineWidth: 4, lineCap: .round))
-
-            // Ahead (configured color)
-            var ahead = Path()
-            ahead.move(to: CGPoint(x: midX, y: size.height * 0.55))
-            ahead.addCurve(
-                to: CGPoint(x: Int(midX) + 20, y: top),
-                control1: CGPoint(x: midX - 20, y: size.height * 0.35),
-                control2: CGPoint(x: midX + 30, y: size.height * 0.2))
-            context.stroke(ahead, with: .color(config.routeAheadColor.color),
-                          style: StrokeStyle(lineWidth: 4, lineCap: .round))
         }
     }
 
@@ -887,186 +877,58 @@ struct LookaheadDistancePicker: View {
 
 // MARK: - Elevation Screen Preview (mock watch)
 
+/// Renders a watch-shaped frame with the real `ElevationChart` view inside,
+/// driven by sampled data from a bundled simulated ride. Lets users see
+/// exactly what their elevation-screen settings will look like on-watch.
 struct ElevationScreenPreview: View {
     let config: ElevationScreenConfig
     let waypointDisplay: WaypointDisplay
 
-    private let watchWidth: CGFloat = 160
-    private let watchHeight: CGFloat = 196
+    private let watchWidth: CGFloat = 184
+    private let watchHeight: CGFloat = 224
 
     @State private var mode: ElevationDefaultTab = .full
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .trailing, spacing: 0) {
-                Spacer().frame(height: 28)
-                callout("Mode toggle", color: .green)
-                Spacer().frame(height: 6)
-                callout("Now marker", color: .white)
-                Spacer()
-                if config.showGainLossReadout {
-                    callout("Gain readout", color: .secondary)
-                        .padding(.bottom, 18)
-                }
-            }
-            .frame(width: 70, alignment: .trailing)
-
-            watchBody
-
-            VStack(alignment: .leading, spacing: 0) {
-                Spacer().frame(height: 60)
-                if waypointDisplay.showsOnElevation {
-                    callout("Waypoints", color: .orange, leading: true)
-                }
-                Spacer()
-            }
-            .frame(width: 70, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .onAppear { mode = config.defaultTab }
-    }
-
-    @ViewBuilder
-    private func callout(_ text: String, color: Color, leading: Bool = false) -> some View {
-        HStack(spacing: 2) {
-            if !leading {
-                Text(text)
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(color)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 6, weight: .bold))
-                    .foregroundStyle(color.opacity(0.6))
-            } else {
-                Image(systemName: "arrow.left")
-                    .font(.system(size: 6, weight: .bold))
-                    .foregroundStyle(color.opacity(0.6))
-                Text(text)
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(color)
-            }
-        }
+        watchBody
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .onAppear { mode = config.defaultTab }
+            .onChange(of: config.defaultTab) { _, newValue in mode = newValue }
     }
 
     private var watchBody: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 34)
+            RoundedRectangle(cornerRadius: 38)
                 .fill(Color(white: 0.08))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 34)
+                    RoundedRectangle(cornerRadius: 38)
                         .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
                 )
 
-            // Inner screen — keep extra inset on top/bottom so content stays
-            // inside the rounded corner curve like a real watch face.
-            RoundedRectangle(cornerRadius: 26)
+            RoundedRectangle(cornerRadius: 30)
                 .fill(Color.black)
                 .padding(7)
                 .overlay(
-                    screenContent
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 18)
+                    ElevationChart(
+                        samples: ElevationChart.previewSamples,
+                        pois: ElevationChart.previewPOIs,
+                        currentDistance: ElevationChart.previewCurrentDistance,
+                        currentElevation: ElevationChart.previewCurrentElevation,
+                        liveGain: ElevationChart.previewLiveGain,
+                        config: config,
+                        showWaypoints: waypointDisplay.showsOnElevation,
+                        mode: $mode
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(.top, 16)
+                    .padding(.bottom, 12)
+                    .padding(7)              // match the inner-screen inset
+                    .clipShape(RoundedRectangle(cornerRadius: 30))
                 )
         }
         .frame(width: watchWidth, height: watchHeight)
         .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
-    }
-
-    private var screenContent: some View {
-        VStack(spacing: 3) {
-            // Mode toggle (interactive in preview)
-            HStack(spacing: 0) {
-                ForEach(ElevationDefaultTab.allCases) { tab in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) { mode = tab }
-                    } label: {
-                        Text(tab.label)
-                            .font(.system(size: 7, weight: mode == tab ? .semibold : .regular))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 1.5)
-                            .background(mode == tab ? Color.green.opacity(0.25) : Color.clear)
-                            .foregroundStyle(mode == tab ? .green : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .background(Color.white.opacity(0.08), in: Capsule())
-            .clipShape(Capsule())
-
-            mockChart
-                .frame(maxHeight: .infinity)
-
-            if config.showGainLossReadout {
-                HStack {
-                    Text("847 ft")
-                        .font(.system(size: 7, weight: .semibold))
-                        .foregroundStyle(.green)
-                    Spacer()
-                    Text("1240 gain")
-                        .font(.system(size: 6))
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private var mockChart: some View {
-        Canvas { context, size in
-            // Build a simple mock elevation profile
-            let pts: [CGPoint] = [
-                CGPoint(x: 0, y: size.height * 0.7),
-                CGPoint(x: size.width * 0.15, y: size.height * 0.45),
-                CGPoint(x: size.width * 0.30, y: size.height * 0.55),
-                CGPoint(x: size.width * 0.50, y: size.height * 0.20),
-                CGPoint(x: size.width * 0.65, y: size.height * 0.40),
-                CGPoint(x: size.width * 0.80, y: size.height * 0.30),
-                CGPoint(x: size.width, y: size.height * 0.55)
-            ]
-
-            // Restrict to "ahead" portion when in ahead mode
-            let drawnPts: [CGPoint] = mode == .ahead
-                ? pts.filter { $0.x >= size.width * 0.40 }
-                : pts
-
-            guard drawnPts.count >= 2 else { return }
-
-            // Filled area
-            var area = Path()
-            area.move(to: CGPoint(x: drawnPts.first!.x, y: size.height))
-            for p in drawnPts { area.addLine(to: p) }
-            area.addLine(to: CGPoint(x: drawnPts.last!.x, y: size.height))
-            area.closeSubpath()
-            context.fill(area, with: .color(.green.opacity(0.25)))
-
-            // Line
-            var line = Path()
-            line.move(to: drawnPts[0])
-            for p in drawnPts.dropFirst() { line.addLine(to: p) }
-            context.stroke(line, with: .color(.green), style: StrokeStyle(lineWidth: 1.5))
-
-            // "Now" marker
-            let nowX = size.width * (mode == .ahead ? 0.42 : 0.45)
-            var rule = Path()
-            rule.move(to: CGPoint(x: nowX, y: 0))
-            rule.addLine(to: CGPoint(x: nowX, y: size.height))
-            context.stroke(rule, with: .color(.white.opacity(0.6)),
-                           style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
-
-            // Waypoint pins
-            if waypointDisplay.showsOnElevation {
-                for x in [size.width * 0.25, size.width * 0.55, size.width * 0.78] {
-                    let pinY: CGFloat = 4
-                    let pinPath = Path { p in
-                        p.move(to: CGPoint(x: x, y: pinY))
-                        p.addLine(to: CGPoint(x: x, y: pinY + 8))
-                    }
-                    context.stroke(pinPath, with: .color(.orange), style: StrokeStyle(lineWidth: 1.2))
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: x - 1.5, y: pinY - 1.5, width: 3, height: 3)),
-                        with: .color(.orange))
-                }
-            }
-        }
     }
 }
 

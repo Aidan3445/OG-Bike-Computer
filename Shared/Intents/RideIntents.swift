@@ -362,8 +362,10 @@ struct ContinueHeldRideIntent: AppIntent {
         // Await the watch's actual reply so failures surface to the user instead
         // of optimistically reporting success.
         let result: Result<Void, Error> = await withCheckedContinuation { continuation in
-            ConnectivityManager.shared.sendContinueHeldRide(summary: held) { result in
-                continuation.resume(returning: result)
+            Task { @MainActor in
+                ConnectivityManager.shared.sendContinueHeldRide(summary: held) { result in
+                    continuation.resume(returning: result)
+                }
             }
         }
 

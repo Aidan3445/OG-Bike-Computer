@@ -117,6 +117,11 @@ class RideSessionManager: ObservableObject {
             self.isPaused = false
             self.writeStateToAppGroup()
         }
+        #if canImport(ActivityKit)
+        // Flip the live activity to "completed" immediately so the user sees
+        // a finish message before HK teardown / dismissal.
+        LiveActivityManager.shared.markCompleted()
+        #endif
         endRide()
         scheduleResync()
     }
@@ -228,10 +233,16 @@ class RideSessionManager: ObservableObject {
             resumeRide()
         case "discard":
             // Short ride — discard both HK workout and app recording
+            #if canImport(ActivityKit)
+            LiveActivityManager.shared.markCompleted()
+            #endif
             sendDiscardRide()
             RideNotificationManager.shared.postRideDiscarded()
         case "end":
             // Normal end — check moving time as a safety net
+            #if canImport(ActivityKit)
+            LiveActivityManager.shared.markCompleted()
+            #endif
             let movingTime = PhoneTelemetryStore.shared.movingTime
             if movingTime < 60 {
                 sendDiscardRide()

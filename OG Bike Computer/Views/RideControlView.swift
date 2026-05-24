@@ -28,6 +28,11 @@ struct RideControlView: View {
     @State private var showRouteDetail = false
     @State private var activeRoute: Route?
     @State private var selectedPage = 0
+    /// True while a Hold or End command has been issued but the watch hasn't yet
+    /// torn down the workout session (which dismisses this view). Disables the
+    /// buttons and shows a progress indicator so the user sees something happened.
+    @State private var isHolding = false
+    @State private var isEnding = false
 
     @Environment(\.dismiss) private var dismiss
 
@@ -69,10 +74,12 @@ struct RideControlView: View {
             Button("Discard", role: .destructive) {
                 // Send discard command to watch — don't call session.endRide()
                 // because the watch's discard() handles ending the HK session
+                isEnding = true
                 session.sendDiscardRide()
                 userSettings.clearRideTracking()
             }
             Button("Save Anyway") {
+                isEnding = true
                 session.optimisticEnd()
                 checkSettingsRevert()
                 dismiss()
@@ -82,6 +89,7 @@ struct RideControlView: View {
         }
         .alert("End Ride?", isPresented: $showEndConfirmation) {
             Button("End & Save", role: .destructive) {
+                isEnding = true
                 session.optimisticEnd()
                 checkSettingsRevert()
                 dismiss()
@@ -310,14 +318,28 @@ struct RideControlView: View {
                 Button {
                     showHoldConfirmation = true
                 } label: {
-                    Label("Hold", systemImage: "hand.raised.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 50)
+                    HStack(spacing: 6) {
+                        if isHolding {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                            Text("Holding…")
+                                .font(.headline)
+                        } else {
+                            Label("Hold", systemImage: "hand.raised.fill")
+                                .font(.headline)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 50)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
+                .disabled(isHolding || isEnding)
                 .confirmationDialog("Put ride on hold?", isPresented: $showHoldConfirmation, titleVisibility: .visible) {
-                    Button("Hold Ride") { session.holdRide() }
+                    Button("Hold Ride") {
+                        isHolding = true
+                        session.holdRide()
+                    }
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("Your data will be saved. Resume from the watch or ride list later.")
@@ -331,12 +353,23 @@ struct RideControlView: View {
                         showEndConfirmation = true
                     }
                 } label: {
-                    Label("End", systemImage: "stop.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 50)
+                    HStack(spacing: 6) {
+                        if isEnding {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                            Text("Ending…")
+                                .font(.headline)
+                        } else {
+                            Label("End", systemImage: "stop.fill")
+                                .font(.headline)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 50)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
+                .disabled(isHolding || isEnding)
             }
         }
     }

@@ -22,7 +22,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private let locationManager = CLLocationManager()
     private let healthStore = HKHealthStore()
     private var mirroredSession: HKWorkoutSession?
-    private var lastPhoneAlertMode: PhoneAlertMode = .off
+    /// Tracks the previous showTurnNotifications setting so we can request
+    /// permission / clear pending notifications when it toggles mid-ride.
+    private var lastShowTurnNotifications: Bool = false
     private var phoneAlertObserver: NSObjectProtocol?
 
     func application(
@@ -83,32 +85,30 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handlePhoneAlertModeChange()
+            self?.handlePhoneAlertPrefsChange()
         }
 
         return true
     }
 
-    private func handlePhoneAlertModeChange() {
-        // Only act when a ride is active
+    private func handlePhoneAlertPrefsChange() {
+        // Only act when a ride is active.
         guard mirroredSession != nil else { return }
 
         let prefs = loadPhoneAlertPreferences()
-        let newMode = prefs.mode
-        guard newMode != lastPhoneAlertMode else { return }
+        let newValue = prefs.showTurnNotifications
+        guard newValue != lastShowTurnNotifications else { return }
 
-        let oldMode = lastPhoneAlertMode
-        lastPhoneAlertMode = newMode
-        print("[AppDelegate] Phone alert mode changed: \(oldMode) → \(newMode)")
+        let oldValue = lastShowTurnNotifications
+        lastShowTurnNotifications = newValue
+        print("[AppDelegate] showTurnNotifications changed: \(oldValue) → \(newValue)")
 
-        // Live Activity is ALWAYS running for the duration of a ride (to
-        // satisfy the HK mirroring grace window — plan §2.7) so we no
-        // longer start/stop it on mode change. Telemetry updates continue
-        // regardless; rich vs minimal slot config is only used at start.
-        if oldMode == .turnNotifications {
+        // Live Activity is always running during a ride; only the banner-
+        // notification side effect toggles here.
+        if oldValue {
             TurnNotificationManager.shared.clearAll()
         }
-        if newMode == .turnNotifications {
+        if newValue {
             TurnNotificationManager.shared.requestPermission()
         }
     }
@@ -213,41 +213,32 @@ extension AppDelegate: HKWorkoutSessionDelegate {
 
     private func startPhoneAlerts() {
         let phonePrefs = loadPhoneAlertPreferences()
-        lastPhoneAlertMode = phonePrefs.mode
-        print("[AppDelegate] startPhoneAlerts called: mode=\(phonePrefs.mode)")
+        lastShowTurnNotifications = phonePrefs.showTurnNotifications
+        print("[AppDelegate] startPhoneAlerts called: showTurnNotifications=\(phonePrefs.showTurnNotifications)")
 
         // ALWAYS start a Live Activity when the mirrored workout begins
         // (plan §2.7). The 10s HK-mirroring grace window requires the
-        // companion iPhone app to either start a Live Activity or risk
-        // session teardown. We start unconditionally; the user pref only
-        // controls whether the activity gets rich live-data updates or
-        // remains a minimal "ride in progress" pill.
-        //
-        // Rich updates path: telemetry handler calls LiveActivityManager
-        // .update() — that already happens regardless of pref.
+        // companion iPhone app to start a Live Activity or risk session
+        // teardown. Live Activity is now unconditional; the user
+        // preference only controls additional banner notifications.
         #if canImport(ActivityKit)
         let unitPrefs = loadUnitPreferences()
         let isImperial = unitPrefs.distance == .miles
-        // Use the user's configured slots when rich mode is on; otherwise
-        // a sensible default so the lock-screen UI still has something
-        // meaningful to show.
-        let slots = (phonePrefs.mode == .liveActivity)
-            ? phonePrefs.liveActivitySlots.map(\.metricType.rawValue)
-            : LiveActivitySlot.defaultSlots.map(\.metricType.rawValue)
-        print("[AppDelegate] Starting Live Activity (imperial=\(isImperial), mode=\(phonePrefs.mode))")
+        let slots = phonePrefs.liveActivitySlots.map(\.metricType.rawValue)
+        print("[AppDelegate] Starting Live Activity (imperial=\(isImperial))")
         LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial, statSlots: slots)
         #else
         print("[AppDelegate] ActivityKit not available on this build")
         #endif
 
-        if phonePrefs.mode == .turnNotifications {
-            print("[AppDelegate] Starting Turn Notifications")
+        if phonePrefs.showTurnNotifications {
+            print("[AppDelegate] Requesting Turn Notification permission")
             TurnNotificationManager.shared.requestPermission()
         }
     }
 
     private func stopPhoneAlerts() {
-        lastPhoneAlertMode = .off
+        lastShowTurnNotifications = false
         #if canImport(ActivityKit)
         LiveActivityManager.shared.endActivity()
         #endif

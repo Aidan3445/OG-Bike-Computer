@@ -61,7 +61,7 @@ private struct ControlsOverlayPreviewContainer: View {
                         Label("Pause", systemImage: "pause.fill")
                             .frame(maxWidth: .infinity)
                     }
-                    .tint(.yellow)
+                    .tint(Color(red: 0.62, green: 0.38, blue: 0.93))
                 }
                 ZStack {
                     if endCountdown > 0 {
