@@ -516,7 +516,7 @@ private struct RoutePickerSheet: View {
 
 private struct MetricPageView: View {
     let page: MetricPage
-    let telemetry: PhoneTelemetryStore
+    @ObservedObject var telemetry: PhoneTelemetryStore
 
     var body: some View {
         VStack(spacing: 0) {

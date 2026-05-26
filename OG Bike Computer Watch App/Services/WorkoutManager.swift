@@ -116,12 +116,21 @@ class WorkoutManager: NSObject, ObservableObject {
     private var splitHRCount: Int = 0
     var navigationAlerts: NavigationAlertPreferences = .default {
         didSet {
-            // When split distance changes mid-ride, reset accumulators so the next
-            // split is measured from the current position with current stats.
-            // Without this, changing e.g. 5mi → 0.5mi fires immediately using stale baselines.
+            // When split distance changes mid-ride, re-anchor to the nearest split
+            // boundary at-or-below current distance — NOT to the current position.
+            // Anchoring to current position offsets every future split by however
+            // many miles were already ridden when the change landed (e.g. phone
+            // settings sync arrives at mile 3 → first 10mi split fires at 13, then
+            // 23, 33, …).
             guard isActive,
                   navigationAlerts.splitAlerts.splitDistance != oldValue.splitAlerts.splitDistance else { return }
-            lastSplitDistance = totalDistance
+            let splitDist = navigationAlerts.splitAlerts.splitDistance
+            if splitDist > 0 {
+                currentSplitNumber = Int(totalDistance / splitDist)
+                lastSplitDistance = Double(currentSplitNumber) * splitDist
+            } else {
+                lastSplitDistance = totalDistance
+            }
             resetSplitAccumulators()
         }
     }
@@ -197,6 +206,16 @@ class WorkoutManager: NSObject, ObservableObject {
     private var fastSampleCount = 0
     private let fastSamplesForResume = 5
     private let minTentativeDuration: TimeInterval = 3.0
+
+    // Position-based fallback for stuck CLLocation.speed readings. CL sometimes
+    // freezes speed at the last pre-stop value (e.g. 9 mph) when stationary,
+    // which both prevents auto-pause from firing and lets a fake "high speed"
+    // false-trigger resume. We derive a trusted speed from a rolling window of
+    // actual positions, and force-pause when displacement is near zero.
+    private var positionBuffer: [(loc: CLLocation, t: Date)] = []
+    private let positionBufferWindow: TimeInterval = 8.0
+    private let stationaryDistanceThreshold: Double = 6.0  // meters over window → paused
+    private let resumeDistanceThreshold: Double = 15.0     // meters of tentative buffer travel to confirm resume
 
     // Gap-safe distance tracking
     private var lastCommittedLocation: CLLocation?
@@ -276,6 +295,7 @@ class WorkoutManager: NSObject, ObservableObject {
         isPaused = false
         autoPauseState = .moving
         slowSampleCount = 0
+        positionBuffer = []
         lastCommittedLocation = nil
         skipNextDistanceGap = false
         lastSplitDistance = 0
@@ -291,6 +311,8 @@ class WorkoutManager: NSObject, ObservableObject {
     func processLocation(_ location: CLLocation) {
         DispatchQueue.main.async {
             self.currentLocation = location
+            self.appendToPositionBuffer(location)
+
             // CLLocation.speed can be stale or unreliable when stationary.
             // Reject readings with invalid speedAccuracy so they don't keep the
             // display pinned to an old value and block auto-pause from firing.
@@ -298,6 +320,14 @@ class WorkoutManager: NSObject, ObservableObject {
                 self.speed = 0
             } else {
                 self.speed = max(location.speed, 0)
+            }
+
+            // While auto-paused (or staging a tentative resume), force speed
+            // to 0 *before* navigation/voice/updateAutoPause read it. CL can
+            // freeze at a stuck non-zero value when stationary, which both
+            // misleads the UI and false-triggers tentative resume otherwise.
+            if self.autoPauseState != .moving {
+                self.speed = 0
             }
 
             self.updateExtendedMetrics(location)
@@ -329,10 +359,10 @@ class WorkoutManager: NSObject, ObservableObject {
 
             self.updateAutoPause()
 
-            // While auto-paused, force the displayed speed to 0 regardless of
-            // what GPS reports — stale/noisy CL readings shouldn't show motion
-            // when the rider is stopped.
-            if self.autoPauseState == .paused {
+            // Re-clamp after updateAutoPause in case state transitioned this tick
+            // (e.g. .moving → .paused). Keeps the UI from briefly flashing the
+            // pre-pause speed value before the next location update.
+            if self.autoPauseState != .moving {
                 self.speed = 0
             }
 
@@ -613,6 +643,7 @@ class WorkoutManager: NSObject, ObservableObject {
         isPaused = false
         autoPauseState = .moving
         slowSampleCount = 0
+        positionBuffer = []
         // Seed lastCommittedLocation from restored track end when continuing
         lastCommittedLocation = continuationBase != nil ? recordedLocations.last : nil
         skipNextDistanceGap = false
@@ -682,9 +713,49 @@ class WorkoutManager: NSObject, ObservableObject {
         // Skip the distance gap from pause period
         skipNextDistanceGap = true
         slowSampleCount = 0
+        positionBuffer = []
         autoPauseState = .moving
         resumeGraceUntil = Date().addingTimeInterval(5)
         resumeSession()
+    }
+
+    /// Append a location to the rolling position buffer and drop entries
+    /// older than `positionBufferWindow` seconds.
+    private func appendToPositionBuffer(_ location: CLLocation) {
+        let now = Date()
+        positionBuffer.append((loc: location, t: now))
+        let cutoff = now.addingTimeInterval(-positionBufferWindow)
+        while let first = positionBuffer.first, first.t < cutoff {
+            positionBuffer.removeFirst()
+        }
+    }
+
+    /// Distance (meters) from the oldest buffered location to the newest.
+    /// Returns 0 when the buffer doesn't yet span a meaningful interval.
+    private func positionBufferDisplacement() -> Double {
+        guard let first = positionBuffer.first,
+              let last = positionBuffer.last,
+              last.t.timeIntervalSince(first.t) >= positionBufferWindow * 0.6 else {
+            return 0
+        }
+        return last.loc.distance(from: first.loc)
+    }
+
+    /// Average ground speed (m/s) derived from the buffer's displacement and
+    /// time span. Independent of CLLocation.speed, so immune to stuck readings.
+    private func positionBufferSpeed() -> Double {
+        guard let first = positionBuffer.first,
+              let last = positionBuffer.last else { return 0 }
+        let dt = last.t.timeIntervalSince(first.t)
+        guard dt >= positionBufferWindow * 0.6 else { return 0 }
+        return last.loc.distance(from: first.loc) / dt
+    }
+
+    /// True once the buffer spans enough time to trust its displacement signal.
+    private var positionBufferReady: Bool {
+        guard let first = positionBuffer.first,
+              let last = positionBuffer.last else { return false }
+        return last.t.timeIntervalSince(first.t) >= positionBufferWindow * 0.6
     }
 
     private func updateAutoPause() {
@@ -699,21 +770,36 @@ class WorkoutManager: NSObject, ObservableObject {
             return
         }
 
-        let speedMPH = speed * 2.23694
         let pauseThreshold = ridePreferences.autoPause.speedThreshold * 2.23694
         let resumeThreshold = pauseThreshold + 1.0
+
+        // Trust the position buffer over CL.speed for the pause decisions.
+        // CL.speed can freeze at a stale value when stationary (sometimes well
+        // above threshold, sometimes just below it), breaking the velocity-only
+        // logic. Buffer speed/displacement are derived from actual movement.
+        let bufferSpeedMPH = positionBufferSpeed() * 2.23694
+        let bufferDisplacement = positionBufferDisplacement()
+        let clSpeedMPH = speed * 2.23694
 
         switch autoPauseState {
         case .moving:
             guard Date() >= resumeGraceUntil else { return }
 
-            if speedMPH < pauseThreshold {
+            // Velocity-based trigger (unchanged): consecutive slow CL samples.
+            if clSpeedMPH < pauseThreshold {
                 slowSampleCount += 1
             } else {
                 slowSampleCount = 0
             }
+            let velocitySaysPaused = slowSampleCount >= slowSamplesForPause
 
-            if slowSampleCount >= slowSamplesForPause && !isPaused {
+            // Position-based trigger: rolling-window displacement near zero.
+            // Catches the case where CL.speed is frozen above threshold while
+            // the rider is actually stationary.
+            let positionSaysPaused = positionBufferReady &&
+                bufferDisplacement < stationaryDistanceThreshold
+
+            if (velocitySaysPaused || positionSaysPaused) && !isPaused {
                 autoPauseState = .paused
                 pauseSession()
                 slowSampleCount = 0
@@ -723,30 +809,34 @@ class WorkoutManager: NSObject, ObservableObject {
             }
 
         case .paused:
-            if speedMPH >= resumeThreshold {
-                // Don't resume HK session yet — just start staging
+            // Resume decision uses buffer-derived speed only. A stuck-high
+            // CL.speed produces no buffer displacement, so it can't false-fire.
+            if bufferSpeedMPH >= resumeThreshold {
                 autoPauseState = .tentativeResume
                 tentativeStartTime = Date()
                 tentativeLocations = []
                 tentativeDistance = 0
                 fastSampleCount = 1
 
-                // Seed buffer with current location
                 if let loc = currentLocation {
                     tentativeLocations.append(loc)
                 }
             }
 
         case .tentativeResume:
-            if speedMPH >= resumeThreshold {
+            if bufferSpeedMPH >= resumeThreshold {
                 fastSampleCount += 1
 
                 let elapsed = tentativeStartTime
                     .map { Date().timeIntervalSince($0) } ?? 0
 
+                // Require sustained fast samples, minimum duration, *and*
+                // enough real displacement in the tentative buffer. The
+                // distance gate is what makes a stuck CL reading unable to
+                // false-confirm: no real movement → no tentativeDistance.
                 if fastSampleCount >= fastSamplesForResume,
-                   elapsed >= minTentativeDuration {
-                    // Confirmed real movement — commit and go live
+                   elapsed >= minTentativeDuration,
+                   tentativeDistance >= resumeDistanceThreshold {
                     commitTentativeBuffer()
                     resumeSession()
                     autoPauseState = .moving
@@ -755,10 +845,8 @@ class WorkoutManager: NSObject, ObservableObject {
                     }
                 }
             } else {
-                // False alarm — discard buffer, stay paused
                 discardTentativeBuffer()
                 autoPauseState = .paused
-                // HK session was never resumed, so no need to re-pause it
             }
         }
     }
@@ -939,6 +1027,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.pendingRouteLocations = []
             self.autoPauseState = .moving
             self.slowSampleCount = 0
+            self.positionBuffer = []
             self.lastCommittedLocation = nil
             self.skipNextDistanceGap = false
             self.clearTentativeBuffer()
@@ -1977,6 +2066,7 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 self.isPaused = false
                 self.skipNextDistanceGap = true
                 self.slowSampleCount = 0
+                self.positionBuffer = []
                 self.autoPauseState = .moving
                 self.resumeGraceUntil = Date().addingTimeInterval(5)
                 self.locationManager.startUpdatingLocation()

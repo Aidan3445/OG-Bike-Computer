@@ -26,8 +26,11 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
     /// Simplified elevation profile (typically a few hundred points or fewer).
     /// nil for older routes; computed by `RouteElevationSimplifier` before send-to-watch.
     var simplifiedElevation: [ElevationSample]?
+    /// Cue Editor overlay: user-curated decisions on which turns to include,
+    /// skip, or rename. Applied at ride time. nil/empty = no curation.
+    var cueEdits: CueEdits?
 
-    init(id: UUID = UUID(), name: String, points: [TrackPoint], waypoints: [Waypoint]? = nil, createdAt: Date = Date(), source: RouteSource? = nil, simplifiedElevation: [ElevationSample]? = nil) {
+    init(id: UUID = UUID(), name: String, points: [TrackPoint], waypoints: [Waypoint]? = nil, createdAt: Date = Date(), source: RouteSource? = nil, simplifiedElevation: [ElevationSample]? = nil, cueEdits: CueEdits? = nil) {
         self.id = id
         self.name = name
         self.points = points
@@ -35,6 +38,7 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
         self.createdAt = createdAt
         self.source = source
         self.simplifiedElevation = simplifiedElevation
+        self.cueEdits = cueEdits
     }
 
     init(from decoder: Decoder) throws {
@@ -46,6 +50,7 @@ struct Route: Codable, Identifiable, Equatable, Hashable {
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         source = try container.decodeIfPresent(RouteSource.self, forKey: .source)
         simplifiedElevation = try container.decodeIfPresent([ElevationSample].self, forKey: .simplifiedElevation)
+        cueEdits = try container.decodeIfPresent(CueEdits.self, forKey: .cueEdits)
     }
 
     func hash(into hasher: inout Hasher) {

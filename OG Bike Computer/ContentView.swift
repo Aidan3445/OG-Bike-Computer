@@ -95,7 +95,8 @@ struct ContentView: View {
                         isQueued: queuedRouteID == route.id,
                         isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
                         canSendToWatch: canSendToWatch,
-                        onSend: { sendToWatch(route) }
+                        onSend: { sendToWatch(route) },
+                        routeStore: routeStore
                     )
                 }
                 .toolbar {

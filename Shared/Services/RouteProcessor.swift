@@ -26,6 +26,7 @@ struct RouteProcessor {
                 calculatedTurnPoints: [],
                 totalDistance: 0,
                 hasWaypoints: false,
+                cueEdits: route.cueEdits,
                 minLat: 0, maxLat: 0, minLon: 0, maxLon: 0)
         }
 
@@ -152,6 +153,7 @@ struct RouteProcessor {
             simplifiedElevation: simplified,
             totalDistance: cumulativeDistance,
             hasWaypoints: !waypointTurns.isEmpty,
+            cueEdits: route.cueEdits,
             minLat: lats.min()!, maxLat: lats.max()!,
             minLon: lons.min()!, maxLon: lons.max()!)
     }
@@ -212,7 +214,8 @@ struct RouteProcessor {
                 distanceFromStart: processedPoints[bestIndex].distanceFromStart,
                 coordinate: processedPoints[bestIndex].coordinate,
                 description: wpt.description,
-                isWaypoint: true
+                isWaypoint: true,
+                waypointID: wpt.id
             )
         }
         .sorted { $0.distanceFromStart < $1.distanceFromStart }

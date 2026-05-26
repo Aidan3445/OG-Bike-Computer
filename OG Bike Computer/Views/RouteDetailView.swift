@@ -18,6 +18,9 @@ struct RouteDetailView: View {
     let isUploadBlocked: Bool
     let canSendToWatch: Bool
     let onSend: () -> Void
+    /// Optional — when provided, enables the Cue Editor. (Callers that don't
+    /// need editing can pass nil.)
+    var routeStore: RouteStore? = nil
     @ObservedObject private var unitState = UnitState.shared
 
     enum PanelState {
@@ -37,8 +40,17 @@ struct RouteDetailView: View {
     @State private var scrubDistance: Double? = nil
     @State private var scrubCoordinate: CLLocationCoordinate2D? = nil
 
+    // Cue Editor state
+    @State private var isEditingCues: Bool = false
+    @StateObject private var cueEditorHolder = CueEditorHolder()
+    /// Live map heading, updated from `onMapCameraChange`. Used to counter-rotate
+    /// the highlight chevrons so they stay aligned with the actual route, not
+    /// with the screen, when the camera turns.
+    @State private var currentMapHeading: Double = 0
+
     var body: some View {
         let _ = unitState.preferences
+        GeometryReader { proxy in
         ZStack(alignment: .bottom) {
             Map(position: $mapPosition) {
                 // Route polyline
@@ -62,6 +74,66 @@ struct RouteDetailView: View {
                             .fill(.red)
                             .frame(width: 14, height: 14)
                             .overlay(Circle().stroke(.white, lineWidth: 2))
+                    }
+                }
+
+                // Cue Editor turn annotations (only while editing).
+                // CueEditorTurnPin owns its own observation of the editor, so
+                // the icon/color updates live — MapKit's annotation diffing
+                // doesn't always re-evaluate the content closure on its own.
+                if isEditingCues, let editor = cueEditorHolder.viewModel {
+                    // Highlight overlay for the selected turn: a thick white
+                    // semi-transparent line on top of the route, with chevrons
+                    // at the endpoints showing direction of travel.
+                    if let selID = editor.selection,
+                       let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
+                        let highlight = editor.highlightCoordinates(for: selEntry)
+                        if highlight.count >= 2 {
+                            MapPolyline(coordinates: highlight)
+                                .stroke(.white.opacity(0.55), lineWidth: 9)
+
+                            // Travel-direction chevrons at start and end. World
+                            // bearings come from the actual polyline segments
+                            // (first→second, second-to-last→last) so the
+                            // arrows visually align with the highlight even
+                            // through bendy approaches; counter-rotated by the
+                            // live map heading so they don't follow the camera.
+                            let startBearing = RouteProcessor.bearing(
+                                from: highlight[0],
+                                to: highlight[1]
+                            )
+                            let endBearing = RouteProcessor.bearing(
+                                from: highlight[highlight.count - 2],
+                                to: highlight[highlight.count - 1]
+                            )
+                            Annotation("", coordinate: highlight[0]) {
+                                HighlightChevron(rotation: startBearing - currentMapHeading)
+                            }
+                            Annotation("", coordinate: highlight[highlight.count - 1]) {
+                                HighlightChevron(rotation: endBearing - currentMapHeading)
+                            }
+                        }
+                    }
+
+                    // Draw unselected pins first; the selected pin goes last
+                    // so it sits on top of overlapping neighbors at the same
+                    // spot (loops, double-backs).
+                    ForEach(editor.allEntries.filter { $0.id != editor.selection }) { entry in
+                        Annotation("", coordinate: entry.turn.coordinate) {
+                            CueEditorTurnPin(editor: editor, entry: entry)
+                                .onTapGesture {
+                                    editor.select(entry.id)
+                                }
+                        }
+                    }
+                    if let selID = editor.selection,
+                       let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
+                        Annotation("", coordinate: selEntry.turn.coordinate) {
+                            CueEditorTurnPin(editor: editor, entry: selEntry)
+                                .onTapGesture {
+                                    editor.select(nil)
+                                }
+                        }
                     }
                 }
 
@@ -147,7 +219,17 @@ struct RouteDetailView: View {
                 MapCompass()
                 MapScaleView()
             }
+            .onMapCameraChange(frequency: .continuous) { context in
+                currentMapHeading = context.camera.heading
+            }
 
+            // Editor panel takes over while in cue-editor mode
+            if isEditingCues, let editor = cueEditorHolder.viewModel {
+                VStack(spacing: 0) {
+                    Spacer()
+                    CueEditorPanel(viewModel: editor, availableHeight: proxy.size.height)
+                }
+            } else {
             // Stats overlay — collapsed (button) ↔ compact (stats)
             VStack(spacing: 0) {
                 Spacer()
@@ -270,38 +352,60 @@ struct RouteDetailView: View {
                     }
                 }
             }
+            }  // end: stats-panel else
         }
-        .navigationTitle(route.name)
+        }  // end: GeometryReader
+        .navigationTitle(isEditingCues ? "Cue Editor" : route.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if canSendToWatch {
+            if isEditingCues {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        if isUploading || isQueued || isUploadBlocked { return }
-                        if isOnWatch {
-                            showOverwriteAlert = true
-                        } else {
-                            onSend()
-                        }
-                    } label: {
-                        Group {
-                            if isUploading {
-                                ProgressView()
-                            } else if isQueued {
-                                Image(systemName: "clock.arrow.circlepath")
-                            } else {
-                                Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
-                            }
-                        }
-                        .font(.title2)
-                        .foregroundStyle(buttonColor(
-                            isUploading: isUploading,
-                            isQueued: isQueued,
-                            isUploadBlocked: isUploadBlocked,
-                            isOnWatch: isOnWatch
-                        ))
+                    Button("Done") {
+                        withAnimation { isEditingCues = false }
                     }
-                    .disabled(isUploadBlocked || isQueued)
+                    .font(.body.weight(.semibold))
+                }
+            } else {
+                if let store = routeStore {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            _ = cueEditorHolder.ensure(for: liveRoute(store: store), routeStore: store)
+                            withAnimation { isEditingCues = true }
+                        } label: {
+                            Image(systemName: "pencil.and.list.clipboard")
+                                .font(.title3)
+                        }
+                    }
+                }
+                if canSendToWatch {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            if isUploading || isQueued || isUploadBlocked { return }
+                            if isOnWatch {
+                                showOverwriteAlert = true
+                            } else {
+                                onSend()
+                            }
+                        } label: {
+                            Group {
+                                if isUploading {
+                                    ProgressView()
+                                } else if isQueued {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                } else {
+                                    Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
+                                }
+                            }
+                            .font(.title2)
+                            .foregroundStyle(buttonColor(
+                                isUploading: isUploading,
+                                isQueued: isQueued,
+                                isUploadBlocked: isUploadBlocked,
+                                isOnWatch: isOnWatch
+                            ))
+                        }
+                        .disabled(isUploadBlocked || isQueued)
+                    }
                 }
             }
         }
@@ -314,6 +418,72 @@ struct RouteDetailView: View {
             Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
         }
         .onAppear { buildRouteCache() }
+        .onChange(of: cueEditorHolder.viewModel?.selection) { _, newSelection in
+            zoomMapToSelection(newSelection)
+        }
+        .onChange(of: isEditingCues) { _, editing in
+            if !editing { cueEditorHolder.teardown() }
+        }
+    }
+
+    /// Look up the latest persisted version of this route — the navigation
+    /// destination's `route` value is captured at push-time and won't reflect
+    /// edits made after entering the screen.
+    private func liveRoute(store: RouteStore) -> Route {
+        store.routes.first(where: { $0.id == route.id }) ?? route
+    }
+
+    /// Pan/zoom the map to focus on the selected turn, oriented so the rider's
+    /// approach heading points "up", and biased so the turn sits about a third
+    /// of the way down from the top of the visible map — i.e., above the
+    /// editor panel no matter how tall the user has dragged it.
+    private func zoomMapToSelection(_ sel: CueEntryID?) {
+        guard let editor = cueEditorHolder.viewModel,
+              let id = sel,
+              let entry = editor.allEntries.first(where: { $0.id == id }) else {
+            return
+        }
+        let heading = editor.inboundBearing(for: entry)
+        // Move the camera target backward along the heading so the turn appears
+        // above the camera-center on screen. ~70m at this zoom keeps the pin
+        // comfortably above the panel without crowding the top edge.
+        let centerOffsetMeters: Double = 70
+        let target = shiftedCoordinate(
+            from: entry.turn.coordinate,
+            distanceMeters: centerOffsetMeters,
+            bearingDegrees: heading + 180
+        )
+        let camera = MapCamera(
+            centerCoordinate: target,
+            distance: 700,             // ≈ a 250m radius framing
+            heading: heading,
+            pitch: 0
+        )
+        withAnimation(.easeInOut(duration: 0.4)) {
+            mapPosition = .camera(camera)
+        }
+    }
+
+    /// Great-circle shift of a coordinate by a given distance along a bearing.
+    private func shiftedCoordinate(
+        from coord: CLLocationCoordinate2D,
+        distanceMeters: Double,
+        bearingDegrees: Double
+    ) -> CLLocationCoordinate2D {
+        let R = 6_371_000.0
+        let bearing = bearingDegrees * .pi / 180
+        let lat1 = coord.latitude * .pi / 180
+        let lon1 = coord.longitude * .pi / 180
+        let angular = distanceMeters / R
+        let lat2 = asin(sin(lat1) * cos(angular) + cos(lat1) * sin(angular) * cos(bearing))
+        let lon2 = lon1 + atan2(
+            sin(bearing) * sin(angular) * cos(lat1),
+            cos(angular) - sin(lat1) * sin(lat2)
+        )
+        return CLLocationCoordinate2D(
+            latitude: lat2 * 180 / .pi,
+            longitude: lon2 * 180 / .pi
+        )
     }
 
     private let minElevDiff: Double = 50 // meters — minimum difference to show markers

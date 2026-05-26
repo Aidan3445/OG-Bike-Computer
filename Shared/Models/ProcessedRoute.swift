@@ -100,6 +100,9 @@ struct TurnPoint {
     let coordinate: CLLocationCoordinate2D
     let description: String?  // e.g. "Turn right onto West School Street"
     let isWaypoint: Bool      // true if from GPX waypoint, false if calculated
+    /// For waypoint-backed turns, the source Waypoint.id. Lets the Cue Editor
+    /// resolve a TurnPoint back to its WaypointDecision. nil for calculated turns.
+    let waypointID: UUID?
 
     /// Convenience init preserving old call sites (calculated turns).
     init(index: Int, angle: Double, direction: TurnDirection, distanceFromStart: Double, coordinate: CLLocationCoordinate2D) {
@@ -110,9 +113,10 @@ struct TurnPoint {
         self.coordinate = coordinate
         self.description = nil
         self.isWaypoint = false
+        self.waypointID = nil
     }
 
-    init(index: Int, angle: Double, direction: TurnDirection, distanceFromStart: Double, coordinate: CLLocationCoordinate2D, description: String?, isWaypoint: Bool) {
+    init(index: Int, angle: Double, direction: TurnDirection, distanceFromStart: Double, coordinate: CLLocationCoordinate2D, description: String?, isWaypoint: Bool, waypointID: UUID? = nil) {
         self.index = index
         self.angle = angle
         self.direction = direction
@@ -120,6 +124,7 @@ struct TurnPoint {
         self.coordinate = coordinate
         self.description = description
         self.isWaypoint = isWaypoint
+        self.waypointID = waypointID
     }
 }
 
@@ -146,13 +151,18 @@ struct RoutePOI {
 struct ProcessedRoute {
     let name: String
     let points: [ProcessedPoint]
+    /// Raw waypoint cues from the GPX/import (pre-overlay). The Cue Editor reads
+    /// this to classify Extra/Good; ride code should use `turnPoints(for:)`.
     let waypointTurnPoints: [TurnPoint]
+    /// Raw detector output (pre-overlay). Same caveat as above.
     let calculatedTurnPoints: [TurnPoint]
     let pois: [RoutePOI]
     /// Simplified elevation series for cheap chart rendering (watch ElevationProfileView).
     let simplifiedElevation: [ElevationSample]
     let totalDistance: Double
     let hasWaypoints: Bool
+    /// User-curated edits applied when computing `turnPoints(for:)`. nil = none.
+    let cueEdits: CueEdits?
 
     let minLat: Double
     let maxLat: Double
@@ -167,6 +177,7 @@ struct ProcessedRoute {
          simplifiedElevation: [ElevationSample] = [],
          totalDistance: Double,
          hasWaypoints: Bool,
+         cueEdits: CueEdits? = nil,
          minLat: Double, maxLat: Double, minLon: Double, maxLon: Double) {
         self.name = name
         self.points = points
@@ -176,21 +187,56 @@ struct ProcessedRoute {
         self.simplifiedElevation = simplifiedElevation
         self.totalDistance = totalDistance
         self.hasWaypoints = hasWaypoints
+        self.cueEdits = cueEdits
         self.minLat = minLat
         self.maxLat = maxLat
         self.minLon = minLon
         self.maxLon = maxLon
     }
 
-    /// Returns the active turn list for a given mode.
+    /// Returns the active turn list for a given mode, with the Cue Editor
+    /// overlay applied where appropriate.
+    ///
+    /// - `.calculated` always ignores edits (raw detector output).
+    /// - `.provided` applies edits to waypoints (drop skipped, override name/dir)
+    ///   then appends approved detector-only turns.
+    /// - `.both` does the same as `.provided`, then fills gaps with remaining
+    ///   calculated turns (suppressing those within 100m of a kept cue).
     func turnPoints(for mode: TurnMode) -> [TurnPoint] {
         switch mode {
-        case .provided:
-            return waypointTurnPoints
         case .calculated:
             return calculatedTurnPoints
+
+        case .provided:
+            let edited = applyEditsToWaypoints(waypointTurnPoints, edits: cueEdits)
+            let approvedDetected = approvedDetectedTurns(edits: cueEdits)
+            return (edited + approvedDetected)
+                .sorted { $0.distanceFromStart < $1.distanceFromStart }
+
         case .both:
-            return mergeTurns(waypoints: waypointTurnPoints, calculated: calculatedTurnPoints)
+            let edited = applyEditsToWaypoints(waypointTurnPoints, edits: cueEdits)
+            let approvedDetected = approvedDetectedTurns(edits: cueEdits)
+            let primary = (edited + approvedDetected)
+                .sorted { $0.distanceFromStart < $1.distanceFromStart }
+            // Suppress raw calculated turns within 100m of anything we've kept.
+            // Also drop any calculated turn the user explicitly dismissed.
+            let dismissedIndices = Set(
+                (cueEdits?.detectedDecisions ?? [:])
+                    .filter { $0.value.status == .dismissed }
+                    .map { $0.key }
+            )
+            let suppressionRadius: Double = 100
+            let gapFill = calculatedTurnPoints.filter { calc in
+                if dismissedIndices.contains(calc.index) { return false }
+                // Already part of the primary list (approved detected)?
+                if primary.contains(where: { $0.index == calc.index && !$0.isWaypoint }) {
+                    return false
+                }
+                return !primary.contains { kept in
+                    abs(kept.distanceFromStart - calc.distanceFromStart) < suppressionRadius
+                }
+            }
+            return (primary + gapFill).sorted { $0.distanceFromStart < $1.distanceFromStart }
         }
     }
 
@@ -199,15 +245,69 @@ struct ProcessedRoute {
         hasWaypoints ? waypointTurnPoints : calculatedTurnPoints
     }
 
-    private func mergeTurns(waypoints: [TurnPoint], calculated: [TurnPoint]) -> [TurnPoint] {
-        let suppressionRadius: Double = 100 // meters
-
-        let filtered = calculated.filter { calc in
-            !waypoints.contains { wpt in
-                abs(wpt.distanceFromStart - calc.distanceFromStart) < suppressionRadius
+    /// Apply the overlay to the raw waypoint cues: drop skipped, apply name and
+    /// direction overrides. The description is resolved as:
+    ///     fullCueOverride > substitute(streetName, into: original) > original.
+    /// Unedited waypoints pass through unchanged.
+    private func applyEditsToWaypoints(_ waypoints: [TurnPoint], edits: CueEdits?) -> [TurnPoint] {
+        guard let edits = edits else { return waypoints }
+        return waypoints.compactMap { tp -> TurnPoint? in
+            guard let wid = tp.waypointID, let decision = edits.waypointDecisions[wid] else {
+                return tp
             }
+            if decision.status == .skipped { return nil }
+            let newDirection = decision.directionOverride ?? tp.direction
+            let newDescription: String?
+            if let custom = decision.fullCueOverride, !custom.isEmpty {
+                newDescription = custom
+            } else if let name = decision.nameOverride, !name.isEmpty {
+                if let original = tp.description, !original.isEmpty {
+                    newDescription = CueTextParser.substitute(in: original, with: name)
+                } else {
+                    newDescription = CueTextParser.compose(direction: newDirection, streetName: name)
+                }
+            } else {
+                newDescription = tp.description
+            }
+            return TurnPoint(
+                index: tp.index,
+                angle: tp.angle,
+                direction: newDirection,
+                distanceFromStart: tp.distanceFromStart,
+                coordinate: tp.coordinate,
+                description: newDescription,
+                isWaypoint: true,
+                waypointID: tp.waypointID
+            )
         }
+    }
 
-        return (waypoints + filtered).sorted { $0.distanceFromStart < $1.distanceFromStart }
+    /// Materialize detector-only turns the user has approved into TurnPoints.
+    /// Description is resolved as fullCueOverride > composed("<verb> onto <name>") > nil.
+    private func approvedDetectedTurns(edits: CueEdits?) -> [TurnPoint] {
+        guard let edits = edits else { return [] }
+        let calcByIndex = Dictionary(uniqueKeysWithValues: calculatedTurnPoints.map { ($0.index, $0) })
+        return edits.detectedDecisions.compactMap { (index, decision) -> TurnPoint? in
+            guard decision.status == .approved, let base = calcByIndex[index] else { return nil }
+            let direction = decision.direction ?? base.direction
+            let desc: String?
+            if let custom = decision.fullCueOverride, !custom.isEmpty {
+                desc = custom
+            } else if let name = decision.name, !name.isEmpty {
+                desc = CueTextParser.compose(direction: direction, streetName: name)
+            } else {
+                desc = nil
+            }
+            return TurnPoint(
+                index: base.index,
+                angle: base.angle,
+                direction: direction,
+                distanceFromStart: base.distanceFromStart,
+                coordinate: base.coordinate,
+                description: desc,
+                isWaypoint: false,
+                waypointID: nil
+            )
+        }
     }
 }

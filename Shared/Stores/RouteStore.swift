@@ -89,4 +89,21 @@ class RouteStore: ObservableObject {
         routes[index] = updated
         onChange?()
     }
+
+    /// Persist Cue Editor decisions back to the stored Route. Returns the updated
+    /// Route so callers (and the watch sync layer) can pick it up.
+    @discardableResult
+    func updateCueEdits(routeID: UUID, edits: CueEdits?) -> Route? {
+        guard let index = routes.firstIndex(where: { $0.id == routeID }) else { return nil }
+        var updated = routes[index]
+        // Treat an empty edits structure as nil so unedited routes stay clean.
+        updated.cueEdits = (edits?.isEmpty == true) ? nil : edits
+        let fileURL = directory.appendingPathComponent("\(routeID.uuidString).json")
+        if let data = try? JSONEncoder().encode(updated) {
+            try? data.write(to: fileURL)
+        }
+        routes[index] = updated
+        onChange?()
+        return updated
+    }
 }
