@@ -130,6 +130,29 @@ class LiveActivityManager {
         }
     }
 
+    /// Push a "held" state to all activities WITHOUT dismissing them. Mirrors
+    /// `markCompleted()` but for the Hold Ride flow — the watch will resume
+    /// the workout on its end, so we don't want a "Ride Complete" message.
+    func markHeld() {
+        let allActivities = Activity<RideActivityAttributes>.activities
+        guard !allActivities.isEmpty else { return }
+        for activity in allActivities {
+            var state = activity.content.state
+            state.rideStatus = "held"
+            state.isPaused = false
+            state.isAutoPaused = false
+            state.isOffRoute = false
+            state.nextTurnDirection = nil
+            state.nextTurnIcon = nil
+            state.nextTurnCue = nil
+            state.distanceToNextTurn = nil
+            let finalState = state
+            Task {
+                await activity.update(ActivityContent(state: finalState, staleDate: nil))
+            }
+        }
+    }
+
     /// Push a "completed" state to all activities WITHOUT dismissing them.
     /// Call this as early as possible in the end-ride flow so the user sees a
     /// "Ride Complete" message immediately, before HK teardown / dismissal.
@@ -157,6 +180,8 @@ class LiveActivityManager {
         // End ALL activities of this type — catches orphans from crashes or double-starts.
         // Push a "completed" state first so any lingering UI shows a finish message
         // instead of the stale pause/resume controls, then schedule auto-dismissal.
+        // If a "held" state was previously stamped (Hold Ride flow), keep it —
+        // the rider intends to resume, not finish.
         let allActivities = Activity<RideActivityAttributes>.activities
         if allActivities.isEmpty {
             print("[LiveActivity] No activities to end")
@@ -166,7 +191,9 @@ class LiveActivityManager {
             for activity in allActivities {
                 Task {
                     var finalState = activity.content.state
-                    finalState.rideStatus = "completed"
+                    if finalState.rideStatus != "held" {
+                        finalState.rideStatus = "completed"
+                    }
                     finalState.isPaused = false
                     finalState.isAutoPaused = false
                     finalState.isOffRoute = false

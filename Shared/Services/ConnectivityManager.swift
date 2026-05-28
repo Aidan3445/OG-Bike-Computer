@@ -455,6 +455,18 @@ extension ConnectivityManager {
         }
     }
 
+    /// Clear the `isOnHold` flag on a ride in the local store + on disk so the
+    /// "On Hold" row disappears immediately when the watch resumes a held ride.
+    /// The full updated summary arrives later via the normal transfer.
+    func clearHeldFlag(rideID: UUID) {
+        guard let store = self.rideStore,
+              let ride = store.rides.first(where: { $0.id == rideID }),
+              ride.onHold else { return }
+        var updated = ride
+        updated.isOnHold = nil
+        store.update(updated)
+    }
+
     func sendRideAck(rideID: UUID) {
         guard WCSession.default.activationState == .activated else { return }
 
@@ -530,6 +542,21 @@ extension ConnectivityManager {
     func sendDiscardRide(rideID: UUID) {
         guard WCSession.default.activationState == .activated else { return }
         let msg: [String: Any] = ["type": "deleteHeldRide", "rideID": rideID.uuidString]
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+                WCSession.default.transferUserInfo(msg)
+            })
+        } else {
+            WCSession.default.transferUserInfo(msg)
+        }
+    }
+
+    /// Notify phone that a held ride is being resumed on the watch. The phone
+    /// uses this to drop the "On Hold" row immediately; the eventual ride
+    /// transfer (hold or end) re-introduces the updated summary.
+    func sendRideContinued(rideID: UUID) {
+        guard WCSession.default.activationState == .activated else { return }
+        let msg: [String: Any] = ["type": "rideContinued", "rideID": rideID.uuidString]
         if WCSession.default.isReachable {
             WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
                 WCSession.default.transferUserInfo(msg)
@@ -931,6 +958,17 @@ extension ConnectivityManager: WCSessionDelegate {
                 }
             }
         }
+
+        // Watch resumed a held ride (userInfo fallback if watch wasn't reachable
+        // when the message was sent).
+        if let type = userInfo["type"] as? String,
+           type == "rideContinued",
+           let idStr = userInfo["rideID"] as? String,
+           let rideID = UUID(uuidString: idStr) {
+            DispatchQueue.main.async {
+                self.clearHeldFlag(rideID: rideID)
+            }
+        }
         #endif
     }
 
@@ -1119,6 +1157,20 @@ extension ConnectivityManager: WCSessionDelegate {
                 }
             }
             replyHandler(["deleted": true])
+            return
+        }
+        // Watch resumed a held ride — drop the "On Hold" row immediately so the
+        // user doesn't see a stale duplicate. The full updated summary will
+        // arrive later via the normal ride transfer when the ride ends or is
+        // held again.
+        if let type = message["type"] as? String,
+           type == "rideContinued",
+           let idStr = message["rideID"] as? String,
+           let rideID = UUID(uuidString: idStr) {
+            DispatchQueue.main.async {
+                self.clearHeldFlag(rideID: rideID)
+            }
+            replyHandler(["received": true])
             return
         }
         #endif

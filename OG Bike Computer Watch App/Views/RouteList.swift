@@ -141,19 +141,5 @@ struct RouteList: View {
         } message: {
             Text("This will permanently delete your held ride. This cannot be undone.")
         }
-        // Phone-initiated start that needs confirmation (held ride would be discarded)
-        .alert("Discard Held Ride?", isPresented: Binding(
-            get: { workout.pendingStartConfirmation != nil },
-            set: { if !$0 { workout.pendingStartConfirmation = nil } }
-        )) {
-            Button("Discard & Start", role: .destructive) {
-                let action = workout.pendingStartConfirmation
-                workout.pendingStartConfirmation = nil
-                action?()
-            }
-            Button("Cancel", role: .cancel) { workout.pendingStartConfirmation = nil }
-        } message: {
-            Text("Starting a new ride will discard your held ride. This cannot be undone.")
-        }
     }
 }

@@ -12,12 +12,11 @@ struct RWGPSCollectionView: View {
     let selectedCollection: RWGPSCollection?
     let routeStore: RouteStore
 
-    @Environment(\.dismiss) private var dismiss
-
     @State private var routes: [ServiceRoute] = []
     @State private var isLoading = false
     @State private var error: String?
     @State private var downloadingID: String?
+    @State private var importedIDs: Set<String> = []
 
     var body: some View {
         Group {
@@ -77,10 +76,11 @@ struct RWGPSCollectionView: View {
                             } label: {
                                 ServiceRouteRow(
                                     route: route,
-                                    isDownloading: downloadingID == route.id
+                                    isDownloading: downloadingID == route.id,
+                                    isImported: importedIDs.contains(route.id)
                                 )
                             }
-                            .disabled(downloadingID != nil)
+                            .disabled(downloadingID != nil || importedIDs.contains(route.id))
                         }
                     } header: {
                         Text(collection.name)
@@ -114,7 +114,9 @@ struct RWGPSCollectionView: View {
                 let route = try await RWGPSClient().downloadRoute(id: serviceRoute.id)
                 await MainActor.run {
                     routeStore.save(route)
-                    dismiss()
+                    RouteImportCoordinator.shared.autoSendIfEnabled(route)
+                    importedIDs.insert(serviceRoute.id)
+                    downloadingID = nil
                 }
             } catch {
                 await MainActor.run {

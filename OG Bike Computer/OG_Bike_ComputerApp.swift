@@ -272,11 +272,10 @@ struct OG_Bike_ComputerApp: App {
     @StateObject private var integrationSettings = IntegrationSettingsStore()
 
     @State private var importedFileURL: URL?
-    @State private var showRideControl = false
 
     var body: some Scene {
         WindowGroup {
-            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings, showRideControlFullScreen: $showRideControl)
+            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings)
                 .onAppear {
                     RouteImportPipeline.shared.configure(routeStore: routeStore)
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
@@ -303,9 +302,12 @@ struct OG_Bike_ComputerApp: App {
                 }
                 .onOpenURL { url in
                     if url.scheme == "ogbikecomputer" && url.host == "ridecontrol" {
-                        if RideSessionManager.shared.isRideActive {
-                            showRideControl = true
-                        }
+                        // Tapping the live activity should just switch to the
+                        // dynamic Ride tab when a ride is active, or fall back
+                        // to the rides list otherwise — no overlay/popover.
+                        let defaults = UserDefaults(suiteName: "group.com.aidan3445.computa")
+                        let dest = RideSessionManager.shared.isRideActive ? "ride" : "rides"
+                        defaults?.set(dest, forKey: "pendingAppNavigation")
                     } else {
                         handleIncomingFile(url)
                     }

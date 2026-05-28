@@ -14,6 +14,12 @@ import Combine
 class RideSessionManager: ObservableObject {
     static let shared = RideSessionManager()
 
+    /// A user-initiated ride command awaiting confirmation from the watch.
+    /// Drives spinner/disabled state on the control buttons.
+    enum PendingCommand: Equatable {
+        case pause, resume, hold, end, discard
+    }
+
     @Published var isRideActive = false {
         didSet {
             if oldValue && !isRideActive {
@@ -26,11 +32,17 @@ class RideSessionManager: ObservableObject {
         }
     }
     @Published var isPaused = false
+    @Published var pendingCommand: PendingCommand?
 
     /// Set when we're about to discard the ride — prevents the next true→false
     /// transition on `isRideActive` from showing a "Waiting for ride from watch"
     /// placeholder, since no ride will actually transfer.
     private var suppressAwaitingOnNextEnd = false
+
+    /// True while an optimistic terminal command (end/hold/discard) is in flight.
+    /// Blocks `mirroredSession.didSet` from re-enabling `isRideActive` until the
+    /// watch confirms by clearing the session.
+    private var suppressActiveRevival = false
 
     /// The mirrored workout session from the watch.
     /// Set by AppDelegate when mirroring starts; cleared when session ends.
@@ -38,6 +50,12 @@ class RideSessionManager: ObservableObject {
         didSet {
             let active = mirroredSession != nil
             DispatchQueue.main.async {
+                if active && self.suppressActiveRevival {
+                    // User has already optimistically ended/held/discarded —
+                    // don't bounce the UI back to active just because the
+                    // mirrored session is still around.
+                    return
+                }
                 self.isRideActive = active
                 if !active { self.isPaused = false }
             }
@@ -47,8 +65,14 @@ class RideSessionManager: ObservableObject {
 
     private let appGroupDefaults = UserDefaults(suiteName: "group.com.aidan3445.computa")
 
-    /// Pending fallback resync task — cancelled when a real HK state callback arrives.
-    private var pendingResyncTask: Task<Void, Never>?
+    /// Clears `pendingCommand` and the optimistic revival lock if the watch
+    /// never confirms. Does NOT revert optimistic state — the user's intent
+    /// stands until a real HK callback says otherwise.
+    private var pendingTimeoutTask: Task<Void, Never>?
+
+    /// How long the UI shows a pending spinner before giving up on the watch.
+    /// Past this, the spinner clears but optimistic state remains.
+    private let pendingTimeout: TimeInterval = 6.0
 
     private init() {}
 
@@ -84,34 +108,37 @@ class RideSessionManager: ObservableObject {
 
     // MARK: - Optimistic Updates
 
-    /// Immediately flips `isPaused` to show feedback, issues the real pause command,
-    /// then schedules a resync after 4 s as a fallback if the watch doesn't respond.
+    /// Flips `isPaused = true` and shows a pending spinner immediately, then
+    /// issues the real pause command. Spinner clears when the watch confirms
+    /// via `handleSessionStateChange` or when the pending timeout fires.
     func optimisticPause() {
         guard mirroredSession != nil else { return }
+        beginPending(.pause)
         DispatchQueue.main.async {
             self.isPaused = true
             self.writeStateToAppGroup()
         }
         pauseRide()
-        scheduleResync()
     }
 
-    /// Immediately flips `isPaused` to show feedback, issues the real resume command,
-    /// then schedules a resync after 4 s as a fallback if the watch doesn't respond.
+    /// Flips `isPaused = false` and shows a pending spinner immediately, then
+    /// issues the real resume command.
     func optimisticResume() {
         guard mirroredSession != nil else { return }
+        beginPending(.resume)
         DispatchQueue.main.async {
             self.isPaused = false
             self.writeStateToAppGroup()
         }
         resumeRide()
-        scheduleResync()
     }
 
-    /// Immediately marks the ride as inactive, issues the real end command,
-    /// then schedules a resync after 4 s as a fallback.
+    /// Marks the ride inactive (dismissing the control screen), flips the Live
+    /// Activity to "completed", and after a short beat issues End. Suppresses
+    /// any mirrored-session republish from bouncing the UI back to active.
     func optimisticEnd() {
         guard mirroredSession != nil else { return }
+        beginPending(.end)
         DispatchQueue.main.async {
             self.isRideActive = false
             self.isPaused = false
@@ -122,55 +149,89 @@ class RideSessionManager: ObservableObject {
         // a finish message before HK teardown / dismissal.
         LiveActivityManager.shared.markCompleted()
         #endif
-        endRide()
-        scheduleResync()
+        // Give the live activity a beat to actually paint the completed state
+        // before tearing down the HK session (which dismisses the activity).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.endRide()
+        }
     }
 
-    // MARK: - Resync
+    /// Like `optimisticEnd`, but issues Hold instead and flips the Live
+    /// Activity to a "held" state.
+    func optimisticHold() {
+        guard mirroredSession != nil else { return }
+        beginPending(.hold)
+        DispatchQueue.main.async {
+            self.isRideActive = false
+            self.isPaused = false
+            self.writeStateToAppGroup()
+        }
+        #if canImport(ActivityKit)
+        LiveActivityManager.shared.markHeld()
+        #endif
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.holdRide()
+        }
+    }
 
-    /// Cancels any pending resync and schedules a new one 4 s from now.
-    private func scheduleResync() {
-        pendingResyncTask?.cancel()
-        pendingResyncTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+    /// Discard the ride with optimistic dismissal — flips the control screen
+    /// off and sends the discard command in the background.
+    func optimisticDiscard() {
+        guard mirroredSession != nil else { return }
+        beginPending(.discard)
+        DispatchQueue.main.async {
+            self.isRideActive = false
+            self.isPaused = false
+            self.writeStateToAppGroup()
+        }
+        #if canImport(ActivityKit)
+        LiveActivityManager.shared.markCompleted()
+        #endif
+        sendDiscardRide()
+    }
+
+    // MARK: - Pending Command Tracking
+
+    /// Mark a command in-flight. Sets `pendingCommand`, locks active-revival
+    /// for terminal commands, and starts a timeout that clears the spinner
+    /// (but not the optimistic state) if the watch never confirms.
+    private func beginPending(_ command: PendingCommand) {
+        pendingTimeoutTask?.cancel()
+        let isTerminal = command == .end || command == .hold || command == .discard
+        if isTerminal {
+            suppressActiveRevival = true
+        }
+        DispatchQueue.main.async {
+            self.pendingCommand = command
+        }
+        let timeout = pendingTimeout
+        pendingTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            await MainActor.run { self?.syncFromSession() }
+            await MainActor.run {
+                self?.pendingCommand = nil
+                self?.suppressActiveRevival = false
+            }
         }
     }
 
-    /// Reconciles published state with the actual HK session state.
-    /// Called by the fallback resync and can be called early when the real callback arrives.
-    private func syncFromSession() {
-        guard let state = mirroredSession?.state else {
-            // Session gone — ride over
-            isRideActive = false
-            isPaused = false
-            writeStateToAppGroup()
-            return
+    /// Clear pending state — called when the watch confirms via a real HK
+    /// state change.
+    private func clearPending() {
+        pendingTimeoutTask?.cancel()
+        pendingTimeoutTask = nil
+        suppressActiveRevival = false
+        DispatchQueue.main.async {
+            self.pendingCommand = nil
         }
-        switch state {
-        case .running:
-            isRideActive = true
-            isPaused = false
-        case .paused:
-            isRideActive = true
-            isPaused = true
-        case .ended, .stopped:
-            isRideActive = false
-            isPaused = false
-        default:
-            break
-        }
-        writeStateToAppGroup()
     }
 
     // MARK: - State Updates
 
-    /// Called by AppDelegate when the mirrored session state changes.
+    /// Called by AppDelegate when the mirrored session state changes —
+    /// authoritative confirmation from the watch.
     func handleSessionStateChange(to state: HKWorkoutSessionState) {
-        // Real confirmation arrived — cancel the fallback resync
-        pendingResyncTask?.cancel()
-        pendingResyncTask = nil
+        clearPending()
         DispatchQueue.main.async {
             switch state {
             case .running:
@@ -228,31 +289,25 @@ class RideSessionManager: ObservableObject {
 
         switch command {
         case "pause":
-            pauseRide()
+            optimisticPause()
         case "resume":
-            resumeRide()
+            optimisticResume()
         case "discard":
             // Short ride — discard both HK workout and app recording
-            #if canImport(ActivityKit)
-            LiveActivityManager.shared.markCompleted()
-            #endif
-            sendDiscardRide()
+            optimisticDiscard()
             RideNotificationManager.shared.postRideDiscarded()
         case "end":
             // Normal end — check moving time as a safety net
-            #if canImport(ActivityKit)
-            LiveActivityManager.shared.markCompleted()
-            #endif
             let movingTime = PhoneTelemetryStore.shared.movingTime
             if movingTime < 60 {
-                sendDiscardRide()
+                optimisticDiscard()
                 RideNotificationManager.shared.postRideDiscarded()
             } else {
-                endRide()
+                optimisticEnd()
                 RideNotificationManager.shared.postRideEnded()
             }
         case "hold":
-            holdRide()
+            optimisticHold()
         default:
             break
         }

@@ -238,9 +238,15 @@ final class CueEditorViewModel: ObservableObject {
             if let custom = d?.fullCueOverride, !custom.isEmpty {
                 return custom
             }
-            if let name = d?.nameOverride, !name.isEmpty,
-               let original = entry.turn.description, !original.isEmpty {
-                return CueTextParser.substitute(in: original, with: name)
+            if let name = d?.nameOverride, !name.isEmpty {
+                if let original = entry.turn.description, !original.isEmpty {
+                    return CueTextParser.substitute(in: original, with: name)
+                }
+                // No original to substitute into — compose from direction + name.
+                return CueTextParser.compose(
+                    direction: d?.directionOverride ?? entry.turn.direction,
+                    streetName: name
+                )
             }
             return entry.turn.description
         case .detected(let idx):
@@ -253,6 +259,31 @@ final class CueEditorViewModel: ObservableObject {
                     direction: d?.direction ?? entry.turn.direction,
                     streetName: name
                 )
+            }
+            return nil
+        }
+    }
+
+    /// What the cue WOULD resolve to using the values currently in the draft
+    /// (street name + direction + full-cue override field). Drives the live
+    /// placeholder in the Custom Cue Text field so the user can see the
+    /// announcement update as they type a street name.
+    func livePreviewFullCue(for entry: CueEntry) -> String? {
+        let trimmedStreet = draft.streetName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedFull = draft.fullCueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedFull.isEmpty { return trimmedFull }
+        switch entry.id {
+        case .waypoint:
+            if !trimmedStreet.isEmpty {
+                if let original = entry.turn.description, !original.isEmpty {
+                    return CueTextParser.substitute(in: original, with: trimmedStreet)
+                }
+                return CueTextParser.compose(direction: draft.direction, streetName: trimmedStreet)
+            }
+            return entry.turn.description
+        case .detected:
+            if !trimmedStreet.isEmpty {
+                return CueTextParser.compose(direction: draft.direction, streetName: trimmedStreet)
             }
             return nil
         }

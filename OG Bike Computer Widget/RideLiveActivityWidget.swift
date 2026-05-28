@@ -90,7 +90,7 @@ struct RideLiveActivity: Widget {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.orange)
                             if let dist = context.state.distanceOffRoute {
-                                Text("+\(formatDistance(dist, imperial: context.attributes.isImperial))")
+                                Text("+\(formatTurnDistance(dist, imperial: context.attributes.isImperial))")
                                     .font(.caption2)
                                     .foregroundStyle(.orange.opacity(0.8))
                             }
@@ -103,7 +103,7 @@ struct RideLiveActivity: Widget {
                             Text(dir)
                                 .font(.caption.weight(.medium))
                             if let dist = context.state.distanceToNextTurn {
-                                Text("in \(formatDistance(dist, imperial: context.attributes.isImperial))")
+                                Text("in \(formatTurnDistance(dist, imperial: context.attributes.isImperial))")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -122,9 +122,17 @@ struct RideLiveActivity: Widget {
                         }
                     } else {
                         HStack(spacing: 6) {
-                            Image(systemName: status == "completed" ? "checkmark.circle.fill" : "bicycle")
-                                .foregroundStyle(Theme.primaryLight)
-                            Text(status == "completed" ? "Ride Complete" : "No Active Ride")
+                            Image(systemName: status == "completed"
+                                  ? "checkmark.circle.fill"
+                                  : status == "held"
+                                    ? "hand.raised.fill"
+                                    : "bicycle")
+                                .foregroundStyle(status == "held" ? .orange : Theme.primaryLight)
+                            Text(status == "completed"
+                                 ? "Ride Complete"
+                                 : status == "held"
+                                    ? "Ride On Hold"
+                                    : "No Active Ride")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white)
                         }
@@ -135,6 +143,9 @@ struct RideLiveActivity: Widget {
                 if status == "completed" {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(Theme.primaryLight)
+                } else if status == "held" {
+                    Image(systemName: "hand.raised.fill")
+                        .foregroundStyle(.orange)
                 } else if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
                     Image(systemName: icon)
                         .foregroundStyle(Theme.primaryLight)
@@ -148,8 +159,12 @@ struct RideLiveActivity: Widget {
                     Text("Done")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(Theme.primaryLight)
+                } else if status == "held" {
+                    Text("Held")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
                 } else if let dist = context.state.distanceToNextTurn {
-                    Text(formatDistance(dist, imperial: context.attributes.isImperial))
+                    Text(formatTurnDistance(dist, imperial: context.attributes.isImperial))
                         .font(.caption2.weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(Theme.primaryLight)
@@ -164,6 +179,9 @@ struct RideLiveActivity: Widget {
                 if status == "completed" {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(Theme.primaryLight)
+                } else if status == "held" {
+                    Image(systemName: "hand.raised.fill")
+                        .foregroundStyle(.orange)
                 } else if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
                     Image(systemName: icon)
                         .foregroundStyle(Theme.primaryLight)
@@ -190,6 +208,7 @@ private struct LockScreenView: View {
     private var hasNav: Bool { state.nextTurnDirection != nil || state.isOffRoute }
     private var isActive: Bool { (state.rideStatus ?? "active") == "active" }
     private var isCompleted: Bool { state.rideStatus == "completed" }
+    private var isHeld: Bool { state.rideStatus == "held" }
 
     var body: some View {
         Group {
@@ -213,7 +232,7 @@ private struct LockScreenView: View {
         }
     }
 
-    // MARK: - Inactive / Completed state
+    // MARK: - Inactive / Completed / Held state
 
     private var inactiveBody: some View {
         HStack(spacing: 12) {
@@ -221,37 +240,55 @@ private struct LockScreenView: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Theme.primaryLight, Theme.primary],
+                            colors: isHeld
+                                ? [Color.orange.opacity(0.9), Color.orange]
+                                : [Theme.primaryLight, Theme.primary],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
                     .frame(width: 36, height: 36)
-                    .shadow(color: Theme.primary.opacity(0.6), radius: 5, y: 1)
-                Image(systemName: isCompleted ? "checkmark" : "bicycle")
+                    .shadow(color: (isHeld ? Color.orange : Theme.primary).opacity(0.6), radius: 5, y: 1)
+                Image(systemName: iconName)
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(isCompleted ? "Ride Complete" : "No Active Ride")
+                Text(titleText)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                Text(isCompleted
-                     ? "Tap to open ride details"
-                     : "Start a ride from the app or watch")
+                Text(subtitleText)
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.65))
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            if isCompleted {
+            if isCompleted || isHeld {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.primaryLight)
+                    .foregroundStyle(isHeld ? .orange : Theme.primaryLight)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+    }
+
+    private var iconName: String {
+        if isCompleted { return "checkmark" }
+        if isHeld { return "hand.raised.fill" }
+        return "bicycle"
+    }
+
+    private var titleText: String {
+        if isCompleted { return "Ride Complete" }
+        if isHeld { return "Ride On Hold" }
+        return "No Active Ride"
+    }
+
+    private var subtitleText: String {
+        if isCompleted { return "Tap to open ride details" }
+        if isHeld { return "Resume from the watch or rides list" }
+        return "Start a ride from the app or watch"
     }
 
     private var activeBody: some View {
@@ -379,7 +416,7 @@ private struct LockScreenView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.orange)
                     if let dist = state.distanceOffRoute {
-                        Text("+\(formatDistance(dist, imperial: isImperial)) from route")
+                        Text("+\(formatTurnDistance(dist, imperial: isImperial)) from route")
                             .font(.caption2)
                             .foregroundStyle(.orange.opacity(0.8))
                     }
@@ -407,7 +444,7 @@ private struct LockScreenView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                         if let dist = state.distanceToNextTurn {
-                            Text("· \(formatDistance(dist, imperial: isImperial))")
+                            Text("· \(formatTurnDistance(dist, imperial: isImperial))")
                                 .font(.caption)
                                 .foregroundStyle(Theme.primaryLight)
                                 .monospacedDigit()
@@ -547,7 +584,7 @@ private struct LockScreenView: View {
             return "\(Int(v))W"
         case "nextTurnDistance":
             guard let v = state.distanceToNextTurn else { return "--" }
-            return formatDistance(v, imperial: isImperial)
+            return formatTurnDistance(v, imperial: isImperial)
         case "nextTurnDirection":
             return state.nextTurnDirection ?? "--"
         default:
@@ -561,21 +598,38 @@ private struct LockScreenView: View {
 private func formatDistance(_ meters: Double, imperial: Bool) -> String {
     if imperial {
         let miles = meters / 1609.34
-        if miles < 0.1 {
-            let feet = Int(meters * 3.28084)
-            return "\(feet) ft"
-        }
-        return miles < 10
-            ? String(format: "%.1f mi", miles)
-            : String(format: "%.0f mi", miles)
+        return String(format: "%.1f mi", miles)
     } else {
-        if meters < 1000 {
-            return "\(Int(meters)) m"
-        }
         let km = meters / 1000
-        return km < 10
-            ? String(format: "%.1f km", km)
-            : String(format: "%.0f km", km)
+        return String(format: "%.1f km", km)
+    }
+}
+
+/// Mirrors the watch's `formatTurnDistance` — steps down through tenths
+/// before switching to feet/meters so short turn distances aren't shown as "0.1 mi".
+private func formatTurnDistance(_ meters: Double, imperial: Bool) -> String {
+    if imperial {
+        let miles = meters / 1609.34
+        if miles >= 1.0 {
+            return String(format: "%.1f mi", miles)
+        }
+        if miles >= 0.1 {
+            let tenths = (miles * 10).rounded() / 10
+            return String(format: "%.1f mi", tenths)
+        }
+        let feet = Int(meters * 3.28084)
+        return "\((feet / 50) * 50) ft"
+    } else {
+        let km = meters / 1000
+        if km >= 1.0 {
+            return String(format: "%.1f km", km)
+        }
+        if km >= 0.1 {
+            let tenths = (km * 10).rounded() / 10
+            return String(format: "%.1f km", tenths)
+        }
+        let m = Int(meters)
+        return "\((m / 50) * 50) m"
     }
 }
 

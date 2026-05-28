@@ -17,6 +17,7 @@ struct RideControlView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject var routeStore: RouteStore
+    @ObservedObject var rideStore: RideStore
     @ObservedObject private var unitState = UnitState.shared
     @ObservedObject private var connectivity = ConnectivityManager.shared
 
@@ -25,14 +26,22 @@ struct RideControlView: View {
     @State private var showSettingsRevertPrompt = false
     @State private var showRoutePicker = false
     @State private var showHoldConfirmation = false
+    @State private var showHoldConflictAlert = false
     @State private var showRouteDetail = false
     @State private var activeRoute: Route?
     @State private var selectedPage = 0
-    /// True while a Hold or End command has been issued but the watch hasn't yet
-    /// torn down the workout session (which dismisses this view). Disables the
-    /// buttons and shows a progress indicator so the user sees something happened.
-    @State private var isHolding = false
-    @State private var isEnding = false
+
+    /// Pending state is sourced from `session.pendingCommand` so it survives
+    /// view rebuilds and stays consistent with Live Activity / widget intents
+    /// that might issue commands while this view is open.
+    private var isPausing: Bool { session.pendingCommand == .pause }
+    private var isResuming: Bool { session.pendingCommand == .resume }
+    private var isHolding: Bool { session.pendingCommand == .hold }
+    private var isEnding: Bool {
+        session.pendingCommand == .end || session.pendingCommand == .discard
+    }
+    private var pauseResumeBusy: Bool { isPausing || isResuming }
+    private var controlsBusy: Bool { isHolding || isEnding }
 
     @Environment(\.dismiss) private var dismiss
 
@@ -72,27 +81,22 @@ struct RideControlView: View {
         .navigationBarTitleDisplayMode(.inline)
         .alert("Discard Ride?", isPresented: $showDiscardAlert) {
             Button("Discard", role: .destructive) {
-                // Send discard command to watch — don't call session.endRide()
-                // because the watch's discard() handles ending the HK session
-                isEnding = true
-                session.sendDiscardRide()
+                // Optimistic discard — dismisses the screen immediately, sends
+                // the command to the watch in the background.
+                session.optimisticDiscard()
                 userSettings.clearRideTracking()
             }
             Button("Save Anyway") {
-                isEnding = true
                 session.optimisticEnd()
                 checkSettingsRevert()
-                dismiss()
             }
         } message: {
             Text("This ride is under 1 minute. Do you want to save it anyway?")
         }
         .alert("End Ride?", isPresented: $showEndConfirmation) {
             Button("End & Save", role: .destructive) {
-                isEnding = true
                 session.optimisticEnd()
                 checkSettingsRevert()
-                dismiss()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -304,19 +308,30 @@ struct RideControlView: View {
                         session.optimisticPause()
                     }
                 } label: {
-                    Label(
-                        session.isPaused ? "Resume" : "Pause",
-                        systemImage: session.isPaused ? "play.fill" : "pause.fill"
-                    )
+                    HStack(spacing: 6) {
+                        if pauseResumeBusy {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                        } else {
+                            Image(systemName: session.isPaused ? "play.fill" : "pause.fill")
+                        }
+                        Text(session.isPaused ? "Resume" : "Pause")
+                    }
                     .font(.headline)
                     .frame(maxWidth: .infinity, minHeight: 50)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(session.isPaused ? .green : .yellow)
+                .disabled(controlsBusy)
 
                 // Hold Ride
                 Button {
-                    showHoldConfirmation = true
+                    if rideStore.heldRide != nil {
+                        showHoldConflictAlert = true
+                    } else {
+                        showHoldConfirmation = true
+                    }
                 } label: {
                     HStack(spacing: 6) {
                         if isHolding {
@@ -334,15 +349,34 @@ struct RideControlView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
-                .disabled(isHolding || isEnding)
+                .disabled(controlsBusy)
                 .confirmationDialog("Put ride on hold?", isPresented: $showHoldConfirmation, titleVisibility: .visible) {
                     Button("Hold Ride") {
-                        isHolding = true
-                        session.holdRide()
+                        session.optimisticHold()
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("Your data will be saved. Resume from the watch or ride list later.")
+                }
+                // Another held ride already exists. Only one hold is allowed at
+                // a time, so the rider has to either finish the old one or
+                // discard it before this ride can go on hold.
+                .alert("Hold This Ride?", isPresented: $showHoldConflictAlert) {
+                    Button("Save & Hold") {
+                        if let existing = rideStore.heldRide {
+                            ConnectivityManager.shared.sendFinalizeHeldRide(summary: existing, rideStore: rideStore)
+                        }
+                        session.optimisticHold()
+                    }
+                    Button("Discard & Hold", role: .destructive) {
+                        if let existing = rideStore.heldRide {
+                            ConnectivityManager.shared.sendDiscardRide(rideID: existing.id)
+                        }
+                        session.optimisticHold()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("You already have a held ride. Save it (finish & keep) or discard it to put this ride on hold.")
                 }
 
                 // End Ride
@@ -369,7 +403,7 @@ struct RideControlView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
-                .disabled(isHolding || isEnding)
+                .disabled(controlsBusy)
             }
         }
     }
@@ -533,19 +567,40 @@ private struct MetricPageView: View {
                 spacing: 0
             ) {
                 ForEach(page.slots) { slot in
-                    let resolved = telemetry.resolve(slot.type)
-                    MetricCell(
-                        icon: slot.type.icon,
-                        label: resolved.label,
-                        value: resolved.value,
-                        unit: resolved.unit
-                    )
+                    if slot.type == .elapsedTime {
+                        // Tick live every second from the derived ride start time,
+                        // so this matches the watch instead of waiting for telemetry pushes.
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let value = liveElapsedTime(at: context.date)
+                            MetricCell(
+                                icon: slot.type.icon,
+                                label: slot.type.label,
+                                value: value,
+                                unit: slot.type.unit
+                            )
+                        }
+                    } else {
+                        let resolved = telemetry.resolve(slot.type)
+                        MetricCell(
+                            icon: slot.type.icon,
+                            label: resolved.label,
+                            value: resolved.value,
+                            unit: resolved.unit
+                        )
+                    }
                 }
             }
             .padding(.horizontal)
 
             Spacer()
         }
+    }
+
+    private func liveElapsedTime(at date: Date) -> String {
+        guard let start = telemetry.rideStartTime else {
+            return formatTime(telemetry.elapsedTime)
+        }
+        return formatTime(max(0, date.timeIntervalSince(start)))
     }
 }
 

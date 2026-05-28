@@ -230,36 +230,41 @@ class VoiceNavigator: NSObject, ObservableObject {
 
             currentTurnIndex = turn.index
             firedTurnAlerts.removeAll()
-            groupedApproachTurnIndices.remove(turn.index)
+            // Keep turn.index in groupedApproachTurnIndices if it's there — the
+            // approach suppression and direction-only at-turn text both rely on
+            // it persisting until the at-turn alert fires.
             trackingFinish = false
             firedFinishAlerts.removeAll()
 
             if passedTurn {
                 if isActivelyMoving {
-                    let dist = nav.distanceToNextTurn
-                    let followingTurn = nav.nearbyFollowingTurn(after: turn)
+                    // Skip a fresh approach alert when this turn was already
+                    // named in the prior compound ("…then turn left onto Main").
+                    // The at-turn alert below still fires (direction-only).
+                    if !groupedApproachTurnIndices.contains(turn.index) {
+                        let dist = nav.distanceToNextTurn
+                        let followingTurn = nav.nearbyFollowingTurn(after: turn)
 
-                    let text: String
-                    if let ft = followingTurn {
-                        groupedApproachTurnIndices.insert(ft.index)
-                        text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn)) then \(followingTurnPhrase(for: ft))."
-                    } else {
-                        text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn))."
-                    }
-                    enqueueAlert(VoiceAlert(
-                        priority: .turnApproach,
-                        text: text,
-                        mode: preferences.turnAlerts.mode(forAlertIndex: 0, totalCount: alertDistances.count),
-                        category: "turnApproach",
-                        alertKey: "turn-approach-\(turn.index)",
-                        // Drop if we've already moved past this turn by the
-                        // time the queue speaks it.
-                        relevanceCheck: { [weak self] in
-                            self?.currentTurnIndex == turn.index
+                        let text: String
+                        if let ft = followingTurn {
+                            groupedApproachTurnIndices.insert(ft.index)
+                            text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn)) then \(followingTurnPhrase(for: ft))."
+                        } else {
+                            text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn))."
                         }
-                    ))
-                    lastTurnAlertTime = Date()
-                    markPassedThresholds(distance: dist, into: &firedTurnAlerts)
+                        enqueueAlert(VoiceAlert(
+                            priority: .turnApproach,
+                            text: text,
+                            mode: preferences.turnAlerts.mode(forAlertIndex: 0, totalCount: alertDistances.count),
+                            category: "turnApproach",
+                            alertKey: "turn-approach-\(turn.index)",
+                            relevanceCheck: { [weak self] in
+                                self?.currentTurnIndex == turn.index
+                            }
+                        ))
+                        lastTurnAlertTime = Date()
+                        markPassedThresholds(distance: dist, into: &firedTurnAlerts)
+                    }
                 }
                 return
             }
@@ -275,7 +280,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                 fired: &firedTurnAlerts,
                 suppressApproach: approachSuppressed,
                 turnIndex: turn.index,
-                atZeroText: "\(self.voiceText(for: turn).localizedCapitalized).",
+                atZeroText: "\(self.atTurnText(for: turn).localizedCapitalized).",
                 approachText: { d in
                     if let ft = followingTurn {
                         self.groupedApproachTurnIndices.insert(ft.index)
@@ -429,6 +434,17 @@ class VoiceNavigator: NSObject, ObservableObject {
         let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
         let brng = atan2(y, x) * 180 / .pi
         return (brng + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    /// At-turn spoken text. When the turn was already named in a prior
+    /// compound approach alert ("…then turn left onto Main"), drop the
+    /// street name and speak the direction only so the rider doesn't hear
+    /// the same name three times in 30 seconds.
+    private func atTurnText(for turn: TurnPoint) -> String {
+        if groupedApproachTurnIndices.contains(turn.index) {
+            return turn.direction.voiceLabel
+        }
+        return voiceText(for: turn)
     }
 
     private func voiceText(for turn: TurnPoint) -> String {

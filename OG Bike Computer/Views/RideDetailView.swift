@@ -616,26 +616,56 @@ private struct ColoredSegment: Identifiable {
 /// Returns both the runs (each ≥1 point) and the gap pairs — adjacent
 /// `(lastPointBeforeGap, firstPointAfterGap)` — so the caller can render
 /// the gaps differently (e.g. dashed grey) from the ridden segments.
+///
+/// Runs that are shorter than `minRunMeters` *or* `minRunSeconds` are
+/// considered too trivial to draw a dashed connector to — typically a
+/// pause-immediately-after-resume blip or GPS jitter — and are dropped
+/// from both the runs and the gap list. The underlying track data is
+/// untouched on disk; this is purely a render-time filter.
 private func splitAtPauseGaps(
     locations: [CLLocation],
-    gapSeconds: TimeInterval = 30
+    gapSeconds: TimeInterval = 30,
+    minRunMeters: Double = 3.048,      // ~10 feet
+    minRunSeconds: TimeInterval = 3
 ) -> (runs: [[CLLocation]], gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)]) {
     guard locations.count >= 2 else { return (runs: [locations], gaps: []) }
-    var runs: [[CLLocation]] = []
-    var gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)] = []
+
+    // 1. Carve into raw runs at every >gapSeconds break.
+    var rawRuns: [[CLLocation]] = []
     var current: [CLLocation] = [locations[0]]
     for i in 1..<locations.count {
         let dt = locations[i].timestamp.timeIntervalSince(locations[i - 1].timestamp)
         if dt > gapSeconds {
-            if current.count >= 1 { runs.append(current) }
-            gaps.append((locations[i - 1].coordinate, locations[i].coordinate))
+            rawRuns.append(current)
             current = [locations[i]]
         } else {
             current.append(locations[i])
         }
     }
-    if !current.isEmpty { runs.append(current) }
-    return (runs: runs.filter { $0.count >= 2 }, gaps: gaps)
+    rawRuns.append(current)
+
+    // 2. Keep only runs that are meaningful in both distance and time.
+    let meaningfulRuns: [[CLLocation]] = rawRuns.filter { run in
+        guard run.count >= 2,
+              let first = run.first,
+              let last = run.last else { return false }
+        let duration = last.timestamp.timeIntervalSince(first.timestamp)
+        var dist: Double = 0
+        for i in 1..<run.count {
+            dist += run[i].distance(from: run[i - 1])
+        }
+        return duration >= minRunSeconds && dist >= minRunMeters
+    }
+
+    // 3. Rebuild gaps as connectors between consecutive *meaningful* runs.
+    var gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)] = []
+    for i in 1..<meaningfulRuns.count {
+        guard let prevEnd = meaningfulRuns[i - 1].last?.coordinate,
+              let nextStart = meaningfulRuns[i].first?.coordinate else { continue }
+        gaps.append((prevEnd, nextStart))
+    }
+
+    return (runs: meaningfulRuns, gaps: gaps)
 }
 
 /// Splits the track into `segmentCount` equal-sized chunks, computes average speed per chunk,

@@ -45,12 +45,16 @@ enum ElevationSmoothing: String, Codable, CaseIterable, Hashable {
         }
     }
 
+    /// Minimum altitude delta (meters) for a GPS sample to count toward gain/loss.
+    /// Only used when the barometer is unavailable — barometric updates use a
+    /// much smaller internal threshold. Bumped above CL vertical noise (~5-10m)
+    /// so flat rides don't accumulate phantom gain from GPS jitter.
     var elevMinDelta: Double {
         switch self {
         case .off: return 0.0
-        case .light: return 1.0
-        case .moderate: return 2.0
-        case .heavy: return 3.0
+        case .light: return 2.0
+        case .moderate: return 4.0
+        case .heavy: return 6.0
         }
     }
 

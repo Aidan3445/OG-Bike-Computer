@@ -38,24 +38,19 @@ struct PhoneAlertPreferences: Codable, Equatable, Hashable {
     /// turn alert in addition to playing the spoken alert. The Live Activity
     /// is always shown regardless of this setting.
     var showTurnNotifications: Bool
-    /// Whether the Live Activity includes the map preview tile.
-    var liveActivityShowMap: Bool
     /// Which metric slots appear in the Live Activity stats grid.
     var liveActivitySlots: [LiveActivitySlot]
 
     static let `default` = PhoneAlertPreferences(
         showTurnNotifications: false,
-        liveActivityShowMap: true,
         liveActivitySlots: LiveActivitySlot.defaultSlots
     )
 
     init(
         showTurnNotifications: Bool = false,
-        liveActivityShowMap: Bool = true,
         liveActivitySlots: [LiveActivitySlot] = LiveActivitySlot.defaultSlots
     ) {
         self.showTurnNotifications = showTurnNotifications
-        self.liveActivityShowMap = liveActivityShowMap
         self.liveActivitySlots = liveActivitySlots
     }
 
@@ -68,7 +63,6 @@ struct PhoneAlertPreferences: Codable, Equatable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case showTurnNotifications
         case mode  // legacy
-        case liveActivityShowMap
         case liveActivitySlots
     }
 
@@ -81,14 +75,12 @@ struct PhoneAlertPreferences: Codable, Equatable, Hashable {
         } else {
             showTurnNotifications = false
         }
-        liveActivityShowMap = try c.decodeIfPresent(Bool.self, forKey: .liveActivityShowMap) ?? true
         liveActivitySlots = try c.decodeIfPresent([LiveActivitySlot].self, forKey: .liveActivitySlots) ?? LiveActivitySlot.defaultSlots
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(showTurnNotifications, forKey: .showTurnNotifications)
-        try c.encode(liveActivityShowMap, forKey: .liveActivityShowMap)
         try c.encode(liveActivitySlots, forKey: .liveActivitySlots)
     }
 }

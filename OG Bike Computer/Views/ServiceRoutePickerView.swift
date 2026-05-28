@@ -18,6 +18,7 @@ struct ServiceRoutePickerView: View {
     @State private var hasMore = true
     @State private var error: String?
     @State private var downloadingID: String?
+    @State private var importedIDs: Set<String> = []
     @State private var showImportSheet = false
 
     // Import by URL
@@ -258,9 +259,13 @@ struct ServiceRoutePickerView: View {
                         Button {
                             downloadRoute(route)
                         } label: {
-                            ServiceRouteRow(route: route, isDownloading: downloadingID == route.id)
+                            ServiceRouteRow(
+                                route: route,
+                                isDownloading: downloadingID == route.id,
+                                isImported: importedIDs.contains(route.id)
+                            )
                         }
-                        .disabled(downloadingID != nil)
+                        .disabled(downloadingID != nil || importedIDs.contains(route.id))
                     } header: {
                         Text("Route Preview")
                     }
@@ -393,6 +398,9 @@ struct ServiceRoutePickerView: View {
                 let route = try await client.downloadRoute(id: serviceRoute.id)
                 await MainActor.run {
                     routeStore.save(route)
+                    RouteImportCoordinator.shared.autoSendIfEnabled(route)
+                    importedIDs.insert(serviceRoute.id)
+                    downloadingID = nil
                 }
             } catch {
                 await MainActor.run {
@@ -443,10 +451,11 @@ struct ServiceRoutePickerView: View {
                 } label: {
                     ServiceRouteRow(
                         route: route,
-                        isDownloading: downloadingID == route.id
+                        isDownloading: downloadingID == route.id,
+                        isImported: importedIDs.contains(route.id)
                     )
                 }
-                .disabled(downloadingID != nil)
+                .disabled(downloadingID != nil || importedIDs.contains(route.id))
             }
         } header: {
             Text("Your Routes")
@@ -457,6 +466,7 @@ struct ServiceRoutePickerView: View {
 struct ServiceRouteRow: View {
     let route: ServiceRoute
     let isDownloading: Bool
+    var isImported: Bool = false
     @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
@@ -469,6 +479,9 @@ struct ServiceRouteRow: View {
                 Spacer()
                 if isDownloading {
                     ProgressView()
+                } else if isImported {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
                 }
             }
             HStack(spacing: 12) {

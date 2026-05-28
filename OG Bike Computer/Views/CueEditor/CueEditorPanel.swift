@@ -21,7 +21,9 @@ struct CueEditorPanel: View {
 
     private var minHeight: CGFloat { availableHeight * 0.25 }
     private var maxHeight: CGFloat { availableHeight * 0.5 }
-    private var defaultHeight: CGFloat { availableHeight / 3 }
+    /// Open at the full ½-screen max — the editor benefits from list space and
+    /// the user can drag it shorter if it crowds the map for a particular turn.
+    private var defaultHeight: CGFloat { maxHeight }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -431,7 +433,7 @@ struct CueEditorPanel: View {
     private func advancedFullCue(entry: CueEntry) -> some View {
         DisclosureGroup {
             TextField(
-                viewModel.displayFullCue(for: entry) ?? "Custom cue text",
+                viewModel.livePreviewFullCue(for: entry) ?? "Custom cue text",
                 text: $viewModel.draft.fullCueText,
                 axis: .vertical
             )

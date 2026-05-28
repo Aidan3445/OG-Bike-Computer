@@ -174,6 +174,21 @@ struct WorkoutView<ExtraTab: View>: View {
         .sheet(isPresented: $showHoldExplainer) {
             holdExplainerSheet
         }
+        // Another held ride already exists — let the rider decide what to do
+        // with it before holding this one.
+        .alert("Hold This Ride?", isPresented: $workout.pendingHoldConflict) {
+            Button("Save & Hold") {
+                workout.resolveHoldConflict(.saveAndHold)
+            }
+            Button("Discard & Hold", role: .destructive) {
+                workout.resolveHoldConflict(.discardAndHold)
+            }
+            Button("Cancel", role: .cancel) {
+                workout.resolveHoldConflict(.cancel)
+            }
+        } message: {
+            Text("You already have a held ride. Save it (finish & keep) or discard it to put this ride on hold.")
+        }
     }
 
     private var holdExplainerSheet: some View {
@@ -202,7 +217,7 @@ struct WorkoutView<ExtraTab: View>: View {
                         UserDefaults.standard.set(true, forKey: "holdExplainerShown")
                     }
                     showHoldExplainer = false
-                    workout.holdRide()
+                    workout.attemptHold()
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
@@ -388,7 +403,7 @@ struct WorkoutView<ExtraTab: View>: View {
             if holdCountdown >= 3.0 {
                 cancelHoldCountdown()
                 if UserDefaults.standard.bool(forKey: "holdExplainerShown") {
-                    workout.holdRide()
+                    workout.attemptHold()
                 } else {
                     holdExplainerDontShow = false
                     showHoldExplainer = true

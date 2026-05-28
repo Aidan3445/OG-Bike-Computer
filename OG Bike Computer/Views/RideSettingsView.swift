@@ -192,7 +192,7 @@ struct RideSettingsView: View {
         }
     }
 
-    // MARK: - Phone Alerts
+    // MARK: - Live Activity
 
     @ViewBuilder
     private var phoneAlertsSection: some View {
@@ -201,18 +201,18 @@ struct RideSettingsView: View {
                 PhoneAlertSettingsView(userSettings: userSettings)
             } label: {
                 HStack {
-                    Text("Phone Alerts")
+                    Text("Live Activity")
                     Spacer()
                     Text(userSettings.settings.phoneAlerts.showTurnNotifications
                          ? "Notifications on"
-                         : "Live Activity")
+                         : "Stats only")
                         .foregroundStyle(.secondary)
                 }
             }
         } header: {
             Label("Phone", systemImage: "iphone")
         } footer: {
-            Text("Customize the ride Live Activity and turn notifications on your iPhone.")
+            Text("Customize the ride Live Activity stats and optional turn notifications on your iPhone.")
         }
     }
 }

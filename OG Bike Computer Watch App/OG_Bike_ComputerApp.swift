@@ -29,18 +29,14 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         ConnectivityManager.shared.onStartRideRequested = { [weak self] (routeID: UUID?, activity: ActivityType) in
             guard let self = self else { return }
             guard !self.workout.isActive else { return }
-            let doStart = {
-                if let routeID = routeID,
-                   let route = self.store.routes.first(where: { $0.id == routeID }) {
-                    self.workout.loadRoute(route)
-                }
-                self.workout.start(activity: activity)
+            // A held ride is allowed to coexist with a new active ride. The
+            // rider only has to resolve the conflict when they later try to
+            // hold this ride — see `WorkoutManager.attemptHold`.
+            if let routeID = routeID,
+               let route = self.store.routes.first(where: { $0.id == routeID }) {
+                self.workout.loadRoute(route)
             }
-            if self.rideStore.heldRide != nil {
-                self.workout.pendingStartConfirmation = doStart
-            } else {
-                doStart()
-            }
+            self.workout.start(activity: activity)
         }
 
         ConnectivityManager.shared.onChangeRouteRequested = { [weak self] routeID in
@@ -66,7 +62,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
         ConnectivityManager.shared.onHoldRideRequested = { [weak self] in
             guard let self = self, self.workout.isActive else { return }
-            self.workout.holdRide()
+            self.workout.attemptHold()
         }
 
         ConnectivityManager.shared.onContinueHeldRideRequested = { [weak self] rideID, providedSummary, ack in
@@ -129,8 +125,6 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
         Task { @MainActor in
             guard !workout.isActive else { return }
-            // If there's a held ride, let the WC message handler decide what to do.
-            guard rideStore.heldRide == nil else { return }
             workout.start(activity: activityType)
         }
     }

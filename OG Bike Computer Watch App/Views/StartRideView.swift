@@ -16,7 +16,6 @@ struct StartRideView: View {
     @ObservedObject var rideStore: RideStore
     @State private var isLoading = false
     @State private var extendedSession: WKExtendedRuntimeSession?
-    @State private var pendingActivity: ActivityType?
 
     var body: some View {
         let _ = unitState.preferences
@@ -71,20 +70,6 @@ struct StartRideView: View {
         .scrollIndicators(.visible)
         .navigationTitle("Start")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Discard Held Ride?", isPresented: Binding(
-            get: { pendingActivity != nil },
-            set: { if !$0 { pendingActivity = nil } }
-        )) {
-            Button("Discard & Start", role: .destructive) {
-                if let activity = pendingActivity {
-                    pendingActivity = nil
-                    doStartRide(activity: activity)
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingActivity = nil }
-        } message: {
-            Text("Starting a new ride will discard your held ride. This cannot be undone.")
-        }
         .onAppear {
             let session = WKExtendedRuntimeSession()
             session.start()
@@ -97,14 +82,6 @@ struct StartRideView: View {
     }
 
     private func startRide(activity: ActivityType) {
-        if rideStore.heldRide != nil {
-            pendingActivity = activity
-        } else {
-            doStartRide(activity: activity)
-        }
-    }
-
-    private func doStartRide(activity: ActivityType) {
         isLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
             if let route {
