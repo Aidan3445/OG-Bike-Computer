@@ -86,25 +86,25 @@ struct SettingsRecommendationView: View {
                     Label("New here? A few things to try", systemImage: "sparkles")
                         .font(.subheadline.weight(.semibold))
 
-                    featureRow(
+                    TipRow(
                         icon: "arrow.triangle.turn.up.right.diamond",
                         color: .cyan,
                         title: "Cue Editor",
                         detail: "Add, edit, or skip turns on any imported route before you ride."
                     )
-                    featureRow(
+                    TipRow(
                         icon: "square.stack.3d.up",
                         color: .indigo,
                         title: "Multi-Ride Viewer",
                         detail: "Stack several rides into one map and stats summary — great for tours and bikepacking trips."
                     )
-                    featureRow(
+                    TipRow(
                         icon: "slider.horizontal.3",
                         color: .purple,
                         title: "Settings update live",
                         detail: "Change anything — metrics, alerts, layouts — and it takes effect mid-ride. No restart needed."
                     )
-                    featureRow(
+                    TipRow(
                         icon: "waveform",
                         color: .red,
                         title: "Siri & Shortcuts",
@@ -130,22 +130,6 @@ struct SettingsRecommendationView: View {
             }
             .padding(.horizontal)
             .padding(.bottom)
-        }
-    }
-
-    @ViewBuilder
-    private func featureRow(icon: String, color: Color, title: String, detail: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon)
-                .foregroundStyle(color)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-                Text(detail)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 

@@ -11,7 +11,7 @@ struct CueEditorTipView: View {
             VStack(spacing: 16) {
                 Image(systemName: "arrow.triangle.turn.up.right.diamond")
                     .font(.system(size: 48))
-                    .foregroundStyle(.accent)
+                    .foregroundStyle(.cyan)
                     .padding(.top, 8)
 
                 Text("Cue Editor")

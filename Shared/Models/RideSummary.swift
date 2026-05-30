@@ -35,6 +35,9 @@ struct RideSummary: Codable, Identifiable {
     var uploads: [ServiceUploadRecord]?
     var isOnHold: Bool?
     var wasAutoFinalized: Bool?
+    /// Route loaded at the time the ride was held. When the ride is continued
+    /// and the route is still on the watch, navigation is restored. nil = free ride.
+    var heldRouteID: UUID?
 
     var onHold: Bool { isOnHold == true }
 
@@ -46,7 +49,8 @@ struct RideSummary: Codable, Identifiable {
          avgHeartRate: Double? = nil, maxHeartRate: Double? = nil,
          highestElevation: Double? = nil, lowestElevation: Double? = nil,
          uploads: [ServiceUploadRecord]? = nil,
-         isOnHold: Bool? = nil, wasAutoFinalized: Bool? = nil) {
+         isOnHold: Bool? = nil, wasAutoFinalized: Bool? = nil,
+         heldRouteID: UUID? = nil) {
         self.id = id
         self.name = name
         self.activityType = activityType
@@ -70,6 +74,7 @@ struct RideSummary: Codable, Identifiable {
         self.uploads = uploads
         self.isOnHold = isOnHold
         self.wasAutoFinalized = wasAutoFinalized
+        self.heldRouteID = heldRouteID
     }
 
     init(from decoder: Decoder) throws {
@@ -98,5 +103,6 @@ struct RideSummary: Codable, Identifiable {
         uploads = try container.decodeIfPresent([ServiceUploadRecord].self, forKey: .uploads)
         isOnHold = try container.decodeIfPresent(Bool.self, forKey: .isOnHold)
         wasAutoFinalized = try container.decodeIfPresent(Bool.self, forKey: .wasAutoFinalized)
+        heldRouteID = try container.decodeIfPresent(UUID.self, forKey: .heldRouteID)
     }
 }

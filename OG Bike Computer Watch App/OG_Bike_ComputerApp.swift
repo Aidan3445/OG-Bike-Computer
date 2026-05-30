@@ -97,7 +97,10 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
                 return
             }
 
-            self.workout.continueHeldRide(summary: held)
+            let route = held.heldRouteID.flatMap { id in
+                self.store.routes.first { $0.id == id }
+            }
+            self.workout.continueHeldRide(summary: held, route: route)
             ack(nil)
         }
 

@@ -13,7 +13,7 @@ enum RoadNameExpander {
 
     // MARK: - Direction abbreviations (case-insensitive, word-boundary match)
 
-    private static let directionAbbreviations: [(pattern: String, replacement: String)] = [
+    nonisolated private static let directionAbbreviations: [(pattern: String, replacement: String)] = [
         ("\\bN\\b\\.?", "North"),
         ("\\bS\\b\\.?", "South"),
         ("\\bE\\b\\.?", "East"),
@@ -26,7 +26,7 @@ enum RoadNameExpander {
 
     // MARK: - Road type abbreviations
 
-    private static let roadAbbreviations: [(pattern: String, replacement: String)] = [
+    nonisolated private static let roadAbbreviations: [(pattern: String, replacement: String)] = [
         ("\\bSt\\b\\.?", "Street"),
         ("\\bAve\\b\\.?", "Avenue"),
         ("\\bBlvd\\b\\.?", "Boulevard"),
@@ -53,8 +53,16 @@ enum RoadNameExpander {
     ]
 
     /// Expand all recognized abbreviations in a road description.
-    static func expand(_ text: String) -> String {
+    /// Pure text manipulation — explicitly nonisolated so it can be called
+    /// from nonisolated contexts (e.g. `ProcessedRoute`'s value-type helpers)
+    /// without crossing the main-actor boundary.
+    nonisolated static func expand(_ text: String) -> String {
         var result = text
+
+        // A slash between two street names ("Main St/N MLK Blvd") indicates the
+        // road has two names. Voice it as " slash " so the secondary name reads
+        // as a distinct street rather than running together.
+        result = expandSlash(in: result)
 
         // Expand direction abbreviations first (they appear before the street name)
         for abbr in directionAbbreviations {
@@ -79,5 +87,19 @@ enum RoadNameExpander {
         }
 
         return result
+    }
+
+    /// Replace "/" between alphanumeric tokens with " slash ", collapsing any
+    /// surrounding whitespace so "A / B", "A /B", and "A/B" all read the same.
+    nonisolated private static func expandSlash(in text: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: "(\\w)\\s*/\\s*(\\w)",
+            options: []
+        ) else { return text }
+        return regex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..., in: text),
+            withTemplate: "$1 slash $2"
+        )
     }
 }

@@ -198,8 +198,8 @@ struct ProcessedRoute {
     /// overlay applied where appropriate.
     ///
     /// - `.calculated` always ignores edits (raw detector output).
-    /// - `.provided` applies edits to waypoints (drop skipped, override name/dir)
-    ///   then appends approved detector-only turns.
+    /// - `.provided` applies edits to waypoints (drop skipped, override name/dir),
+    ///   appends approved detector-only turns, and injects user-added cues.
     /// - `.both` does the same as `.provided`, then fills gaps with remaining
     ///   calculated turns (suppressing those within 100m of a kept cue).
     func turnPoints(for mode: TurnMode) -> [TurnPoint] {
@@ -210,13 +210,15 @@ struct ProcessedRoute {
         case .provided:
             let edited = applyEditsToWaypoints(waypointTurnPoints, edits: cueEdits)
             let approvedDetected = approvedDetectedTurns(edits: cueEdits)
-            return (edited + approvedDetected)
+            let added = addedCueTurns(edits: cueEdits)
+            return (edited + approvedDetected + added)
                 .sorted { $0.distanceFromStart < $1.distanceFromStart }
 
         case .both:
             let edited = applyEditsToWaypoints(waypointTurnPoints, edits: cueEdits)
             let approvedDetected = approvedDetectedTurns(edits: cueEdits)
-            let primary = (edited + approvedDetected)
+            let added = addedCueTurns(edits: cueEdits)
+            let primary = (edited + approvedDetected + added)
                 .sorted { $0.distanceFromStart < $1.distanceFromStart }
             // Suppress raw calculated turns within 100m of anything we've kept.
             // Also drop any calculated turn the user explicitly dismissed.
@@ -275,7 +277,7 @@ struct ProcessedRoute {
                 direction: newDirection,
                 distanceFromStart: tp.distanceFromStart,
                 coordinate: tp.coordinate,
-                description: newDescription,
+                description: newDescription.map(RoadNameExpander.expand),
                 isWaypoint: true,
                 waypointID: tp.waypointID
             )
@@ -304,10 +306,87 @@ struct ProcessedRoute {
                 direction: direction,
                 distanceFromStart: base.distanceFromStart,
                 coordinate: base.coordinate,
-                description: desc,
+                description: desc.map(RoadNameExpander.expand),
                 isWaypoint: false,
                 waypointID: nil
             )
         }
+    }
+
+    /// Materialize user-added cues into TurnPoints, anchoring them to the
+    /// track-point at the cue's recorded index. Out-of-range indices are
+    /// dropped (e.g. after a route re-import that shifted the track).
+    private func addedCueTurns(edits: CueEdits?) -> [TurnPoint] {
+        guard let edits = edits, !edits.addedCues.isEmpty else { return [] }
+        return edits.addedCues.compactMap { cue -> TurnPoint? in
+            guard cue.trackPointIndex >= 0, cue.trackPointIndex < points.count else { return nil }
+            let pt = points[cue.trackPointIndex]
+            let desc: String?
+            if let custom = cue.fullCueOverride, !custom.isEmpty {
+                desc = custom
+            } else if !cue.name.isEmpty {
+                desc = CueTextParser.compose(direction: cue.direction, streetName: cue.name)
+            } else {
+                desc = nil
+            }
+            return TurnPoint(
+                index: cue.trackPointIndex,
+                angle: 0,
+                direction: cue.direction,
+                distanceFromStart: pt.distanceFromStart,
+                coordinate: pt.coordinate,
+                description: desc.map(RoadNameExpander.expand),
+                isWaypoint: false,
+                waypointID: nil
+            )
+        }
+    }
+
+    /// POIs resolved against the overlay: imported POIs get title/coord
+    /// overrides applied and skipped ones removed; user-added POIs are
+    /// appended. The result is what the ride view (and any future watch UI)
+    /// should display. Imported POIs without a matching backing Waypoint id
+    /// (legacy data) pass through unchanged.
+    func resolvedPOIs(importedWaypoints: [Waypoint]) -> [RoutePOI] {
+        // Build an id → imported Waypoint lookup so we can resolve overrides
+        // back to a coordinate when the user has relocated the POI.
+        let importedByID = Dictionary(uniqueKeysWithValues: importedWaypoints.pois.map { ($0.id, $0) })
+        let edits = cueEdits
+        let kept: [RoutePOI] = pois.compactMap { poi -> RoutePOI? in
+            // Find the underlying Waypoint by coordinate match (RoutePOI doesn't
+            // carry the id directly). Pois generated from imports came from
+            // exactly those Waypoints, so coordinate equality is safe enough.
+            let wp = importedByID.values.first { $0.lat == poi.coordinate.latitude && $0.lon == poi.coordinate.longitude && $0.name == poi.name }
+            guard let wp = wp, let decision = edits?.poiDecisions[wp.id] else {
+                return poi
+            }
+            if decision.status == .skipped { return nil }
+            let newName = decision.titleOverride ?? poi.name
+            let newCoord: CLLocationCoordinate2D
+            if let lat = decision.latitudeOverride, let lon = decision.longitudeOverride {
+                newCoord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            } else {
+                newCoord = poi.coordinate
+            }
+            return RoutePOI(
+                coordinate: newCoord,
+                name: newName,
+                description: poi.description,
+                distanceFromStart: poi.distanceFromStart,
+                offRouteDistance: poi.offRouteDistance,
+                nearestPointIndex: poi.nearestPointIndex
+            )
+        }
+        let added: [RoutePOI] = (edits?.addedPOIs ?? []).map { added in
+            RoutePOI(
+                coordinate: CLLocationCoordinate2D(latitude: added.lat, longitude: added.lon),
+                name: added.name,
+                description: nil,
+                distanceFromStart: 0,
+                offRouteDistance: 0,
+                nearestPointIndex: 0
+            )
+        }
+        return kept + added
     }
 }

@@ -1873,7 +1873,8 @@ class WorkoutManager: NSObject, ObservableObject {
             maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
             highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
             lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil,
-            isOnHold: true
+            isOnHold: true,
+            heldRouteID: activeRoute?.id
         )
 
         let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
@@ -1981,13 +1982,21 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
-    func continueHeldRide(summary: RideSummary) {
+    func continueHeldRide(summary: RideSummary, route: Route? = nil) {
         guard !isActive else { return }
 
         let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
         guard let trackData = try? Data(contentsOf: trackURL) else {
             print("[Continue] Could not load track for held ride")
             return
+        }
+
+        // Restore the route that was loaded when the ride was held, if it's still
+        // available on the watch. Free ride otherwise.
+        if let route {
+            loadRoute(route)
+        } else {
+            clearRoute()
         }
 
         let points = TrackEncoder.decodeV5Full(trackData)

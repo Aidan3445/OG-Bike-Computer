@@ -9,6 +9,15 @@
 import ActivityKit
 import Foundation
 
+/// Lifecycle status of the ride that the live activity is showing.
+/// Wire-encoded as its raw string so existing telemetry payloads keep working.
+enum RideStatus: String, Codable, Hashable {
+    case active
+    case completed
+    case held
+    case inactive
+}
+
 struct RideActivityAttributes: ActivityAttributes {
     /// Static data set when the activity starts
     var routeName: String?
@@ -59,10 +68,12 @@ struct RideActivityAttributes: ActivityAttributes {
         var riderLatitude: Double?
         var riderLongitude: Double?
 
-        /// Lifecycle status. nil/"active" = ride in progress; "completed" = ride
-        /// has ended (widget shows a summary message); "inactive" = no ride.
-        /// Optional for back-compat with previously-encoded states.
-        var rideStatus: String?
+        /// Lifecycle status. nil → active for back-compat with previously-
+        /// encoded states.
+        var rideStatus: RideStatus?
+
+        /// Convenience accessor that treats a nil status as `.active`.
+        var status: RideStatus { rideStatus ?? .active }
     }
 }
 #endif

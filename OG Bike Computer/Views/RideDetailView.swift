@@ -307,6 +307,13 @@ struct RideDetailView: View {
                 // Lock paging while scrub is active so the chart drag doesn't
                 // bleed into a horizontal page swap.
                 .scrollDisabled(scrubDistance != nil)
+                .onChange(of: panelPage) { _, newPage in
+                    if newPage == 1 && panelState == .compact {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            panelState = .expanded
+                        }
+                    }
+                }
 
                 panelPageDots()
             } else {
@@ -339,7 +346,7 @@ struct RideDetailView: View {
         .onTapGesture {
             if panelState == .collapsed {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    panelState = .compact
+                    panelState = panelPage == 1 ? .expanded : .compact
                 }
             }
         }
@@ -362,11 +369,12 @@ struct RideDetailView: View {
                     .onEnded { value in
                         guard abs(value.translation.height) > 10 else { return }
 
+                        let skipsCompact = (panelPage == 1)
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                             if value.translation.height > 0 {
                                 switch panelState {
                                 case .expanded:
-                                    panelState = .compact
+                                    panelState = skipsCompact ? .collapsed : .compact
                                 case .compact:
                                     panelState = .collapsed
                                 case .collapsed:
@@ -375,7 +383,7 @@ struct RideDetailView: View {
                             } else {
                                 switch panelState {
                                 case .collapsed:
-                                    panelState = .compact
+                                    panelState = skipsCompact ? .expanded : .compact
                                 case .compact:
                                     panelState = .expanded
                                 case .expanded:

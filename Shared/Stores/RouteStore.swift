@@ -117,7 +117,7 @@ class RouteStore: ObservableObject {
     private func autoResyncIfOnWatch(_ route: Route) {
         #if os(iOS)
         let cm = ConnectivityManager.shared
-        guard cm.routeNamesOnWatch.contains(route.name) else { return }
+        guard cm.routeIDsOnWatch.contains(route.id) else { return }
         cm.sendRoute(route) { _ in }
         #endif
     }

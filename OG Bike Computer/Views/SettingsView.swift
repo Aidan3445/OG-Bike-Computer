@@ -261,7 +261,7 @@ struct SettingsView: View {
                             Text("\($routeStore.routes.count) routes on phone")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text("\(connectivity.routeNamesOnWatch.count) routes on watch")
+                            Text("\(connectivity.routeIDsOnWatch.count) routes on watch")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -270,7 +270,7 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
                 }
-                .disabled(routeStore.routes.isEmpty && connectivity.routeNamesOnWatch.isEmpty)
+                .disabled(routeStore.routes.isEmpty && connectivity.routeIDsOnWatch.isEmpty)
                 
                 Button(role: .destructive) {
                     showClearRides = true
@@ -342,7 +342,7 @@ struct SettingsView: View {
         .sheet(isPresented: $showClearRoutes) {
             ClearRoutesSheet(
                 phoneRouteCount: $routeStore.routes.count,
-                watchRouteCount: connectivity.routeNamesOnWatch.count,
+                watchRouteCount: connectivity.routeIDsOnWatch.count,
                 onConfirm: { deletePhone, deleteWatch in
                     if deletePhone {
                         routeStore.deleteAll()

@@ -29,6 +29,8 @@ enum CueEntryKind: Equatable {
     case edit
     /// Cue sheet and detector agree. Action: Edit, Skip, Approve.
     case good
+    /// User created this cue via the + button. Action: Edit, Skip, Delete.
+    case userAdded
 }
 
 /// Identifier for an editor entry. Stable across reclassification (e.g. when an
@@ -38,6 +40,8 @@ enum CueEntryID: Hashable {
     case waypoint(UUID)
     /// Backed by a detector-only turn (pure Missing).
     case detected(Int)  // TurnPoint.index along the track
+    /// Backed by a user-added cue.
+    case userAddedCue(UUID)
 }
 
 /// A single row in the Cue Editor.

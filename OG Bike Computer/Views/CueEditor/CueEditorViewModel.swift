@@ -36,6 +36,40 @@ struct CueDraft: Equatable {
     var fullCueText: String = ""
 }
 
+/// What the user is doing on the map — drives tap interception and the
+/// panel's collapsed/visible state during the placement flow.
+enum CueEditorPlacementMode: Equatable {
+    case none
+    case addingCue        // next tap snaps to nearest track point (within threshold)
+    case addingWaypoint   // next tap drops a POI at the tapped coordinate
+    case relocatingPOI(UUID)  // next tap moves the selected POI
+}
+
+/// An imported or user-added POI waypoint surfaced in the editor.
+struct WaypointEntry: Identifiable, Equatable {
+    enum Source: Equatable {
+        case imported(UUID)   // imported Waypoint id
+        case userAdded(UUID)  // AddedPOI id
+    }
+    var id: UUID
+    var source: Source
+    var coordinate: CLLocationCoordinate2D
+    var name: String
+    /// Available only for imported entries; nil for user-added.
+    var originalName: String?
+    /// Available only for imported entries; nil for user-added.
+    var originalCoordinate: CLLocationCoordinate2D?
+
+    static func == (lhs: WaypointEntry, rhs: WaypointEntry) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.source == rhs.source &&
+        lhs.coordinate.latitude == rhs.coordinate.latitude &&
+        lhs.coordinate.longitude == rhs.coordinate.longitude &&
+        lhs.name == rhs.name
+    }
+}
+
+
 @MainActor
 final class CueEditorViewModel: ObservableObject {
     // MARK: - Inputs
@@ -49,16 +83,19 @@ final class CueEditorViewModel: ObservableObject {
     /// Pre-classified buckets from the underlying route (does NOT consult edits).
     let classification: CueClassification
 
-    /// All entries (sorted by distance) used by flat-list mode and lookups.
-    let allEntries: [CueEntry]
-
     // MARK: - Working state
 
     /// The current overlay being edited. Committed to RouteStore on each change.
     @Published private(set) var edits: CueEdits
 
-    /// Currently selected entry id (drives map zoom and inline form display).
+    /// Currently selected cue entry id (drives map zoom and inline form display).
     @Published var selection: CueEntryID?
+
+    /// Currently selected waypoint entry id (mutually exclusive with cue selection).
+    @Published var waypointSelection: UUID?
+
+    /// What the user is doing on the map. Drives panel collapse + tap routing.
+    @Published var placementMode: CueEditorPlacementMode = .none
 
     /// Display mode (sectioned vs flat).
     @Published var listMode: CueEditorListMode = .sectioned
@@ -66,12 +103,18 @@ final class CueEditorViewModel: ObservableObject {
     /// Section collapsed state for sectioned mode. Starts with all sections
     /// collapsed — the user opens the ones they want to work on.
     @Published var collapsedSections: Set<CueEntryKind> = [
-        .missingDetected, .extra, .edit, .good
+        .missingDetected, .extra, .edit, .userAdded, .good
     ]
 
+    /// The waypoints section lives outside `CueEntryKind`, so it gets its own
+    /// collapse flag. Default-collapsed to match the cue sections.
+    @Published var waypointSectionCollapsed: Bool = true
+
     /// Live form draft for the currently-selected entry (Add or Edit).
-    /// Mirrors what's about to be committed if the user taps Save.
     @Published var draft: CueDraft = CueDraft()
+
+    /// Working draft for the waypoint edit form.
+    @Published var waypointDraft: String = ""
 
     /// Persisted drafts across cancel: if the user cancels an Add, we remember
     /// what they typed so re-tapping + restores it. Keyed by entry id.
@@ -82,6 +125,9 @@ final class CueEditorViewModel: ObservableObject {
 
     /// True while the user is actively editing an existing cue.
     @Published var isComposingEdit: Bool = false
+
+    /// True while editing a waypoint's title.
+    @Published var isComposingWaypoint: Bool = false
 
     // MARK: - Init
 
@@ -95,9 +141,78 @@ final class CueEditorViewModel: ObservableObject {
             waypoints: processed.waypointTurnPoints,
             calculated: processed.calculatedTurnPoints
         )
-        self.allEntries = classification.all
         // Start from whatever's already persisted (re-entering the editor).
         self.edits = route.cueEdits ?? CueEdits()
+    }
+
+    // MARK: - Computed entries
+
+    /// User-added cues as editor entries. Recomputed from `edits.addedCues`.
+    var addedCueEntries: [CueEntry] {
+        edits.addedCues.compactMap { cue -> CueEntry? in
+            guard cue.trackPointIndex >= 0, cue.trackPointIndex < processed.points.count else { return nil }
+            let pt = processed.points[cue.trackPointIndex]
+            let desc: String?
+            if let custom = cue.fullCueOverride, !custom.isEmpty {
+                desc = custom
+            } else if !cue.name.isEmpty {
+                desc = CueTextParser.compose(direction: cue.direction, streetName: cue.name)
+            } else {
+                desc = nil
+            }
+            let turn = TurnPoint(
+                index: cue.trackPointIndex,
+                angle: 0,
+                direction: cue.direction,
+                distanceFromStart: pt.distanceFromStart,
+                coordinate: pt.coordinate,
+                description: desc,
+                isWaypoint: false,
+                waypointID: nil
+            )
+            return CueEntry(id: .userAddedCue(cue.id), kind: .userAdded, turn: turn)
+        }
+    }
+
+    /// All cue entries (classified + user-added) sorted by distance.
+    var allEntries: [CueEntry] {
+        (classification.all + addedCueEntries)
+            .sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
+    }
+
+    /// Imported + user-added POI waypoints, with edits applied.
+    var waypointEntries: [WaypointEntry] {
+        let importedPOIs = (route.waypoints ?? []).filter { $0.kind == .poi }
+        let imported: [WaypointEntry] = importedPOIs.compactMap { wp in
+            let decision = edits.poiDecisions[wp.id]
+            if decision?.status == .skipped { return nil }
+            let name = decision?.titleOverride ?? wp.name
+            let coord: CLLocationCoordinate2D
+            if let lat = decision?.latitudeOverride, let lon = decision?.longitudeOverride {
+                coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            } else {
+                coord = wp.coordinate
+            }
+            return WaypointEntry(
+                id: wp.id,
+                source: .imported(wp.id),
+                coordinate: coord,
+                name: name,
+                originalName: wp.name,
+                originalCoordinate: wp.coordinate
+            )
+        }
+        let added: [WaypointEntry] = edits.addedPOIs.map { p in
+            WaypointEntry(
+                id: p.id,
+                source: .userAdded(p.id),
+                coordinate: CLLocationCoordinate2D(latitude: p.lat, longitude: p.lon),
+                name: p.name,
+                originalName: nil,
+                originalCoordinate: nil
+            )
+        }
+        return imported + added
     }
 
     /// Bearing of the track approaching this turn, in degrees clockwise from
@@ -177,6 +292,10 @@ final class CueEditorViewModel: ObservableObject {
             guard let decision = edits.detectedDecisions[idx] else { return .pending }
             // Dismissed means "reviewed, not adding" — render like Skipped (greyed).
             return decision.status == .approved ? .approved : .skipped
+        case .userAddedCue:
+            // User-created cues are always considered approved (they wouldn't
+            // exist otherwise). Deleting them removes them from the list.
+            return .approved
         }
     }
 
@@ -190,9 +309,11 @@ final class CueEditorViewModel: ObservableObject {
         switch entry.id {
         case .waypoint(let id):
             guard let d = edits.waypointDecisions[id] else { return false }
-            return d.nameOverride != nil || d.directionOverride != nil
+            return d.nameOverride != nil || d.directionOverride != nil || d.fullCueOverride != nil
         case .detected(let idx):
             return edits.detectedDecisions[idx] != nil
+        case .userAddedCue:
+            return true  // user-added is always "custom" by definition
         }
     }
 
@@ -220,8 +341,13 @@ final class CueEditorViewModel: ObservableObject {
             if let override = edits.detectedDecisions[idx]?.name, !override.isEmpty {
                 return override
             }
-            // Missing-detected has no original cue text — parse the override
-            // form if present, else return nil.
+            if let full = displayFullCue(for: entry), let parsed = CueTextParser.streetName(in: full) {
+                return parsed
+            }
+            return nil
+        case .userAddedCue(let id):
+            let cue = edits.addedCues.first(where: { $0.id == id })
+            if let cue = cue, !cue.name.isEmpty { return cue.name }
             if let full = displayFullCue(for: entry), let parsed = CueTextParser.streetName(in: full) {
                 return parsed
             }
@@ -261,6 +387,13 @@ final class CueEditorViewModel: ObservableObject {
                 )
             }
             return nil
+        case .userAddedCue(let id):
+            guard let cue = edits.addedCues.first(where: { $0.id == id }) else { return nil }
+            if let custom = cue.fullCueOverride, !custom.isEmpty { return custom }
+            if !cue.name.isEmpty {
+                return CueTextParser.compose(direction: cue.direction, streetName: cue.name)
+            }
+            return nil
         }
     }
 
@@ -281,7 +414,7 @@ final class CueEditorViewModel: ObservableObject {
                 return CueTextParser.compose(direction: draft.direction, streetName: trimmedStreet)
             }
             return entry.turn.description
-        case .detected:
+        case .detected, .userAddedCue:
             if !trimmedStreet.isEmpty {
                 return CueTextParser.compose(direction: draft.direction, streetName: trimmedStreet)
             }
@@ -296,6 +429,8 @@ final class CueEditorViewModel: ObservableObject {
             return edits.waypointDecisions[id]?.directionOverride ?? entry.turn.direction
         case .detected(let idx):
             return edits.detectedDecisions[idx]?.direction ?? entry.turn.direction
+        case .userAddedCue(let id):
+            return edits.addedCues.first(where: { $0.id == id })?.direction ?? entry.turn.direction
         }
     }
 
@@ -340,6 +475,8 @@ final class CueEditorViewModel: ObservableObject {
                 return edits.waypointDecisions[id]?.fullCueOverride ?? ""
             case .detected(let idx):
                 return edits.detectedDecisions[idx]?.fullCueOverride ?? ""
+            case .userAddedCue(let id):
+                return edits.addedCues.first(where: { $0.id == id })?.fullCueOverride ?? ""
             }
         }()
         return CueDraft(streetName: street, direction: dir, fullCueText: fullOverride)
@@ -377,13 +514,18 @@ final class CueEditorViewModel: ObservableObject {
     }
 
     /// Walking order for auto-advance: in flat mode, by distance; in sectioned
-    /// mode, follow the current section order (Missing → Extra → Good).
+    /// mode, follow the rendered section order
+    /// (Missing → Extra → Edit → Added → Good).
     private func orderedEntriesForAdvance() -> [CueEntry] {
         switch listMode {
         case .flat:
             return allEntries
         case .sectioned:
-            return classification.missing + classification.extra + classification.good
+            return classification.missing
+                + classification.extra
+                + classification.edit
+                + addedCueEntries
+                + classification.good
         }
     }
 
@@ -473,8 +615,8 @@ final class CueEditorViewModel: ObservableObject {
                 d.fullCueOverride = nil
                 edits.waypointDecisions[id] = d
             }
-        case .detected:
-            break
+        case .detected, .userAddedCue:
+            break  // detector-only and user-added cues have no "original" to revert to
         }
         rememberedDrafts.removeValue(forKey: entry.id)
         draft = CueDraft(
@@ -562,6 +704,10 @@ final class CueEditorViewModel: ObservableObject {
         collapsedSections.contains(kind)
     }
 
+    func toggleWaypointSection() {
+        waypointSectionCollapsed.toggle()
+    }
+
     // MARK: - Persistence
 
     private func commit() {
@@ -570,5 +716,249 @@ final class CueEditorViewModel: ObservableObject {
 
     private func remembered(for entry: CueEntry) -> CueDraft? {
         rememberedDrafts[entry.id]
+    }
+
+    // MARK: - Actions: user-added cues
+
+    /// Begin editing a user-added cue's name/direction/full cue.
+    func beginEditAddedCue(_ entry: CueEntry) {
+        guard case let .userAddedCue(id) = entry.id,
+              let cue = edits.addedCues.first(where: { $0.id == id }) else { return }
+        draft = CueDraft(
+            streetName: cue.name,
+            direction: cue.direction,
+            fullCueText: cue.fullCueOverride ?? ""
+        )
+        isComposingEdit = true
+    }
+
+    /// Commit edits to a user-added cue.
+    func saveEditAddedCue(_ entry: CueEntry) {
+        guard case let .userAddedCue(id) = entry.id,
+              let idx = edits.addedCues.firstIndex(where: { $0.id == id }) else { return }
+        let trimmedStreet = draft.streetName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedFull = draft.fullCueText.trimmingCharacters(in: .whitespacesAndNewlines)
+        edits.addedCues[idx].name = trimmedStreet
+        edits.addedCues[idx].direction = draft.direction
+        edits.addedCues[idx].fullCueOverride = trimmedFull.isEmpty ? nil : trimmedFull
+        isComposingEdit = false
+        rememberedDrafts[entry.id] = draft
+        commit()
+        advance(from: entry.id)
+    }
+
+    /// Remove a user-added cue from the overlay (the only way to "skip" one).
+    func deleteAddedCue(_ entry: CueEntry) {
+        guard case let .userAddedCue(id) = entry.id else { return }
+        edits.addedCues.removeAll { $0.id == id }
+        if selection == entry.id { selection = nil }
+        rememberedDrafts.removeValue(forKey: entry.id)
+        commit()
+    }
+
+    // MARK: - Actions: placement mode
+
+    /// Enter "tap the map to add a cue" mode.
+    func enterAddCueMode() {
+        selection = nil
+        waypointSelection = nil
+        isComposingAdd = false
+        isComposingEdit = false
+        isComposingWaypoint = false
+        placementMode = .addingCue
+    }
+
+    /// Enter "tap the map to drop a waypoint" mode.
+    func enterAddWaypointMode() {
+        selection = nil
+        waypointSelection = nil
+        isComposingAdd = false
+        isComposingEdit = false
+        isComposingWaypoint = false
+        placementMode = .addingWaypoint
+    }
+
+    /// Cancel whatever placement is in progress.
+    func cancelPlacement() {
+        placementMode = .none
+    }
+
+    /// Handle a tap on the map while in a placement mode. No-op outside
+    /// placement modes. Cue placement snaps to the nearest track point within
+    /// `cueSnapThreshold` meters; off-route taps do nothing. Waypoint placement
+    /// drops a POI at the tapped coordinate regardless of proximity.
+    func handleMapTap(at coordinate: CLLocationCoordinate2D) {
+        switch placementMode {
+        case .none:
+            return
+        case .addingCue:
+            guard let snap = nearestTrackPoint(to: coordinate, maxDistance: cueSnapThreshold) else { return }
+            let snappedDistance = processed.points[snap.index].distanceFromStart
+            // If there's already a cue at (or essentially at) this point,
+            // don't create a duplicate — just select it.
+            if let existing = allEntries.first(where: {
+                abs($0.turn.distanceFromStart - snappedDistance) < duplicateCueRadius
+            }) {
+                placementMode = .none
+                select(existing.id)
+                return
+            }
+            let new = AddedCue(
+                trackPointIndex: snap.index,
+                name: "",
+                direction: .straight,
+                fullCueOverride: nil
+            )
+            edits.addedCues.append(new)
+            placementMode = .none
+            commit()
+            // Auto-open the edit form for the newly placed cue. select(...)
+            // resets composing flags, so set isComposingEdit AFTER selection
+            // settles (the swap-shim may defer it a tick).
+            select(.userAddedCue(new.id))
+            DispatchQueue.main.async { [weak self] in
+                self?.isComposingEdit = true
+            }
+        case .addingWaypoint:
+            let new = AddedPOI(
+                lat: coordinate.latitude,
+                lon: coordinate.longitude,
+                name: ""
+            )
+            edits.addedPOIs.append(new)
+            placementMode = .none
+            commit()
+            selectWaypoint(new.id)
+            beginEditWaypointTitle(new.id)
+        case .relocatingPOI(let id):
+            relocateWaypoint(id, to: coordinate)
+            placementMode = .none
+        }
+    }
+
+    /// A new cue tapped within this many meters of an existing one is treated
+    /// as a duplicate and selects the existing entry instead.
+    var duplicateCueRadius: Double { 15 }
+
+    /// Closest threshold (meters) within which a tap snaps to a track point
+    /// when adding a cue. Taps farther than this are ignored.
+    var cueSnapThreshold: Double { 40 }
+
+    /// Find the nearest processed track point to a coordinate, capped at
+    /// `maxDistance` meters. Returns nil if nothing's close enough.
+    private func nearestTrackPoint(
+        to coordinate: CLLocationCoordinate2D,
+        maxDistance: Double
+    ) -> (index: Int, distance: Double)? {
+        let target = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        var best: (index: Int, distance: Double)?
+        for (i, pt) in processed.points.enumerated() {
+            let d = target.distance(from: CLLocation(latitude: pt.coordinate.latitude, longitude: pt.coordinate.longitude))
+            if d <= maxDistance, best == nil || d < best!.distance {
+                best = (i, d)
+            }
+        }
+        return best
+    }
+
+    // MARK: - Actions: waypoints
+
+    func selectWaypoint(_ id: UUID?) {
+        // Clear cue selection so the two are mutually exclusive.
+        selection = nil
+        isComposingAdd = false
+        isComposingEdit = false
+        isComposingWaypoint = false
+        waypointSelection = id
+        if let id = id, let wp = waypointEntries.first(where: { $0.id == id }) {
+            waypointDraft = wp.name
+        }
+    }
+
+    func beginEditWaypointTitle(_ id: UUID) {
+        guard let wp = waypointEntries.first(where: { $0.id == id }) else { return }
+        waypointDraft = wp.name
+        isComposingWaypoint = true
+    }
+
+    func saveWaypointTitle(_ id: UUID) {
+        let trimmed = waypointDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let wp = waypointEntries.first(where: { $0.id == id }) else { return }
+        switch wp.source {
+        case .imported(let waypointID):
+            var d = edits.poiDecisions[waypointID] ?? POIDecision(status: .approved)
+            // Clear override when the user erased back to the original name.
+            if trimmed.isEmpty || trimmed == (wp.originalName ?? "") {
+                d.titleOverride = nil
+            } else {
+                d.titleOverride = trimmed
+            }
+            d.status = .approved
+            edits.poiDecisions[waypointID] = d
+        case .userAdded(let addedID):
+            if let idx = edits.addedPOIs.firstIndex(where: { $0.id == addedID }) {
+                edits.addedPOIs[idx].name = trimmed
+            }
+        }
+        isComposingWaypoint = false
+        commit()
+    }
+
+    func cancelEditWaypointTitle() {
+        isComposingWaypoint = false
+        if let id = waypointSelection, let wp = waypointEntries.first(where: { $0.id == id }) {
+            waypointDraft = wp.name
+        }
+    }
+
+    /// Enter relocate mode for a waypoint — the next map tap moves it.
+    func beginRelocateWaypoint(_ id: UUID) {
+        placementMode = .relocatingPOI(id)
+    }
+
+    private func relocateWaypoint(_ id: UUID, to coordinate: CLLocationCoordinate2D) {
+        guard let wp = waypointEntries.first(where: { $0.id == id }) else { return }
+        switch wp.source {
+        case .imported(let waypointID):
+            var d = edits.poiDecisions[waypointID] ?? POIDecision(status: .approved)
+            d.latitudeOverride = coordinate.latitude
+            d.longitudeOverride = coordinate.longitude
+            d.status = .approved
+            edits.poiDecisions[waypointID] = d
+        case .userAdded(let addedID):
+            if let idx = edits.addedPOIs.firstIndex(where: { $0.id == addedID }) {
+                edits.addedPOIs[idx].lat = coordinate.latitude
+                edits.addedPOIs[idx].lon = coordinate.longitude
+            }
+        }
+        commit()
+    }
+
+    /// Restore an imported waypoint to its as-imported title and coordinate.
+    /// No-op for user-added waypoints (which have no imported state).
+    func revertWaypoint(_ id: UUID) {
+        guard let wp = waypointEntries.first(where: { $0.id == id }) else { return }
+        if case .imported(let waypointID) = wp.source {
+            edits.poiDecisions.removeValue(forKey: waypointID)
+            commit()
+        }
+    }
+
+    /// Delete a user-added waypoint (or skip an imported one). Mirrors the
+    /// asymmetry: imported POIs get a `.skipped` decision so they vanish from
+    /// the ride output without losing the original; user-added POIs are gone
+    /// outright.
+    func deleteWaypoint(_ id: UUID) {
+        guard let wp = waypointEntries.first(where: { $0.id == id }) else { return }
+        switch wp.source {
+        case .imported(let waypointID):
+            var d = edits.poiDecisions[waypointID] ?? POIDecision(status: .skipped)
+            d.status = .skipped
+            edits.poiDecisions[waypointID] = d
+        case .userAdded(let addedID):
+            edits.addedPOIs.removeAll { $0.id == addedID }
+        }
+        if waypointSelection == id { waypointSelection = nil }
+        commit()
     }
 }

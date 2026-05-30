@@ -55,7 +55,7 @@ struct StartRideIntent: AppIntent {
         // Non-nil, non-free-ride route: ensure it's on the watch before starting.
         if let route, !route.isFreeRide {
             let onWatch = await MainActor.run {
-                ConnectivityManager.shared.routeNamesOnWatch.contains(route.name)
+                ConnectivityManager.shared.routeIDsOnWatch.contains(route.id)
             }
 
             if !onWatch {
@@ -202,7 +202,7 @@ struct ChangeRouteIntent: AppIntent {
         ]
 
         let onWatch = await MainActor.run {
-            ConnectivityManager.shared.routeNamesOnWatch.contains(route.name)
+            ConnectivityManager.shared.routeIDsOnWatch.contains(route.id)
         }
 
         if onWatch {

@@ -65,9 +65,18 @@ class PhoneTelemetryStore: ObservableObject {
         DispatchQueue.main.async { [self] in
             elapsedTime = Double(telemetry["elapsedTime"] ?? "") ?? elapsedTime
             // Backsolve the ride's wall-clock start so the UI can tick live
-            // between telemetry messages. Both devices' clocks stay close to NTP,
-            // so this jitters by at most a fraction of a second per message.
-            rideStartTime = Date().addingTimeInterval(-elapsedTime)
+            // between telemetry messages. We only update if it drifts by more
+            // than a half second from the existing estimate — otherwise every
+            // telemetry tick would fire a @Published change that forces the
+            // entire metric grid to re-render without any visible change.
+            let newStart = Date().addingTimeInterval(-elapsedTime)
+            if let existing = rideStartTime {
+                if abs(existing.timeIntervalSince(newStart)) > 0.5 {
+                    rideStartTime = newStart
+                }
+            } else {
+                rideStartTime = newStart
+            }
             movingTime = Double(telemetry["movingTime"] ?? "") ?? movingTime
             totalDistance = Double(telemetry["distance"] ?? "") ?? totalDistance
             averageSpeed = Double(telemetry["avgSpeed"] ?? "") ?? averageSpeed

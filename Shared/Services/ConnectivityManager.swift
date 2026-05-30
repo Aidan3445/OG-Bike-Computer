@@ -17,7 +17,7 @@ final class ConnectivityManager: NSObject, ObservableObject {
     @Published var activationState: WCSessionActivationState = .notActivated
     @Published var isPaired = false
     @Published var isWatchAppInstalled = false
-    @Published var routeNamesOnWatch: Set<String> = []
+    @Published var routeIDsOnWatch: Set<UUID> = []
     @Published var watchStorageSize: Int64 = 0
     @Published var lastEvent: String = "none"
 
@@ -167,8 +167,8 @@ extension ConnectivityManager {
         let ctx = WCSession.default.receivedApplicationContext
 
         DispatchQueue.main.async {
-            if let names = ctx["watchRouteNames"] as? [String] {
-                self.routeNamesOnWatch = Set(names)
+            if let ids = ctx["watchRouteIDs"] as? [String] {
+                self.routeIDsOnWatch = Set(ids.compactMap(UUID.init(uuidString:)))
             }
             if let size = ctx["watchStorageSize"] as? Int64 {
                 self.watchStorageSize = size
@@ -693,10 +693,10 @@ extension ConnectivityManager {
 
     func reportRoutes(_ routes: [Route]) {
         guard WCSession.default.activationState == .activated else { return }
-        let names = routes.map { $0.name }
+        let ids = routes.map { $0.id.uuidString }
         let totalSize = routes.reduce(0) { $0 + ($1.points.count * 32) } // ~32 bytes per coordinate
         try? WCSession.default.updateApplicationContext([
-            "watchRouteNames": names,
+            "watchRouteIDs": ids,
             "watchStorageSize": totalSize
         ])
     }
@@ -770,7 +770,9 @@ extension ConnectivityManager: WCSessionDelegate {
         let activityString = file.metadata?["activityType"]  as? String
 
         DispatchQueue.main.async {
-            if let existing = self.routeStore?.routes.first(where: { $0.name == route.name }) {
+            // Match by UUID so re-sends of an updated route overwrite the prior copy,
+            // while distinct routes that happen to share a name remain separate.
+            if let existing = self.routeStore?.routes.first(where: { $0.id == route.id }) {
                 self.routeStore?.delete(existing)
             }
             self.routeStore?.save(route)
@@ -815,8 +817,8 @@ extension ConnectivityManager: WCSessionDelegate {
         didReceiveApplicationContext applicationContext: [String: Any]
     ) {
         DispatchQueue.main.async {
-            if let names = applicationContext["watchRouteNames"] as? [String] {
-                self.routeNamesOnWatch = Set(names)
+            if let ids = applicationContext["watchRouteIDs"] as? [String] {
+                self.routeIDsOnWatch = Set(ids.compactMap(UUID.init(uuidString:)))
             }
             if let size = applicationContext["watchStorageSize"] as? Int64 {
                 self.watchStorageSize = size

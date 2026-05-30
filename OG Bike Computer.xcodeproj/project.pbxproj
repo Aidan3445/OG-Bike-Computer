@@ -592,6 +592,7 @@
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Reads heart rate during cycling workouts";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and routes";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tracks your position for turn-by-turn navigation during rides";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Uses the barometer to measure elevation gain during rides";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.aidan3445.computa;
@@ -634,6 +635,7 @@
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Reads heart rate during cycling workouts";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Records cycling workouts and routes";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tracks your position for turn-by-turn navigation during rides";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Uses the barometer to measure elevation gain during rides";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.aidan3445.computa;

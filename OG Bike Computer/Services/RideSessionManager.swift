@@ -137,21 +137,7 @@ class RideSessionManager: ObservableObject {
     /// Activity to "completed", and after a short beat issues End. Suppresses
     /// any mirrored-session republish from bouncing the UI back to active.
     func optimisticEnd() {
-        guard mirroredSession != nil else { return }
-        beginPending(.end)
-        DispatchQueue.main.async {
-            self.isRideActive = false
-            self.isPaused = false
-            self.writeStateToAppGroup()
-        }
-        #if canImport(ActivityKit)
-        // Flip the live activity to "completed" immediately so the user sees
-        // a finish message before HK teardown / dismissal.
-        LiveActivityManager.shared.markCompleted()
-        #endif
-        // Give the live activity a beat to actually paint the completed state
-        // before tearing down the HK session (which dismisses the activity).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+        beginTerminalCommand(.end, markStatus: { $0.markCompleted() }) { [weak self] in
             self?.endRide()
         }
     }
@@ -159,19 +145,35 @@ class RideSessionManager: ObservableObject {
     /// Like `optimisticEnd`, but issues Hold instead and flips the Live
     /// Activity to a "held" state.
     func optimisticHold() {
+        beginTerminalCommand(.hold, markStatus: { $0.markHeld() }) { [weak self] in
+            self?.holdRide()
+        }
+    }
+
+    /// Shared scaffold for the optimistic Hold / End flows:
+    /// 1. mark pending command & flip `isRideActive` off (dismisses Ride tab)
+    /// 2. stamp the live activity with a terminal status so the user sees it
+    /// 3. wait `terminalRepaintDelay` so the activity actually paints
+    /// 4. send the real watch command
+    private func beginTerminalCommand(
+        _ command: PendingCommand,
+        markStatus: (LiveActivityManager) -> Void,
+        send: @escaping () -> Void
+    ) {
         guard mirroredSession != nil else { return }
-        beginPending(.hold)
+        beginPending(command)
         DispatchQueue.main.async {
             self.isRideActive = false
             self.isPaused = false
             self.writeStateToAppGroup()
         }
         #if canImport(ActivityKit)
-        LiveActivityManager.shared.markHeld()
+        markStatus(LiveActivityManager.shared)
+        let delay = LiveActivityManager.terminalRepaintDelay
+        #else
+        let delay: TimeInterval = 0
         #endif
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            self?.holdRide()
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: send)
     }
 
     /// Discard the ride with optimistic dismissal — flips the control screen

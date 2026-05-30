@@ -72,7 +72,7 @@ class LiveActivityManager {
             distanceOffRoute: nil,
             riderLatitude: nil,
             riderLongitude: nil,
-            rideStatus: "active"
+            rideStatus: .active
         )
 
         let content = ActivityContent(state: initialState, staleDate: nil)
@@ -120,7 +120,7 @@ class LiveActivityManager {
             distanceOffRoute: Double(telemetry["distOffRoute"] ?? ""),
             riderLatitude: Double(telemetry["lat"] ?? ""),
             riderLongitude: Double(telemetry["lon"] ?? ""),
-            rideStatus: "active"
+            rideStatus: .active
         )
 
         let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(10))
@@ -130,86 +130,88 @@ class LiveActivityManager {
         }
     }
 
-    /// Push a "held" state to all activities WITHOUT dismissing them. Mirrors
-    /// `markCompleted()` but for the Hold Ride flow — the watch will resume
-    /// the workout on its end, so we don't want a "Ride Complete" message.
+    /// How long the live activity should remain visible after the watch ends
+    /// the underlying workout, so the rider has time to see the final state.
+    static let postEndDismissalDelay: TimeInterval = 60
+    /// Time the caller should wait after stamping a terminal status before
+    /// tearing the workout session down, giving the activity time to repaint.
+    static let terminalRepaintDelay: TimeInterval = 1.2
+
+    /// Push a "held" state to all activities WITHOUT dismissing them. The
+    /// watch will resume the workout on its end, so we keep the activity
+    /// alive but show a hand-raised banner instead of "Ride Complete".
     func markHeld() {
-        let allActivities = Activity<RideActivityAttributes>.activities
-        guard !allActivities.isEmpty else { return }
-        for activity in allActivities {
-            var state = activity.content.state
-            state.rideStatus = "held"
-            state.isPaused = false
-            state.isAutoPaused = false
-            state.isOffRoute = false
-            state.nextTurnDirection = nil
-            state.nextTurnIcon = nil
-            state.nextTurnCue = nil
-            state.distanceToNextTurn = nil
-            let finalState = state
-            Task {
-                await activity.update(ActivityContent(state: finalState, staleDate: nil))
-            }
-        }
+        applyTerminalStatus(.held)
     }
 
     /// Push a "completed" state to all activities WITHOUT dismissing them.
     /// Call this as early as possible in the end-ride flow so the user sees a
     /// "Ride Complete" message immediately, before HK teardown / dismissal.
     func markCompleted() {
+        applyTerminalStatus(.completed)
+    }
+
+    func endActivity() {
+        // End ALL activities of this type — catches orphans from crashes or
+        // double-starts. Stamp a terminal status first so any lingering UI
+        // shows the finish/hold message instead of stale pause/resume
+        // controls, then schedule auto-dismissal. If `markHeld()` already
+        // stamped the activity, preserve that — the rider intends to resume.
+        let allActivities = Activity<RideActivityAttributes>.activities
+        guard !allActivities.isEmpty else {
+            print("[LiveActivity] No activities to end")
+            currentActivity = nil
+            return
+        }
+        print("[LiveActivity] Ending \(allActivities.count) activity(ies)")
+        let dismissAt = Date().addingTimeInterval(Self.postEndDismissalDelay)
+        for activity in allActivities {
+            let finalState = clearedState(
+                from: activity.content.state,
+                override: activity.content.state.status == .held ? nil : .completed
+            )
+            Task {
+                await activity.update(ActivityContent(state: finalState, staleDate: nil))
+                await activity.end(
+                    ActivityContent(state: finalState, staleDate: nil),
+                    dismissalPolicy: .after(dismissAt)
+                )
+            }
+        }
+        currentActivity = nil
+    }
+
+    // MARK: - Helpers
+
+    /// Stamp every running activity with `status` and clear the navigation /
+    /// pause fields. Used for non-dismissing transitions (held / completed).
+    private func applyTerminalStatus(_ status: RideStatus) {
         let allActivities = Activity<RideActivityAttributes>.activities
         guard !allActivities.isEmpty else { return }
         for activity in allActivities {
-            var state = activity.content.state
-            state.rideStatus = "completed"
-            state.isPaused = false
-            state.isAutoPaused = false
-            state.isOffRoute = false
-            state.nextTurnDirection = nil
-            state.nextTurnIcon = nil
-            state.nextTurnCue = nil
-            state.distanceToNextTurn = nil
-            let finalState = state
+            let finalState = clearedState(from: activity.content.state, override: status)
             Task {
                 await activity.update(ActivityContent(state: finalState, staleDate: nil))
             }
         }
     }
 
-    func endActivity() {
-        // End ALL activities of this type — catches orphans from crashes or double-starts.
-        // Push a "completed" state first so any lingering UI shows a finish message
-        // instead of the stale pause/resume controls, then schedule auto-dismissal.
-        // If a "held" state was previously stamped (Hold Ride flow), keep it —
-        // the rider intends to resume, not finish.
-        let allActivities = Activity<RideActivityAttributes>.activities
-        if allActivities.isEmpty {
-            print("[LiveActivity] No activities to end")
-        } else {
-            print("[LiveActivity] Ending \(allActivities.count) activity(ies)")
-            let dismissAt = Date().addingTimeInterval(60)
-            for activity in allActivities {
-                Task {
-                    var finalState = activity.content.state
-                    if finalState.rideStatus != "held" {
-                        finalState.rideStatus = "completed"
-                    }
-                    finalState.isPaused = false
-                    finalState.isAutoPaused = false
-                    finalState.isOffRoute = false
-                    finalState.nextTurnDirection = nil
-                    finalState.nextTurnIcon = nil
-                    finalState.nextTurnCue = nil
-                    finalState.distanceToNextTurn = nil
-                    await activity.update(ActivityContent(state: finalState, staleDate: nil))
-                    await activity.end(
-                        ActivityContent(state: finalState, staleDate: nil),
-                        dismissalPolicy: .after(dismissAt)
-                    )
-                }
-            }
-        }
-        currentActivity = nil
+    /// Reset the transient navigation / pause fields and apply `override` as
+    /// the new status (or leave the status alone if `override` is nil).
+    private func clearedState(
+        from state: RideActivityAttributes.ContentState,
+        override: RideStatus?
+    ) -> RideActivityAttributes.ContentState {
+        var s = state
+        if let override { s.rideStatus = override }
+        s.isPaused = false
+        s.isAutoPaused = false
+        s.isOffRoute = false
+        s.nextTurnDirection = nil
+        s.nextTurnIcon = nil
+        s.nextTurnCue = nil
+        s.distanceToNextTurn = nil
+        return s
     }
 }
 #endif

@@ -82,14 +82,14 @@ struct ContentView: View {
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                 }
-                .onReceive(connectivity.$routeNamesOnWatch) { _ in
+                .onReceive(connectivity.$routeIDsOnWatch) { _ in
                     uploadingRouteID = nil
                     queuedRouteID = nil
                 }
                 .navigationDestination(for: Route.self) { route in
                     RouteDetailView(
                         route: route,
-                        isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                        isOnWatch: connectivity.routeIDsOnWatch.contains(route.id),
                         isUploading: uploadingRouteID == route.id,
                         isQueued: queuedRouteID == route.id,
                         isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
@@ -279,7 +279,7 @@ extension ContentView {
             NavigationLink(value: route) {
                 RouteRow(
                     route: route,
-                    isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                    isOnWatch: connectivity.routeIDsOnWatch.contains(route.id),
                     isUploading: uploadingRouteID == route.id,
                     isQueued: queuedRouteID == route.id,
                     isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,

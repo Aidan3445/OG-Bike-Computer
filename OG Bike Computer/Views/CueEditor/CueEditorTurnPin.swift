@@ -84,14 +84,21 @@ private struct CueEditorTurnPinBody: View {
 
     /// Show the origin badge only once the row has been acted on AND the
     /// resulting visual differs from the original — i.e. there's something
-    /// useful to convey about where it came from.
+    /// useful to convey about where it came from. User-added cues never show
+    /// a badge: they're authored as-is, there's no "origin" to recall.
     private var shouldShowBadge: Bool {
         guard status != .pending else { return false }
+        if entry.kind == .userAdded { return false }
         return currentColor != originColor
     }
 
-    /// Color driven by the current decision.
+    /// Color driven by the current decision. User-added cues stay in their
+    /// origin color (blue) regardless of state — they don't transition to
+    /// green on approval because they were already "approved" by being added.
     private var currentColor: Color {
+        if entry.kind == .userAdded && status != .skipped {
+            return originColor
+        }
         switch status {
         case .skipped:  return .gray
         case .approved: return .green
@@ -105,6 +112,7 @@ private struct CueEditorTurnPinBody: View {
         case .missingDetected, .missingNameOnly: return .red
         case .extra:                              return .yellow
         case .edit:                               return .orange
+        case .userAdded:                          return .blue
         case .good:                               return .green
         }
     }

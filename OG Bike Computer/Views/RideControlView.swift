@@ -30,6 +30,10 @@ struct RideControlView: View {
     @State private var showRouteDetail = false
     @State private var activeRoute: Route?
     @State private var selectedPage = 0
+    /// Rolling (movingTime, totalDistance) samples used to derive a recent
+    /// split average speed for the ETA estimate. Trimmed to the last ~180s
+    /// of moving time on each telemetry update.
+    @State private var recentSpeedSamples: [(movingTime: TimeInterval, distance: Double)] = []
 
     /// Pending state is sourced from `session.pendingCommand` so it survives
     /// view rebuilds and stays consistent with Live Activity / widget intents
@@ -75,6 +79,9 @@ struct RideControlView: View {
         // Sync active route whenever the watch reports a different route ID
         .onChange(of: telemetry.activeRouteID, initial: true) { _, newID in
             activeRoute = newID.flatMap { id in routeStore.routes.first { $0.id == id } }
+        }
+        .onChange(of: telemetry.totalDistance, initial: false) { _, _ in
+            updateRecentSpeedSamples()
         }
         .background(telemetry.isOffRoute ? Color(red: 0.12, green: 0.02, blue: 0.02) : Color(.systemGroupedBackground))
         .navigationTitle(session.isPaused ? "Paused" : "Riding")
@@ -158,10 +165,8 @@ struct RideControlView: View {
                         }
                     }
                     if let cue = telemetry.nextTurnCue, !cue.isEmpty {
-                        Text(cue)
-                            .font(.subheadline)
+                        MarqueeText(text: cue, font: .subheadline)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
                     }
                 }
                 Spacer()
@@ -170,12 +175,24 @@ struct RideControlView: View {
             .background(.cyan.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 12))
         } else if let remaining = telemetry.routeDistanceRemaining {
-            HStack {
+            HStack(spacing: 8) {
                 Image(systemName: "flag.checkered")
                     .foregroundStyle(.secondary)
                 Text("\(formatDistance(remaining)) remaining")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                if let eta = estimatedTimeRemaining {
+                    Text("·")
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                    Image(systemName: "clock")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("~\(formatTime(eta))")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Spacer()
             }
             .padding(12)
@@ -223,7 +240,7 @@ struct RideControlView: View {
             .sheet(isPresented: $showRoutePicker) {
                 RoutePickerSheet(
                     routes: routeStore.routes,
-                    routeNamesOnWatch: connectivity.routeNamesOnWatch,
+                    routeIDsOnWatch: connectivity.routeIDsOnWatch,
                     activeRoute: activeRoute
                 ) { selected in
                     switchRoute(selected)
@@ -234,7 +251,7 @@ struct RideControlView: View {
                     NavigationStack {
                         RouteDetailView(
                             route: route,
-                            isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                            isOnWatch: connectivity.routeIDsOnWatch.contains(route.id),
                             isUploading: false,
                             isQueued: false,
                             isUploadBlocked: false,
@@ -277,9 +294,9 @@ struct RideControlView: View {
                 .foregroundStyle(.blue)
             }
 
-            // Remaining distance / auto-pause row
+            // Remaining distance / ETA / auto-pause row
             if telemetry.routeDistanceRemaining != nil || telemetry.isAutoPaused {
-                HStack {
+                HStack(spacing: 6) {
                     if let remaining = telemetry.routeDistanceRemaining {
                         Image(systemName: "flag.checkered")
                             .font(.caption)
@@ -287,6 +304,18 @@ struct RideControlView: View {
                         Text("\(formatDistance(remaining)) remaining")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if let eta = estimatedTimeRemaining {
+                            Text("·")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                            Image(systemName: "clock")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("~\(formatTime(eta)) left")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
                     }
                     Spacer()
                     if telemetry.isAutoPaused {
@@ -417,7 +446,7 @@ struct RideControlView: View {
             "routeID": route.id.uuidString
         ]
 
-        if connectivity.routeNamesOnWatch.contains(route.name) {
+        if connectivity.routeIDsOnWatch.contains(route.id) {
             // Already on watch — just send the command
             ConnectivityManager.shared.sendRideCommand(message)
         } else {
@@ -439,6 +468,92 @@ struct RideControlView: View {
         }
     }
 
+    // MARK: - ETA estimation
+
+    /// Append the latest telemetry sample to the rolling buffer and trim old
+    /// entries. Only appends when moving time has actually advanced, so pauses
+    /// don't pollute the recent-split speed calculation.
+    private func updateRecentSpeedSamples() {
+        let sample = (movingTime: telemetry.movingTime, distance: telemetry.totalDistance)
+        if let last = recentSpeedSamples.last, sample.movingTime <= last.movingTime + 0.5 {
+            return
+        }
+        recentSpeedSamples.append(sample)
+        let cutoff = sample.movingTime - 180
+        recentSpeedSamples.removeAll { $0.movingTime < cutoff }
+    }
+
+    /// Recent split average speed (m/s) derived from the rolling buffer, or nil
+    /// if there isn't yet enough data (need at least ~20s of moving time).
+    private var recentAverageSpeed: Double? {
+        guard let first = recentSpeedSamples.first,
+              let last = recentSpeedSamples.last else { return nil }
+        let dt = last.movingTime - first.movingTime
+        let dd = last.distance - first.distance
+        guard dt >= 20, dd > 0 else { return nil }
+        return dd / dt
+    }
+
+    /// Weighted blend of total-ride avg speed and recent split speed, scaled by
+    /// the net climb/descent of the remaining route. Returns nil while we don't
+    /// have a route remaining distance or enough speed data to be meaningful.
+    private var estimatedTimeRemaining: TimeInterval? {
+        guard let remaining = telemetry.routeDistanceRemaining, remaining > 0 else { return nil }
+
+        let totalAvg = telemetry.averageSpeed
+        let recentAvg = recentAverageSpeed
+        let hasTotal = totalAvg > 0.5
+        let hasRecent = (recentAvg ?? 0) > 0.5
+
+        let blendedSpeed: Double
+        if hasTotal, hasRecent, let recent = recentAvg {
+            blendedSpeed = 0.4 * totalAvg + 0.6 * recent
+        } else if hasTotal {
+            blendedSpeed = totalAvg
+        } else if hasRecent, let recent = recentAvg {
+            blendedSpeed = recent
+        } else {
+            return nil
+        }
+
+        let adjusted = blendedSpeed / elevationScalingFactor(remainingDistance: remaining)
+        guard adjusted > 0.1 else { return nil }
+        return remaining / adjusted
+    }
+
+    /// Multiplier ≥ 1 if the remaining route net-climbs, < 1 if it net-descends.
+    /// Caller divides a flat-ground speed estimate by this. Uses a ~10% speed
+    /// adjustment per 1% net grade, clamped to a sane range.
+    private func elevationScalingFactor(remainingDistance: Double) -> Double {
+        guard let route = activeRoute,
+              let series = route.watchElevationSeries,
+              series.count >= 2,
+              route.distance > 0 else { return 1.0 }
+
+        let covered = max(0, route.distance - remainingDistance)
+
+        var gain: Double = 0
+        var loss: Double = 0
+        let minDelta: Double = 4.0
+        var ref: Double?
+
+        for sample in series where sample.distanceFromStart >= covered {
+            guard let r = ref else { ref = sample.elevation; continue }
+            let delta = sample.elevation - r
+            if delta > minDelta {
+                gain += delta
+                ref = sample.elevation
+            } else if delta < -minDelta {
+                loss += -delta
+                ref = sample.elevation
+            }
+        }
+
+        let netGrade = (gain - loss) / remainingDistance
+        let factor = 1.0 + netGrade * 10.0
+        return min(max(factor, 0.6), 2.0)
+    }
+
     private func statCell(label: String, value: String) -> some View {
         VStack(spacing: 2) {
             Text(value)
@@ -456,7 +571,7 @@ struct RideControlView: View {
 
 private struct RoutePickerSheet: View {
     let routes: [Route]
-    let routeNamesOnWatch: Set<String>
+    let routeIDsOnWatch: Set<UUID>
     let activeRoute: Route?
     let onSelect: (Route) -> Void
 
@@ -464,13 +579,13 @@ private struct RoutePickerSheet: View {
 
     private var onWatch: [Route] {
         routes
-            .filter { routeNamesOnWatch.contains($0.name) }
+            .filter { routeIDsOnWatch.contains($0.id) }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
     private var phoneOnly: [Route] {
         routes
-            .filter { !routeNamesOnWatch.contains($0.name) }
+            .filter { !routeIDsOnWatch.contains($0.id) }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 

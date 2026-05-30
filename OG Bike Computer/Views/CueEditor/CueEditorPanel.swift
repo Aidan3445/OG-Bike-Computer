@@ -28,16 +28,24 @@ struct CueEditorPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             dragHandle
-            headerBar
+            if viewModel.placementMode != .none {
+                placementBanner
+            } else {
+                headerBar
+            }
             Divider().opacity(0.35)
 
-            if viewModel.allEntries.isEmpty {
+            if viewModel.placementMode != .none {
+                // While the user is picking a spot on the map, leave the panel
+                // short and stay out of their way.
+                Spacer(minLength: 0)
+            } else if viewModel.allEntries.isEmpty && viewModel.waypointEntries.isEmpty {
                 emptyState
             } else {
                 listContent
             }
         }
-        .frame(height: max(minHeight, min(maxHeight, height == 0 ? defaultHeight : height)))
+        .frame(height: resolvedHeight)
         .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 16)
@@ -46,7 +54,50 @@ struct CueEditorPanel: View {
         )
         .padding(.horizontal, 12)
         .padding(.bottom, 12)
+        .animation(.easeInOut(duration: 0.25), value: viewModel.placementMode)
         .onAppear { if height == 0 { height = defaultHeight } }
+    }
+
+    /// Height the panel should render at right now — clamped, plus a forced
+    /// collapse while the user is in a placement mode.
+    private var resolvedHeight: CGFloat {
+        if viewModel.placementMode != .none { return minHeight }
+        return max(minHeight, min(maxHeight, height == 0 ? defaultHeight : height))
+    }
+
+    /// Compact banner shown while a placement mode is active.
+    private var placementBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: placementIcon)
+                .font(.subheadline.weight(.semibold))
+            Text(placementText)
+                .font(.subheadline.weight(.medium))
+            Spacer()
+            Button("Cancel") { viewModel.cancelPlacement() }
+                .font(.footnote.weight(.semibold))
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+    }
+
+    private var placementIcon: String {
+        switch viewModel.placementMode {
+        case .addingCue:        return "mappin.and.ellipse"
+        case .addingWaypoint:   return "flag"
+        case .relocatingPOI:    return "arrow.up.and.down.and.arrow.left.and.right"
+        case .none:             return ""
+        }
+    }
+
+    private var placementText: String {
+        switch viewModel.placementMode {
+        case .addingCue:        return "Tap the route to place a new cue"
+        case .addingWaypoint:   return "Tap the map to drop a waypoint"
+        case .relocatingPOI:    return "Tap a new location for this waypoint"
+        case .none:             return ""
+        }
     }
 
     // MARK: - Header
@@ -84,6 +135,23 @@ struct CueEditorPanel: View {
             .background(
                 Capsule().fill(Color.secondary.opacity(0.18))
             )
+
+            Menu {
+                Button {
+                    viewModel.enterAddCueMode()
+                } label: {
+                    Label("Cue", systemImage: "arrow.turn.up.right")
+                }
+                Button {
+                    viewModel.enterAddWaypointMode()
+                } label: {
+                    Label("Waypoint", systemImage: "flag")
+                }
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(Color.accentColor)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
@@ -119,7 +187,7 @@ struct CueEditorPanel: View {
     private var listContent: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 6) {
+                LazyVStack(spacing: 6, pinnedViews: [.sectionHeaders]) {
                     switch viewModel.listMode {
                     case .sectioned:
                         section(kind: .missingDetected, title: "Missing", color: .red,
@@ -128,13 +196,17 @@ struct CueEditorPanel: View {
                                 entries: viewModel.classification.extra)
                         section(kind: .edit, title: "Edit", color: .orange,
                                 entries: viewModel.classification.edit)
+                        section(kind: .userAdded, title: "Added", color: .blue,
+                                entries: viewModel.addedCueEntries)
                         section(kind: .good, title: "Good", color: .green,
                                 entries: viewModel.classification.good)
+                        waypointsSection
                     case .flat:
                         ForEach(viewModel.allEntries) { entry in
                             rowView(entry)
                                 .id(entry.id)
                         }
+                        waypointsSection
                     }
                 }
                 .padding(.horizontal, 12)
@@ -143,6 +215,19 @@ struct CueEditorPanel: View {
             }
             .onChange(of: viewModel.selection) { _, newID in
                 scrollSelectionIntoView(proxy: proxy, id: newID)
+            }
+            .onChange(of: viewModel.waypointSelection) { _, newID in
+                guard let id = newID else { return }
+                if viewModel.waypointSectionCollapsed {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        viewModel.waypointSectionCollapsed = false
+                    }
+                }
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                }
             }
             .onChange(of: viewModel.listMode) { _, _ in
                 // Layout just changed — bring the selected row back into view.
@@ -204,36 +289,52 @@ struct CueEditorPanel: View {
         // rows use the same section. The header tag is "missingDetected" but
         // controls collapse for the merged group.
         if entries.isEmpty { EmptyView() } else {
-            let reviewed = entries.filter { viewModel.isResolved($0) }.count
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    viewModel.toggleSection(kind)
+            Section {
+                if !viewModel.isCollapsed(kind) {
+                    ForEach(entries) { entry in
+                        rowView(entry)
+                            .id(entry.id)
+                    }
                 }
-            } label: {
-                HStack(spacing: 8) {
-                    Circle().fill(color).frame(width: 10, height: 10)
-                    Text(title).font(.subheadline.weight(.semibold))
-                    Text("\(reviewed) / \(entries.count) reviewed")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Image(systemName: viewModel.isCollapsed(kind) ? "chevron.right" : "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 4)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if !viewModel.isCollapsed(kind) {
-                ForEach(entries) { entry in
-                    rowView(entry)
-                        .id(entry.id)
-                }
+            } header: {
+                sectionHeader(kind: kind, title: title, color: color, entries: entries)
             }
         }
+    }
+
+    /// Pinned section header: stays at the top of the scroll while the section
+    /// is on-screen so the user can collapse from anywhere within it.
+    private func sectionHeader(
+        kind: CueEntryKind,
+        title: String,
+        color: Color,
+        entries: [CueEntry]
+    ) -> some View {
+        let reviewed = entries.filter { viewModel.isResolved($0) }.count
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                viewModel.toggleSection(kind)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Circle().fill(color).frame(width: 10, height: 10)
+                Text(title).font(.subheadline.weight(.semibold))
+                Text("\(reviewed) / \(entries.count) reviewed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: viewModel.isCollapsed(kind) ? "chevron.right" : "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // Pinned headers need their own backdrop so rows scrolling underneath
+        // don't bleed through the text.
+        .background(.bar)
     }
 
     // MARK: - Row
@@ -299,32 +400,190 @@ struct CueEditorPanel: View {
         case .missingDetected, .missingNameOnly: return .red
         case .extra:                              return .yellow
         case .edit:                               return .orange
+        case .userAdded:                          return .blue
         case .good:                               return .green
+        }
+    }
+
+    // MARK: - Waypoint section + row
+
+    @ViewBuilder
+    private var waypointsSection: some View {
+        let entries = viewModel.waypointEntries
+        if !entries.isEmpty {
+            Section {
+                if !viewModel.waypointSectionCollapsed {
+                    ForEach(entries) { wp in
+                        waypointRow(wp)
+                            .id(wp.id)
+                    }
+                }
+            } header: {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        viewModel.toggleWaypointSection()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "flag.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.purple)
+                        Text("Waypoints").font(.subheadline.weight(.semibold))
+                        Text("\(entries.count)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Image(systemName: viewModel.waypointSectionCollapsed ? "chevron.right" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(.bar)
+            }
+        }
+    }
+
+    private func waypointRow(_ wp: WaypointEntry) -> some View {
+        let selected = viewModel.waypointSelection == wp.id
+        let isUserAdded: Bool = {
+            if case .userAdded = wp.source { return true }
+            return false
+        }()
+        let isCustomized: Bool = {
+            if case .imported(let id) = wp.source {
+                let d = viewModel.edits.poiDecisions[id]
+                return d?.titleOverride != nil
+                    || d?.latitudeOverride != nil
+                    || d?.longitudeOverride != nil
+            }
+            return false
+        }()
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                if selected {
+                    viewModel.selectWaypoint(nil)
+                } else {
+                    viewModel.selectWaypoint(wp.id)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 24)
+                        .foregroundStyle(isUserAdded ? Color.blue : Color.purple)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(wp.name.isEmpty ? "—" : wp.name)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                        Text(isUserAdded ? "Added" : (isCustomized ? "Edited" : "Imported"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(selected ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.08))
+                )
+            }
+            .buttonStyle(.plain)
+
+            if selected {
+                waypointActionStrip(wp: wp, isUserAdded: isUserAdded, isCustomized: isCustomized)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func waypointActionStrip(wp: WaypointEntry, isUserAdded: Bool, isCustomized: Bool) -> some View {
+        if viewModel.isComposingWaypoint {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Title", text: $viewModel.waypointDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                HStack {
+                    Button("Cancel") { viewModel.cancelEditWaypointTitle() }
+                    Spacer()
+                    Button {
+                        viewModel.saveWaypointTitle(wp.id)
+                    } label: {
+                        Label("Save", systemImage: "checkmark.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .controlSize(.small)
+                .font(.footnote.weight(.medium))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+        } else {
+            HStack(spacing: 8) {
+                Button { viewModel.beginEditWaypointTitle(wp.id) } label: {
+                    Label("Title", systemImage: "pencil")
+                }
+                Button { viewModel.beginRelocateWaypoint(wp.id) } label: {
+                    Label("Move", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+                }
+                Button(role: .destructive) { viewModel.deleteWaypoint(wp.id) } label: {
+                    Label(isUserAdded ? "Delete" : "Skip", systemImage: "trash")
+                }
+                Spacer()
+                if !isUserAdded && isCustomized {
+                    Button {
+                        viewModel.revertWaypoint(wp.id)
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .help("Revert to imported")
+                }
+            }
+            .font(.footnote.weight(.medium))
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .padding(.horizontal, 6)
+            .padding(.bottom, 4)
         }
     }
 
     @ViewBuilder
     private func statusBadge(entry: CueEntry, status: CueEntryStatus) -> some View {
-        switch status {
-        case .pending:
+        // User-added entries don't need an OK / Added badge — the row's blue
+        // color and "Added" section already convey their state.
+        if entry.kind == .userAdded {
             EmptyView()
-        case .approved:
-            Label {
-                Text(entry.kind == .missingDetected && viewModel.isCustomized(entry) ? "Added" : "OK")
-                    .font(.caption2.weight(.semibold))
-            } icon: {
-                Image(systemName: "checkmark.circle.fill")
+        } else {
+            switch status {
+            case .pending:
+                EmptyView()
+            case .approved:
+                Label {
+                    Text(entry.kind == .missingDetected && viewModel.isCustomized(entry) ? "Added" : "OK")
+                        .font(.caption2.weight(.semibold))
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill")
+                }
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.green)
+            case .skipped:
+                Label {
+                    Text("Skipped").font(.caption2.weight(.semibold))
+                } icon: {
+                    Image(systemName: "minus.circle.fill")
+                }
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.gray)
             }
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(.green)
-        case .skipped:
-            Label {
-                Text("Skipped").font(.caption2.weight(.semibold))
-            } icon: {
-                Image(systemName: "minus.circle.fill")
-            }
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(.gray)
         }
     }
 
@@ -336,6 +595,8 @@ struct CueEditorPanel: View {
             composeForm(entry: entry, mode: .add)
         } else if viewModel.isComposingEdit, case .waypoint = entry.id {
             composeForm(entry: entry, mode: .edit)
+        } else if viewModel.isComposingEdit, case .userAddedCue = entry.id {
+            composeForm(entry: entry, mode: .editUserAdded)
         } else {
             HStack(spacing: 8) {
                 switch entry.kind {
@@ -356,9 +617,16 @@ struct CueEditorPanel: View {
                     Button { viewModel.approveWaypoint(entry) } label: {
                         Label("OK", systemImage: "checkmark.circle")
                     }
+                case .userAdded:
+                    Button { viewModel.beginEditAddedCue(entry) } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) { viewModel.deleteAddedCue(entry) } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
                 }
                 Spacer()
-                if viewModel.isCustomized(entry) {
+                if entry.kind != .userAdded, viewModel.isCustomized(entry) {
                     Button {
                         viewModel.resetEditsToOriginal(entry)
                     } label: {
@@ -375,7 +643,7 @@ struct CueEditorPanel: View {
         }
     }
 
-    private enum ComposeMode { case add, edit }
+    private enum ComposeMode { case add, edit, editUserAdded }
 
     @ViewBuilder
     private func composeForm(entry: CueEntry, mode: ComposeMode) -> some View {
@@ -390,8 +658,8 @@ struct CueEditorPanel: View {
             HStack(spacing: 8) {
                 Button {
                     switch mode {
-                    case .add:  viewModel.cancelAdd()
-                    case .edit: viewModel.cancelEdit()
+                    case .add:           viewModel.cancelAdd()
+                    case .edit, .editUserAdded: viewModel.cancelEdit()
                     }
                 } label: { Text("Cancel") }
 
@@ -405,8 +673,9 @@ struct CueEditorPanel: View {
 
                 Button {
                     switch mode {
-                    case .add:  viewModel.saveAdd(entry)
-                    case .edit: viewModel.saveEditWaypoint(entry)
+                    case .add:           viewModel.saveAdd(entry)
+                    case .edit:          viewModel.saveEditWaypoint(entry)
+                    case .editUserAdded: viewModel.saveEditAddedCue(entry)
                     }
                 } label: {
                     Label(mode == .add ? "Add" : "Save", systemImage: "checkmark.circle.fill")

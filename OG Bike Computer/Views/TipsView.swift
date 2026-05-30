@@ -18,7 +18,7 @@ struct TipsView: View {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Watch Settings")
-                        Text("Keep watch app open before and during a ride.")
+                        Text("Review welcome screen: Keep watch app open before and during a ride.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

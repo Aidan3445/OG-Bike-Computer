@@ -52,6 +52,7 @@ struct RouteDetailView: View {
         let _ = unitState.preferences
         GeometryReader { proxy in
         ZStack(alignment: .bottom) {
+            MapReader { mapProxy in
             Map(position: $mapPosition) {
                 // Route polyline
                 MapPolyline(coordinates: cachedCoordinates)
@@ -133,6 +134,28 @@ struct RouteDetailView: View {
                                 .onTapGesture {
                                     editor.select(nil)
                                 }
+                        }
+                    }
+
+                    // Editor-mode waypoint pins (imported + user-added).
+                    ForEach(editor.waypointEntries) { wp in
+                        Annotation("", coordinate: wp.coordinate) {
+                            CueEditorWaypointPin(
+                                isSelected: editor.waypointSelection == wp.id,
+                                isUserAdded: {
+                                    if case .userAdded = wp.source { return true }
+                                    return false
+                                }()
+                            )
+                            .onTapGesture {
+                                if editor.placementMode == .none {
+                                    if editor.waypointSelection == wp.id {
+                                        editor.selectWaypoint(nil)
+                                    } else {
+                                        editor.selectWaypoint(wp.id)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -222,6 +245,19 @@ struct RouteDetailView: View {
             .onMapCameraChange(frequency: .continuous) { context in
                 currentMapHeading = context.camera.heading
             }
+            // Forward map taps to the editor view-model while a placement
+            // mode is active. SpatialTapGesture exposes the local point so we
+            // can ask MapKit to convert it into a real-world coordinate.
+            .gesture(
+                SpatialTapGesture().onEnded { event in
+                    guard isEditingCues, let editor = cueEditorHolder.viewModel else { return }
+                    guard editor.placementMode != .none else { return }
+                    if let coord = mapProxy.convert(event.location, from: .local) {
+                        editor.handleMapTap(at: coord)
+                    }
+                }
+            )
+            }  // end: MapReader
 
             // Editor panel takes over while in cue-editor mode
             if isEditingCues, let editor = cueEditorHolder.viewModel {
@@ -251,16 +287,17 @@ struct RouteDetailView: View {
                                 DragGesture(minimumDistance: 10)
                                     .onEnded { value in
                                         guard abs(value.translation.height) > 10 else { return }
+                                        let skipsCompact = (panelPage == 1)
                                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                             if value.translation.height > 0 {
                                                 switch panelState {
-                                                case .expanded: panelState = .compact
+                                                case .expanded: panelState = skipsCompact ? .collapsed : .compact
                                                 case .compact: panelState = .collapsed
                                                 case .collapsed: break
                                                 }
                                             } else {
                                                 switch panelState {
-                                                case .collapsed: panelState = .compact
+                                                case .collapsed: panelState = skipsCompact ? .expanded : .compact
                                                 case .compact: panelState = .expanded
                                                 case .expanded: break
                                                 }
@@ -347,7 +384,7 @@ struct RouteDetailView: View {
                 .onTapGesture {
                     if panelState == .collapsed {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            panelState = .compact
+                            panelState = panelPage == 1 ? .expanded : .compact
                         }
                     }
                 }
@@ -421,8 +458,40 @@ struct RouteDetailView: View {
         .onChange(of: cueEditorHolder.viewModel?.selection) { _, newSelection in
             zoomMapToSelection(newSelection)
         }
+        .onChange(of: cueEditorHolder.viewModel?.waypointSelection) { _, newID in
+            zoomMapToWaypoint(newID)
+        }
         .onChange(of: isEditingCues) { _, editing in
             if !editing { cueEditorHolder.teardown() }
+        }
+    }
+
+    /// Pan/zoom the map to a selected waypoint. Mirrors the cue zoom's
+    /// offset so the pin sits about a third of the way down from the top of
+    /// the visible map — above the editor panel. Preserves the current map
+    /// heading since waypoints have no inherent travel direction.
+    private func zoomMapToWaypoint(_ id: UUID?) {
+        guard let editor = cueEditorHolder.viewModel,
+              let id = id,
+              let wp = editor.waypointEntries.first(where: { $0.id == id }) else {
+            return
+        }
+        let heading = currentMapHeading
+        // Same constants as the cue path so both feel identical.
+        let centerOffsetMeters: Double = 70
+        let target = shiftedCoordinate(
+            from: wp.coordinate,
+            distanceMeters: centerOffsetMeters,
+            bearingDegrees: heading + 180
+        )
+        let camera = MapCamera(
+            centerCoordinate: target,
+            distance: 700,
+            heading: heading,
+            pitch: 0
+        )
+        withAnimation(.easeInOut(duration: 0.4)) {
+            mapPosition = .camera(camera)
         }
     }
 
