@@ -56,10 +56,22 @@ struct RideDetailView: View {
     /// red for HR). Drives the map dot color so the dot matches the chart.
     @State private var scrubColor: Color = .green
     @State private var allLocations: [CLLocation] = []
+    /// Unmount the Map while the tab is hidden — see RouteDetailView for the
+    /// rationale. SwiftUI keeps tab content alive across switches, and an
+    /// alive MKMapView keeps burning CPU/GPU rendering tiles offscreen, which
+    /// makes the destination tab feel frozen for a beat.
+    @State private var isOnScreen: Bool = false
+    /// Snapshot of the user's last camera for tab-switch restore.
+    @State private var lastCamera: MapCamera? = nil
+    /// Visible-region snapshot used to filter off-screen mile markers on long
+    /// rides. Updated on camera-settle (.onEnd) so mid-gesture frames don't
+    /// invalidate the Map body. See `inVisibleRegion`.
+    @State private var visibleRegion: MKCoordinateRegion? = nil
 
     var body: some View {
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
+            if isOnScreen {
             Map(position: $mapPosition) {
                 ForEach(coloredSegments) { seg in
                     MapPolyline(coordinates: seg.coords)
@@ -145,8 +157,21 @@ struct RideDetailView: View {
                 MapCompass()
                 MapScaleView()
             }
+            // Continuous handler does only the cheap per-frame work (arrow
+            // counter-rotation via cameraState). Heavier work — region
+            // snapshot for annotation filtering, marker interval bucket,
+            // camera cache for tab-switch restore — runs on .onEnd so the
+            // Map body doesn't invalidate mid-gesture.
             .onMapCameraChange(frequency: .continuous) { context in
                 cameraState.heading = context.camera.heading
+                if visibleRegion == nil {
+                    visibleRegion = context.region
+                    lastCamera = context.camera
+                }
+            }
+            .onMapCameraChange(frequency: .onEnd) { context in
+                visibleRegion = context.region
+                lastCamera = context.camera
 
                 let region = context.region
                 let cosLat = cos(region.center.latitude * .pi / 180)
@@ -159,6 +184,9 @@ struct RideDetailView: View {
                     mileMarkers = computeRideMileMarkers(
                         locations: allLocations, interval: interval)
                 }
+            }
+            } else {
+                Color(.systemBackground)
             }
 
             // Stats overlay — 3 states: collapsed (button) → compact (core stats) → expanded (all stats)
@@ -289,23 +317,54 @@ struct RideDetailView: View {
             Text(uploadError ?? "")
         }
         .onAppear {
-            buildRideCache()
+            isOnScreen = true
+            if allLocations.isEmpty { buildRideCache() }
+            if let cam = lastCamera {
+                mapPosition = .camera(cam)
+            }
         }
+        .onDisappear { isOnScreen = false }
     }
     
     @MapContentBuilder
     private func mileMarkerAnnotations() -> some MapContent {
-        // Label stays upright (screen-aligned). The arrow inside the label
-        // counter-rotates by the camera heading so it always points in the
-        // direction of route travel.
-        ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
+        // Label is a static capsule at the marker position; the direction
+        // arrow is a separate annotation placed halfway along the route to
+        // the next marker so only the arrow re-renders on camera rotation.
+        // Filtered to the visible region so a long ride doesn't render every
+        // marker at once.
+        ForEach(visibleMileMarkers, id: \.offset) { _, marker in
             Annotation("", coordinate: marker.coordinate) {
                 MileMarkerLabel(
-                    camera: cameraState,
                     mile: marker.mile,
-                    unitLabel: currentUnits.distance.label,
-                    worldBearing: marker.bearingDegrees)
+                    unitLabel: currentUnits.distance.label)
             }
+            if let arrowCoord = marker.arrowCoordinate,
+               inVisibleRegion(arrowCoord) {
+                Annotation("", coordinate: arrowCoord) {
+                    MileMarkerArrow(
+                        camera: cameraState,
+                        worldBearing: marker.bearingDegrees)
+                }
+            }
+        }
+    }
+
+    /// Visible-region inflated by ~50% on each axis so a small pan during a
+    /// gesture doesn't drop markers from the view before `.onEnd` refreshes
+    /// the cached region. nil region treats every marker as visible.
+    private func inVisibleRegion(_ coord: CLLocationCoordinate2D) -> Bool {
+        guard let r = visibleRegion else { return true }
+        return abs(coord.latitude - r.center.latitude) <= r.span.latitudeDelta
+            && abs(coord.longitude - r.center.longitude) <= r.span.longitudeDelta
+    }
+
+    /// Mile markers filtered to the visible region; `\.offset` keeps stable
+    /// ForEach identity across filter changes (it's the index in the full
+    /// `mileMarkers`, not in the filtered subset).
+    private var visibleMileMarkers: [EnumeratedSequence<[MileMarker]>.Element] {
+        Array(mileMarkers.enumerated()).filter {
+            inVisibleRegion($0.element.coordinate)
         }
     }
     

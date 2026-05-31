@@ -49,11 +49,30 @@ struct RouteDetailView: View {
     /// views that counter-rotate against it (HighlightChevron, MileMarkerLabel)
     /// re-render on per-frame camera updates — not the entire Map body.
     @StateObject private var cameraState = MapCameraState()
+    /// Tracks whether this view is currently visible. SwiftUI keeps each tab's
+    /// view hierarchy alive across tab switches, and an alive MKMapView keeps
+    /// burning CPU/GPU on tile rendering even when offscreen — which makes the
+    /// destination tab feel frozen for a beat. Toggling this from onAppear/
+    /// onDisappear lets us unmount the Map while the tab is hidden and rebuild
+    /// it cheaply when the user returns (cached state is preserved).
+    @State private var isOnScreen: Bool = false
+    /// Snapshot of the user's last camera so we can restore exactly where they
+    /// were after a tab-switch unmount/remount (`mapPosition` alone is not a
+    /// reliable round-trip across SwiftUI Map teardown).
+    @State private var lastCamera: MapCamera? = nil
+    /// Axis-aligned bounding region of what's currently visible. Used to drop
+    /// off-screen annotations from the Map's ForEach so long routes (with
+    /// hundreds of mile markers / POIs / turn pins) don't render every
+    /// annotation. Updated only when the camera settles (frequency: .onEnd)
+    /// so mid-gesture frames don't invalidate the Map body. Padded in
+    /// `inVisibleRegion` so a small pan doesn't immediately drop a marker.
+    @State private var visibleRegion: MKCoordinateRegion? = nil
 
     var body: some View {
         let _ = unitState.preferences
         GeometryReader { proxy in
         ZStack(alignment: .bottom) {
+            if isOnScreen {
             MapReader { mapProxy in
             Map(position: $mapPosition) {
                 // Route polyline
@@ -129,27 +148,51 @@ struct RouteDetailView: View {
                     }
                 }
 
-                // Mile markers. The label stays upright (left→right) because
-                // MapKit annotations are screen-aligned. The arrow sits to the
-                // right of the label in screen space, but its icon rotates by
-                // (worldBearing − cameraHeading) so it always points in the
-                // direction of route travel.
-                ForEach(Array(cachedMileMarkers.enumerated()), id: \.offset) { _, marker in
+                // Mile markers: label is a static capsule at the marker
+                // position; the direction arrow is a separate annotation
+                // halfway-along-route to the next marker (snapped to a track
+                // point) so only the arrow re-renders on camera rotation.
+                // Filtered to the visible region (with padding) so a 600-mile
+                // route doesn't render all ~1200 markers at once.
+                ForEach(visibleMileMarkers, id: \.offset) { _, marker in
                     Annotation("", coordinate: marker.coordinate) {
                         MileMarkerLabel(
-                            camera: cameraState,
                             mile: marker.mile,
-                            unitLabel: currentUnits.distance.label,
-                            worldBearing: marker.bearingDegrees)
+                            unitLabel: currentUnits.distance.label)
+                    }
+                    if let arrowCoord = marker.arrowCoordinate,
+                       inVisibleRegion(arrowCoord) {
+                        Annotation("", coordinate: arrowCoord) {
+                            MileMarkerArrow(
+                                camera: cameraState,
+                                worldBearing: marker.bearingDegrees)
+                        }
                     }
                 }
 
                 // Waypoints / POIs — including user edits + user-added POIs
                 // from the latest persisted overlay, so a waypoint dropped via
-                // the Cue Editor shows up here too.
-                ForEach(displayedPOIs) { poi in
-                    Annotation(poi.name, coordinate: poi.coordinate) {
-                        WaypointPin()
+                // the Cue Editor shows up here too. Region-filtered and
+                // proximity-clustered so POI-heavy routes don't render every
+                // pin individually when zoomed out. Clusters re-use the
+                // WaypointPin glyph with stacked copies behind it so the
+                // visual stays consistent with single pins.
+                let poiClusters = clusterAnnotations(
+                    displayedPOIs.filter { inVisibleRegion($0.coordinate) },
+                    coordinate: { $0.coordinate })
+                ForEach(poiClusters) { cluster in
+                    if cluster.items.count == 1 {
+                        let poi = cluster.items[0]
+                        Annotation(poi.name, coordinate: poi.coordinate) {
+                            WaypointPin()
+                        }
+                    } else {
+                        Annotation("", coordinate: cluster.center) {
+                            WaypointPinCluster(count: cluster.items.count)
+                                .onTapGesture {
+                                    zoomToCoordinates(cluster.items.map { $0.coordinate })
+                                }
+                        }
                     }
                 }
 
@@ -173,7 +216,22 @@ struct RouteDetailView: View {
                 MapCompass()
                 MapScaleView()
             }
+            // Two camera handlers: continuous keeps the arrow/chevron
+            // counter-rotation responsive without invalidating the Map body
+            // every frame, while .onEnd handles the heavier work (re-bucketing
+            // the marker interval, snapshotting the visible region, capturing
+            // the camera for tab-switch restore).
             .onMapCameraChange(frequency: .continuous) { context in
+                cameraState.heading = context.camera.heading
+                // Seed the visible region on first camera frame so the initial
+                // render is already filtered — .onEnd doesn't fire until the
+                // user actually interacts with the map.
+                if visibleRegion == nil {
+                    visibleRegion = context.region
+                    lastCamera = context.camera
+                }
+            }
+            .onMapCameraChange(frequency: .onEnd) { context in
                 handleCameraChange(context)
             }
             // Forward map taps to the editor view-model while a placement
@@ -189,6 +247,11 @@ struct RouteDetailView: View {
                 }
             )
             }  // end: MapReader
+            } else {
+                // Map is unmounted while the tab is hidden — keep the same
+                // backdrop so re-appearing doesn't flash white.
+                Color(.systemBackground)
+            }
 
             // Editor panel takes over while in cue-editor mode
             if isEditingCues, let editor = cueEditorHolder.viewModel {
@@ -385,7 +448,17 @@ struct RouteDetailView: View {
         } message: {
             Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
         }
-        .onAppear { buildRouteCache() }
+        .onAppear {
+            isOnScreen = true
+            if cachedCoordinates.isEmpty { buildRouteCache() }
+            // Restore the user's last camera after a tab-switch unmount.
+            // First-appearance leaves mapPosition at `.automatic` so the route
+            // still auto-fits when there is no remembered camera.
+            if let cam = lastCamera {
+                mapPosition = .camera(cam)
+            }
+        }
+        .onDisappear { isOnScreen = false }
         .onChange(of: cueEditorHolder.viewModel?.selection) { _, newSelection in
             zoomMapToSelection(newSelection)
         }
@@ -433,15 +506,12 @@ struct RouteDetailView: View {
         store.routes.first(where: { $0.id == route.id }) ?? route
     }
 
-    /// Track camera heading for the arrow rotation, and rebucket the marker
-    /// interval based on visible map span. Recomputing markers is gated on the
-    /// interval bucket actually changing so pure pan/heading frames are cheap.
+    /// Settled-camera handler: snapshot the visible region for annotation
+    /// filtering, cache the camera for tab-switch restore, and re-bucket the
+    /// marker interval if the zoom level changed enough to cross a bucket.
     private func handleCameraChange(_ context: MapCameraUpdateContext) {
-        // Publish onto the dedicated camera-state object so only the views
-        // that visibly counter-rotate (HighlightChevron, MileMarkerLabel)
-        // re-render — keeps the Map body's heavyweight content stable while
-        // the user spins or pinches the camera.
-        cameraState.heading = context.camera.heading
+        visibleRegion = context.region
+        lastCamera = context.camera
 
         let region = context.region
         let latRad = region.center.latitude * .pi / 180
@@ -454,6 +524,204 @@ struct RouteDetailView: View {
             currentMarkerInterval = interval
             cachedMileMarkers = computeMileMarkers(
                 points: cachedProcessedPoints, interval: interval)
+        }
+    }
+
+    /// Returns true when `coord` is inside the current visible region inflated
+    /// by ~50% on each axis. The buffer lets the user pan up to half a screen
+    /// before any marker drops out — by then `.onEnd` will have refreshed
+    /// `visibleRegion`. nil region (initial frame) is treated as "include
+    /// everything" until the first camera update lands.
+    private func inVisibleRegion(_ coord: CLLocationCoordinate2D) -> Bool {
+        guard let r = visibleRegion else { return true }
+        let latPad = r.span.latitudeDelta
+        let lonPad = r.span.longitudeDelta
+        return abs(coord.latitude - r.center.latitude) <= latPad
+            && abs(coord.longitude - r.center.longitude) <= lonPad
+    }
+
+    /// Mile markers filtered to the visible region. Indexed-enumerated so the
+    /// ForEach `id: \.offset` keeps stable identity across filter changes —
+    /// `offset` is the marker's index in `cachedMileMarkers`, not in the
+    /// filtered subset.
+    private var visibleMileMarkers: [EnumeratedSequence<[MileMarker]>.Element] {
+        Array(cachedMileMarkers.enumerated()).filter {
+            inVisibleRegion($0.element.coordinate)
+        }
+    }
+
+    /// One proximity-merged cluster of map annotations. Used for turn cues,
+    /// route-map waypoints, and cue-editor waypoints — generic over the
+    /// underlying item so a single clustering algorithm covers all three.
+    /// `id` carries the first item's id so the cluster's SwiftUI identity
+    /// stays stable while the user pans (as long as that lead item stays in
+    /// the cluster).
+    fileprivate struct AnnotationCluster<Item: Identifiable>: Identifiable {
+        let id: Item.ID
+        let center: CLLocationCoordinate2D
+        let items: [Item]
+    }
+
+    /// True when the visible map span is short enough that the user is
+    /// clearly looking at street-level detail — at that zoom we want every
+    /// pin individually instead of cluster icons, even if multiple turns sit
+    /// on the same intersection (loops, double-backs). 500 m visible span is
+    /// roughly where individual streets stay legible on a phone.
+    private var isZoomedIn: Bool {
+        guard let r = visibleRegion else { return false }
+        let latMeters = r.span.latitudeDelta * 111_320
+        let lonMeters = r.span.longitudeDelta * 111_320
+            * cos(r.center.latitude * .pi / 180)
+        return max(latMeters, lonMeters) < 500
+    }
+
+    /// Greedy proximity-clustering. Threshold is a fraction of the visible
+    /// span so the cluster radius scales with zoom — at zoomed-out levels
+    /// many items collapse into one icon. When the user has zoomed in past
+    /// `isZoomedIn` we bail out and emit one cluster per item, so individual
+    /// turns/POIs are always visible at street level. Center is the
+    /// geographic midpoint of the cluster's items.
+    private func clusterAnnotations<Item: Identifiable>(
+        _ items: [Item],
+        coordinate: (Item) -> CLLocationCoordinate2D
+    ) -> [AnnotationCluster<Item>] {
+        // Zoomed-in or pre-first-frame → render every item as its own pin.
+        guard let r = visibleRegion, !isZoomedIn else {
+            return items.map {
+                AnnotationCluster(id: $0.id, center: coordinate($0), items: [$0])
+            }
+        }
+        // 3% of the visible span ≈ 20 pt on a phone-sized map at most zooms,
+        // roughly a pin's diameter, which is the threshold below which two
+        // pins would visually overlap.
+        let latThreshold = r.span.latitudeDelta * 0.03
+        let lonThreshold = r.span.longitudeDelta * 0.03
+
+        var clusters: [AnnotationCluster<Item>] = []
+        for item in items {
+            let c = coordinate(item)
+            if let idx = clusters.firstIndex(where: { existing in
+                abs(existing.center.latitude - c.latitude) <= latThreshold
+                    && abs(existing.center.longitude - c.longitude) <= lonThreshold
+            }) {
+                var merged = clusters[idx].items
+                merged.append(item)
+                let avgLat = merged.reduce(0.0) { $0 + coordinate($1).latitude } / Double(merged.count)
+                let avgLon = merged.reduce(0.0) { $0 + coordinate($1).longitude } / Double(merged.count)
+                clusters[idx] = AnnotationCluster(
+                    id: clusters[idx].id,
+                    center: CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon),
+                    items: merged)
+            } else {
+                clusters.append(AnnotationCluster(id: item.id, center: c, items: [item]))
+            }
+        }
+        return clusters
+    }
+
+    /// At zoomed-in levels, build a map from each turn entry's id to a
+    /// "display coordinate" that fans out colocated turns along their own
+    /// approach to the intersection. Loops and double-backs put two or more
+    /// turns at the same physical coordinate; if we render them all at the
+    /// exact same point the pins stack into one tap target. Solution: keep
+    /// the first turn in each colocated group at its real coordinate, and
+    /// walk every subsequent turn back along the route by `pinSpacingMeters`
+    /// per index — so the i-th turn appears `i * spacing` meters before its
+    /// own pass through the intersection.
+    ///
+    /// Returns an empty dictionary when zoomed out (clustering handles
+    /// overlaps there) or when the route cache is not yet built.
+    private func computeColocatedTurnOffsets(_ entries: [CueEntry]) -> [CueEntryID: CLLocationCoordinate2D] {
+        guard isZoomedIn, !cachedProcessedPoints.isEmpty else { return [:] }
+        // Two turns within this much of each other are treated as "the same
+        // intersection" — tight enough that they'd visually overlap, loose
+        // enough to catch GPS jitter between repeated passes.
+        let colocationMeters: Double = 10
+        // How far apart the offset pins sit along the route. Visible at
+        // street zoom without overshooting beyond the intersection.
+        let pinSpacingMeters: Double = 18
+
+        // Group by route-distance order so the "first pass" gets the
+        // real-coordinate slot and later passes fan back.
+        let sorted = entries.sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
+
+        var offsets: [CueEntryID: CLLocationCoordinate2D] = [:]
+        var i = 0
+        while i < sorted.count {
+            let anchor = sorted[i].turn.coordinate
+            var j = i + 1
+            while j < sorted.count,
+                  approxMeters(anchor, sorted[j].turn.coordinate) <= colocationMeters {
+                j += 1
+            }
+            if j - i > 1 {
+                for k in 1..<(j - i) {
+                    let entry = sorted[i + k]
+                    if let coord = walkBackAlongRoute(
+                        fromIndex: entry.turn.index,
+                        meters: Double(k) * pinSpacingMeters
+                    ) {
+                        offsets[entry.id] = coord
+                    }
+                }
+            }
+            i = j
+        }
+        return offsets
+    }
+
+    /// Approximate flat-earth distance between two coordinates. Plenty for
+    /// the few-meters comparisons used to detect colocated turns.
+    private func approxMeters(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let dLat = (a.latitude - b.latitude) * 111_320
+        let dLon = (a.longitude - b.longitude) * 111_320
+            * cos(a.latitude * .pi / 180)
+        return sqrt(dLat * dLat + dLon * dLon)
+    }
+
+    /// Walk backward through the processed-route points from `fromIndex`
+    /// until we've covered `meters` of along-route distance, then linearly
+    /// interpolate between the bracketing points for a precise coordinate.
+    /// Clamps to the start of the route if `meters` exceeds available
+    /// distance.
+    private func walkBackAlongRoute(fromIndex: Int, meters: Double) -> CLLocationCoordinate2D? {
+        let pts = cachedProcessedPoints
+        guard !pts.isEmpty else { return nil }
+        let start = min(max(fromIndex, 0), pts.count - 1)
+        let target = pts[start].distanceFromStart - meters
+        if target <= pts[0].distanceFromStart { return pts[0].coordinate }
+        var i = start
+        while i > 0 && pts[i].distanceFromStart > target {
+            i -= 1
+        }
+        let a = pts[i]
+        let b = i + 1 < pts.count ? pts[i + 1] : a
+        let segLen = b.distanceFromStart - a.distanceFromStart
+        let ratio = segLen > 0 ? (target - a.distanceFromStart) / segLen : 0
+        let lat = a.coordinate.latitude
+            + (b.coordinate.latitude - a.coordinate.latitude) * ratio
+        let lon = a.coordinate.longitude
+            + (b.coordinate.longitude - a.coordinate.longitude) * ratio
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    /// Tap target for a multi-item cluster — animates the camera to a region
+    /// that just contains the cluster's items (with breathing room) so the
+    /// cluster fans out into individual pins.
+    private func zoomToCoordinates(_ coords: [CLLocationCoordinate2D]) {
+        let lats = coords.map(\.latitude)
+        let lons = coords.map(\.longitude)
+        guard let minLat = lats.min(), let maxLat = lats.max(),
+              let minLon = lons.min(), let maxLon = lons.max() else { return }
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2)
+        // Floor the span so we don't zoom in absurdly far on a tight cluster.
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 2.5, 0.002),
+            longitudeDelta: max((maxLon - minLon) * 2.5, 0.002))
+        withAnimation(.easeInOut(duration: 0.4)) {
+            mapPosition = .region(MKCoordinateRegion(center: center, span: span))
         }
     }
 
@@ -482,14 +750,41 @@ struct RouteDetailView: View {
             }
         }
 
-        // Draw unselected turn pins first; selected pin last so it sits on top
-        // of overlapping neighbors at loops / double-backs.
-        ForEach(editor.allEntries.filter { $0.id != editor.selection }) { entry in
-            Annotation("", coordinate: entry.turn.coordinate) {
-                CueEditorTurnPin(editor: editor, entry: entry)
-                    .onTapGesture { editor.select(entry.id) }
+        // Cluster nearby turn cues at zoomed-out levels so a turn-dense or
+        // long route doesn't render every single cue. Single-item clusters
+        // render as the usual turn pin; multi-item clusters render as a
+        // stacked indigo "expand" pin that zooms in on tap. Once zoomed in
+        // past the cluster cutoff, `clusterAnnotations` returns size-1
+        // clusters and we additionally fan out colocated turns via
+        // `turnOffsets` so loops/double-backs don't pile pins onto one
+        // pixel.
+        let visibleTurns = editor.allEntries.filter {
+            $0.id != editor.selection && inVisibleRegion($0.turn.coordinate)
+        }
+        let turnOffsets = computeColocatedTurnOffsets(visibleTurns)
+        let turnClusters = clusterAnnotations(
+            visibleTurns,
+            coordinate: { $0.turn.coordinate })
+        ForEach(turnClusters) { cluster in
+            if cluster.items.count == 1 {
+                let entry = cluster.items[0]
+                let displayCoord = turnOffsets[entry.id] ?? entry.turn.coordinate
+                Annotation("", coordinate: displayCoord) {
+                    CueEditorTurnPin(editor: editor, entry: entry)
+                        .onTapGesture { editor.select(entry.id) }
+                }
+            } else {
+                Annotation("", coordinate: cluster.center) {
+                    MapPinCluster(count: cluster.items.count, color: .indigo)
+                        .onTapGesture {
+                            zoomToCoordinates(cluster.items.map { $0.turn.coordinate })
+                        }
+                }
             }
         }
+        // Selected turn pin is always rendered as an individual pin (never
+        // clustered), even if off-screen — the user explicitly chose it and
+        // may pan back to it.
         if let selID = editor.selection,
            let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
             Annotation("", coordinate: selEntry.turn.coordinate) {
@@ -498,15 +793,51 @@ struct RouteDetailView: View {
             }
         }
 
-        // Editor-mode waypoint pins (imported + user-added).
-        ForEach(editor.waypointEntries) { wp in
-            Annotation("", coordinate: wp.coordinate) {
+        // Editor-mode waypoint pins (imported + user-added). Same
+        // proximity-clustering — clusters re-use the CueEditorWaypointPin
+        // glyph with stacked copies behind so the visual stays consistent
+        // with single pins. Color follows the items: blue if every entry is
+        // user-added, otherwise purple to match the imported color. The
+        // selected waypoint is always rendered individually.
+        let waypointClusters = clusterAnnotations(
+            editor.waypointEntries.filter {
+                editor.waypointSelection != $0.id && inVisibleRegion($0.coordinate)
+            },
+            coordinate: { $0.coordinate })
+        ForEach(waypointClusters) { cluster in
+            if cluster.items.count == 1 {
+                let wp = cluster.items[0]
+                Annotation("", coordinate: wp.coordinate) {
+                    CueEditorWaypointPin(
+                        isSelected: false,
+                        isUserAdded: wp.source.isUserAdded
+                    )
+                    .onTapGesture {
+                        handleWaypointPinTap(editor: editor, wpID: wp.id)
+                    }
+                }
+            } else {
+                let allUserAdded = cluster.items.allSatisfy { $0.source.isUserAdded }
+                Annotation("", coordinate: cluster.center) {
+                    CueEditorWaypointPinCluster(
+                        count: cluster.items.count,
+                        isAllUserAdded: allUserAdded
+                    )
+                    .onTapGesture {
+                        zoomToCoordinates(cluster.items.map { $0.coordinate })
+                    }
+                }
+            }
+        }
+        if let selWPID = editor.waypointSelection,
+           let selWP = editor.waypointEntries.first(where: { $0.id == selWPID }) {
+            Annotation("", coordinate: selWP.coordinate) {
                 CueEditorWaypointPin(
-                    isSelected: editor.waypointSelection == wp.id,
-                    isUserAdded: wp.source.isUserAdded
+                    isSelected: true,
+                    isUserAdded: selWP.source.isUserAdded
                 )
                 .onTapGesture {
-                    handleWaypointPinTap(editor: editor, wpID: wp.id)
+                    handleWaypointPinTap(editor: editor, wpID: selWP.id)
                 }
             }
         }

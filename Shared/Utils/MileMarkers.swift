@@ -11,8 +11,13 @@ import CoreLocation
 struct MileMarker {
     let mile: Int
     let coordinate: CLLocationCoordinate2D
-    /// World-space heading of route travel at this marker, in degrees (0=N, 90=E).
+    /// World-space heading of route travel at the *arrow* location, in degrees (0=N, 90=E).
     let bearingDegrees: Double
+    /// Position of the travel-direction arrow — placed halfway along the route
+    /// to the next marker (snapped to the nearest underlying track point) so the
+    /// arrow doesn't share an annotation with the label. nil for the last
+    /// marker when the route ends before the halfway point.
+    let arrowCoordinate: CLLocationCoordinate2D?
 }
 
 /// Unit-aware interval in meters and divisor for label numbers.
@@ -61,7 +66,17 @@ func computeMileMarkers(points: [ProcessedPoint], interval: Double? = nil) -> [M
     let (metersPerUnit, defaultInterval) = distanceInterval
     let intervalUnits = interval ?? defaultInterval
     let intervalMeters = intervalUnits * metersPerUnit
-    var markers: [MileMarker] = []
+    let halfInterval = intervalMeters / 2
+
+    // First pass: emit the marker positions themselves, plus the along-route
+    // distance where each marker's direction arrow should sit (halfway to the
+    // next marker).
+    struct Pending {
+        let mile: Int
+        let coord: CLLocationCoordinate2D
+        let arrowAt: Double
+    }
+    var pending: [Pending] = []
     var nextThreshold = intervalMeters
 
     for i in 1..<points.count {
@@ -78,15 +93,43 @@ func computeMileMarkers(points: [ProcessedPoint], interval: Double? = nil) -> [M
                 (points[i].coordinate.longitude - points[i - 1].coordinate.longitude) * ratio
 
             let markerNumber = Int(round(nextThreshold / metersPerUnit))
-            let bearing = RouteProcessor.bearing(
-                from: points[i - 1].coordinate, to: points[i].coordinate)
-            markers.append(MileMarker(
+            pending.append(Pending(
                 mile: markerNumber,
-                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                bearingDegrees: bearing))
+                coord: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                arrowAt: nextThreshold + halfInterval))
 
             nextThreshold += intervalMeters
         }
+    }
+
+    // Second pass: walk forward through points to snap each marker's arrow to
+    // the nearest track point at its halfway-along-route distance. Skip the
+    // arrow if the route ends before the halfway point.
+    let totalDist = points.last?.distanceFromStart ?? 0
+    var markers: [MileMarker] = []
+    markers.reserveCapacity(pending.count)
+    var idx = 1
+    for p in pending {
+        if p.arrowAt > totalDist {
+            markers.append(MileMarker(
+                mile: p.mile, coordinate: p.coord, bearingDegrees: 0,
+                arrowCoordinate: nil))
+            continue
+        }
+        while idx < points.count && points[idx].distanceFromStart < p.arrowAt {
+            idx += 1
+        }
+        let bIdx = min(idx, points.count - 1)
+        let aIdx = max(bIdx - 1, 0)
+        let a = points[aIdx], b = points[bIdx]
+        let snap = abs(a.distanceFromStart - p.arrowAt)
+            <= abs(b.distanceFromStart - p.arrowAt) ? a : b
+        let bearing = RouteProcessor.bearing(from: a.coordinate, to: b.coordinate)
+        markers.append(MileMarker(
+            mile: p.mile,
+            coordinate: p.coord,
+            bearingDegrees: bearing,
+            arrowCoordinate: snap.coordinate))
     }
 
     return markers
@@ -99,17 +142,30 @@ func computeRideMileMarkers(locations: [CLLocation], interval: Double? = nil) ->
     let (metersPerUnit, defaultInterval) = distanceInterval
     let intervalUnits = interval ?? defaultInterval
     let intervalMeters = intervalUnits * metersPerUnit
-    var markers: [MileMarker] = []
-    var cumulativeDistance: Double = 0
+    let halfInterval = intervalMeters / 2
+
+    // Build a parallel array of cumulative distance so we can do the same
+    // halfway-snap as the route version without recomputing segments.
+    var cumDist: [Double] = Array(repeating: 0, count: locations.count)
+    for i in 1..<locations.count {
+        cumDist[i] = cumDist[i - 1] + locations[i].distance(from: locations[i - 1])
+    }
+
+    struct Pending {
+        let mile: Int
+        let coord: CLLocationCoordinate2D
+        let arrowAt: Double
+    }
+    var pending: [Pending] = []
     var nextThreshold = intervalMeters
 
     for i in 1..<locations.count {
-        let segDist = locations[i].distance(from: locations[i - 1])
-        let prevCumulative = cumulativeDistance
-        cumulativeDistance += segDist
+        let dist = cumDist[i]
+        let prevDist = cumDist[i - 1]
 
-        while cumulativeDistance >= nextThreshold && prevCumulative < nextThreshold {
-            let ratio = segDist > 0 ? (nextThreshold - prevCumulative) / segDist : 0
+        while dist >= nextThreshold && prevDist < nextThreshold {
+            let segDist = dist - prevDist
+            let ratio = segDist > 0 ? (nextThreshold - prevDist) / segDist : 0
 
             let lat = locations[i - 1].coordinate.latitude +
                 (locations[i].coordinate.latitude - locations[i - 1].coordinate.latitude) * ratio
@@ -117,15 +173,40 @@ func computeRideMileMarkers(locations: [CLLocation], interval: Double? = nil) ->
                 (locations[i].coordinate.longitude - locations[i - 1].coordinate.longitude) * ratio
 
             let markerNumber = Int(round(nextThreshold / metersPerUnit))
-            let bearing = RouteProcessor.bearing(
-                from: locations[i - 1].coordinate, to: locations[i].coordinate)
-            markers.append(MileMarker(
+            pending.append(Pending(
                 mile: markerNumber,
-                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                bearingDegrees: bearing))
+                coord: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                arrowAt: nextThreshold + halfInterval))
 
             nextThreshold += intervalMeters
         }
+    }
+
+    let totalDist = cumDist.last ?? 0
+    var markers: [MileMarker] = []
+    markers.reserveCapacity(pending.count)
+    var idx = 1
+    for p in pending {
+        if p.arrowAt > totalDist {
+            markers.append(MileMarker(
+                mile: p.mile, coordinate: p.coord, bearingDegrees: 0,
+                arrowCoordinate: nil))
+            continue
+        }
+        while idx < locations.count && cumDist[idx] < p.arrowAt {
+            idx += 1
+        }
+        let bIdx = min(idx, locations.count - 1)
+        let aIdx = max(bIdx - 1, 0)
+        let a = locations[aIdx].coordinate, b = locations[bIdx].coordinate
+        let snap = abs(cumDist[aIdx] - p.arrowAt)
+            <= abs(cumDist[bIdx] - p.arrowAt) ? a : b
+        let bearing = RouteProcessor.bearing(from: a, to: b)
+        markers.append(MileMarker(
+            mile: p.mile,
+            coordinate: p.coord,
+            bearingDegrees: bearing,
+            arrowCoordinate: snap))
     }
 
     return markers

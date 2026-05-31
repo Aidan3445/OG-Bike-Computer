@@ -257,7 +257,7 @@ struct WorkoutView<ExtraTab: View>: View {
                         Image(systemName: "pause.fill")
                             .font(.title2)
                             .frame(width: 48, height: 48)
-                            .background(Color(red: 0.62, green: 0.38, blue: 0.93), in: Circle())
+                            .background(.yellow, in: Circle())
                             .foregroundStyle(.white)
                     }
                     .buttonStyle(.plain)

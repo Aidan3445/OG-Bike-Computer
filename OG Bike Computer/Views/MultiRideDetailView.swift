@@ -32,6 +32,12 @@ struct MultiRideDetailView: View {
     @State private var chartHasPower = false
     @State private var scrubDistance: Double? = nil
     @State private var scrubColor: Color = .green
+    /// Unmount the Map while the tab is hidden — see RouteDetailView for the
+    /// rationale. Avoids the frozen-tab feeling caused by an offscreen
+    /// MKMapView still burning CPU/GPU.
+    @State private var isOnScreen: Bool = false
+    /// Snapshot of the user's last camera for tab-switch restore.
+    @State private var lastCamera: MapCamera? = nil
 
     struct RideRender: Identifiable {
         let id: UUID
@@ -61,6 +67,7 @@ struct MultiRideDetailView: View {
     var body: some View {
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
+            if isOnScreen {
             Map(position: $mapPosition) {
                 ForEach(renders) { r in
                     MapPolyline(coordinates: r.coords)
@@ -98,6 +105,12 @@ struct MultiRideDetailView: View {
                 MapCompass()
                 MapScaleView()
             }
+            .onMapCameraChange(frequency: .onEnd) { context in
+                lastCamera = context.camera
+            }
+            } else {
+                Color(.systemBackground)
+            }
 
             VStack(spacing: 0) {
                 Spacer()
@@ -120,7 +133,14 @@ struct MultiRideDetailView: View {
                 ShareSheet(activityItems: [url])
             }
         }
-        .onAppear { buildCache() }
+        .onAppear {
+            isOnScreen = true
+            if renders.isEmpty { buildCache() }
+            if let cam = lastCamera {
+                mapPosition = .camera(cam)
+            }
+        }
+        .onDisappear { isOnScreen = false }
     }
 
     // MARK: - Stats panel (same 3-state pattern as RideDetailView)
