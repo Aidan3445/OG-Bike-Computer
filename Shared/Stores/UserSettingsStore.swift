@@ -176,6 +176,21 @@ class UserSettingsStore: ObservableObject {
                 self?.autoSaveToActivePreset()
             }
             .store(in: &cancellables)
+
+        #if os(iOS)
+        // Push current settings to the watch the moment it becomes installed
+        // (fresh install, or first activation after a relaunch). The watch
+        // starts a fresh install with default settings — without this hook,
+        // it wouldn't pick up the phone's values until the next settings edit.
+        ConnectivityManager.shared.$isWatchAppInstalled
+            .removeDuplicates()
+            .scan((false, false)) { acc, next in (acc.1, next) }
+            .filter { $0.0 == false && $0.1 == true }
+            .sink { [weak self] _ in
+                self?.sendToWatch()
+            }
+            .store(in: &cancellables)
+        #endif
     }
 
     /// Attach the MetricConfigStore so metric pages are included in profile auto-save.

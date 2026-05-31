@@ -137,7 +137,7 @@ class RideSessionManager: ObservableObject {
     /// Activity to "completed", and after a short beat issues End. Suppresses
     /// any mirrored-session republish from bouncing the UI back to active.
     func optimisticEnd() {
-        beginTerminalCommand(.end, markStatus: { $0.markCompleted() }) { [weak self] in
+        beginTerminalCommand(.end, markStatus: { await $0.markCompleted() }) { [weak self] in
             self?.endRide()
         }
     }
@@ -145,19 +145,21 @@ class RideSessionManager: ObservableObject {
     /// Like `optimisticEnd`, but issues Hold instead and flips the Live
     /// Activity to a "held" state.
     func optimisticHold() {
-        beginTerminalCommand(.hold, markStatus: { $0.markHeld() }) { [weak self] in
+        beginTerminalCommand(.hold, markStatus: { await $0.markHeld() }) { [weak self] in
             self?.holdRide()
         }
     }
 
     /// Shared scaffold for the optimistic Hold / End flows:
     /// 1. mark pending command & flip `isRideActive` off (dismisses Ride tab)
-    /// 2. stamp the live activity with a terminal status so the user sees it
-    /// 3. wait `terminalRepaintDelay` so the activity actually paints
+    /// 2. await the live activity update so the terminal banner is actually
+    ///    live before we proceed
+    /// 3. wait `terminalRepaintDelay` so the rider sees it (rider is almost
+    ///    always paused at this point, so the delay is invisible)
     /// 4. send the real watch command
     private func beginTerminalCommand(
         _ command: PendingCommand,
-        markStatus: (LiveActivityManager) -> Void,
+        markStatus: @escaping (LiveActivityManager) async -> Void,
         send: @escaping () -> Void
     ) {
         guard mirroredSession != nil else { return }
@@ -167,17 +169,20 @@ class RideSessionManager: ObservableObject {
             self.isPaused = false
             self.writeStateToAppGroup()
         }
-        #if canImport(ActivityKit)
-        markStatus(LiveActivityManager.shared)
-        let delay = LiveActivityManager.terminalRepaintDelay
-        #else
-        let delay: TimeInterval = 0
-        #endif
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: send)
+        Task {
+            #if canImport(ActivityKit)
+            await markStatus(LiveActivityManager.shared)
+            try? await Task.sleep(
+                nanoseconds: UInt64(LiveActivityManager.terminalRepaintDelay * 1_000_000_000)
+            )
+            #endif
+            await MainActor.run { send() }
+        }
     }
 
     /// Discard the ride with optimistic dismissal — flips the control screen
-    /// off and sends the discard command in the background.
+    /// off and sends the discard command in the background. No visible delay
+    /// because the ride is being thrown away; the LA stamp is fire-and-forget.
     func optimisticDiscard() {
         guard mirroredSession != nil else { return }
         beginPending(.discard)
@@ -187,7 +192,7 @@ class RideSessionManager: ObservableObject {
             self.writeStateToAppGroup()
         }
         #if canImport(ActivityKit)
-        LiveActivityManager.shared.markCompleted()
+        Task { await LiveActivityManager.shared.markCompleted() }
         #endif
         sendDiscardRide()
     }

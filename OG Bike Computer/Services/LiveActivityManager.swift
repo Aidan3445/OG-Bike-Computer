@@ -134,21 +134,29 @@ class LiveActivityManager {
     /// the underlying workout, so the rider has time to see the final state.
     static let postEndDismissalDelay: TimeInterval = 60
     /// Time the caller should wait after stamping a terminal status before
-    /// tearing the workout session down, giving the activity time to repaint.
-    static let terminalRepaintDelay: TimeInterval = 1.2
+    /// tearing the workout session down. The rider is almost always paused
+    /// when they tap Hold/End, so we lean on the long side — the goal is to
+    /// guarantee the lock screen, Dynamic Island, and Ride/Held watch screens
+    /// all visibly settle on the terminal state before HK teardown dismisses
+    /// the activity.
+    static let terminalRepaintDelay: TimeInterval = 2.5
 
     /// Push a "held" state to all activities WITHOUT dismissing them. The
     /// watch will resume the workout on its end, so we keep the activity
     /// alive but show a hand-raised banner instead of "Ride Complete".
-    func markHeld() {
-        applyTerminalStatus(.held)
+    /// Awaits the ActivityKit update so the caller can rely on the new state
+    /// being live before it tears down the HK session.
+    func markHeld() async {
+        await applyTerminalStatus(.held)
     }
 
     /// Push a "completed" state to all activities WITHOUT dismissing them.
     /// Call this as early as possible in the end-ride flow so the user sees a
     /// "Ride Complete" message immediately, before HK teardown / dismissal.
-    func markCompleted() {
-        applyTerminalStatus(.completed)
+    /// Awaits the ActivityKit update so the caller can rely on the new state
+    /// being live before it tears down the HK session.
+    func markCompleted() async {
+        await applyTerminalStatus(.completed)
     }
 
     func endActivity() {
@@ -185,13 +193,17 @@ class LiveActivityManager {
 
     /// Stamp every running activity with `status` and clear the navigation /
     /// pause fields. Used for non-dismissing transitions (held / completed).
-    private func applyTerminalStatus(_ status: RideStatus) {
+    /// Awaits all activity updates so callers can rely on the new state
+    /// having been pushed before they proceed.
+    private func applyTerminalStatus(_ status: RideStatus) async {
         let allActivities = Activity<RideActivityAttributes>.activities
         guard !allActivities.isEmpty else { return }
-        for activity in allActivities {
-            let finalState = clearedState(from: activity.content.state, override: status)
-            Task {
-                await activity.update(ActivityContent(state: finalState, staleDate: nil))
+        await withTaskGroup(of: Void.self) { group in
+            for activity in allActivities {
+                let finalState = clearedState(from: activity.content.state, override: status)
+                group.addTask {
+                    await activity.update(ActivityContent(state: finalState, staleDate: nil))
+                }
             }
         }
     }

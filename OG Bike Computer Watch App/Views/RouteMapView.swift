@@ -466,30 +466,17 @@ private struct BreadcrumbMapView: View {
                 }
             }
 
-            // Mile markers — alternate above/below the route line
+            // Mile markers — always above the route line
             let markers = computeMileMarkers(points: points)
-            ForEach(Array(markers.enumerated()), id: \.element.mile) { idx, marker in
-                let below = idx.isMultiple(of: 2) == false
-                Annotation("", coordinate: marker.coordinate, anchor: below ? .top : .bottom) {
-                    if below {
-                        VStack(spacing: 0) {
-                            Image(systemName: "flag.fill")
-                                .font(.system(size: 8))
-                                .foregroundStyle(.orange)
-                                .rotationEffect(.degrees(180))
-                            Text("\(marker.mile)")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                    } else {
-                        VStack(spacing: 0) {
-                            Text("\(marker.mile)")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.white)
-                            Image(systemName: "flag.fill")
-                                .font(.system(size: 8))
-                                .foregroundStyle(.orange)
-                        }
+            ForEach(markers, id: \.mile) { marker in
+                Annotation("", coordinate: marker.coordinate, anchor: .bottom) {
+                    VStack(spacing: 0) {
+                        Text("\(marker.mile)")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.orange)
                     }
                 }
             }

@@ -33,7 +33,9 @@ struct RouteDetailView: View {
 
     // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
     @State private var cachedCoordinates: [CLLocationCoordinate2D] = []
+    @State private var cachedProcessedPoints: [ProcessedPoint] = []
     @State private var cachedMileMarkers: [MileMarker] = []
+    @State private var currentMarkerInterval: Double = 0
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
     @State private var cachedElevationData: [ProcessedPoint] = []
     @State private var panelPage = 0
@@ -43,10 +45,10 @@ struct RouteDetailView: View {
     // Cue Editor state
     @State private var isEditingCues: Bool = false
     @StateObject private var cueEditorHolder = CueEditorHolder()
-    /// Live map heading, updated from `onMapCameraChange`. Used to counter-rotate
-    /// the highlight chevrons so they stay aligned with the actual route, not
-    /// with the screen, when the camera turns.
-    @State private var currentMapHeading: Double = 0
+    /// Live map camera heading, owned by a tiny ObservableObject so only the
+    /// views that counter-rotate against it (HighlightChevron, MileMarkerLabel)
+    /// re-render on per-frame camera updates — not the entire Map body.
+    @StateObject private var cameraState = MapCameraState()
 
     var body: some View {
         let _ = unitState.preferences
@@ -78,86 +80,11 @@ struct RouteDetailView: View {
                     }
                 }
 
-                // Cue Editor turn annotations (only while editing).
-                // CueEditorTurnPin owns its own observation of the editor, so
-                // the icon/color updates live — MapKit's annotation diffing
-                // doesn't always re-evaluate the content closure on its own.
+                // Cue Editor map content (highlight overlay, turn pins,
+                // waypoint pins). Extracted so the body's @MapContentBuilder
+                // stays small enough for Swift's type-checker.
                 if isEditingCues, let editor = cueEditorHolder.viewModel {
-                    // Highlight overlay for the selected turn: a thick white
-                    // semi-transparent line on top of the route, with chevrons
-                    // at the endpoints showing direction of travel.
-                    if let selID = editor.selection,
-                       let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
-                        let highlight = editor.highlightCoordinates(for: selEntry)
-                        if highlight.count >= 2 {
-                            MapPolyline(coordinates: highlight)
-                                .stroke(.white.opacity(0.55), lineWidth: 9)
-
-                            // Travel-direction chevrons at start and end. World
-                            // bearings come from the actual polyline segments
-                            // (first→second, second-to-last→last) so the
-                            // arrows visually align with the highlight even
-                            // through bendy approaches; counter-rotated by the
-                            // live map heading so they don't follow the camera.
-                            let startBearing = RouteProcessor.bearing(
-                                from: highlight[0],
-                                to: highlight[1]
-                            )
-                            let endBearing = RouteProcessor.bearing(
-                                from: highlight[highlight.count - 2],
-                                to: highlight[highlight.count - 1]
-                            )
-                            Annotation("", coordinate: highlight[0]) {
-                                HighlightChevron(rotation: startBearing - currentMapHeading)
-                            }
-                            Annotation("", coordinate: highlight[highlight.count - 1]) {
-                                HighlightChevron(rotation: endBearing - currentMapHeading)
-                            }
-                        }
-                    }
-
-                    // Draw unselected pins first; the selected pin goes last
-                    // so it sits on top of overlapping neighbors at the same
-                    // spot (loops, double-backs).
-                    ForEach(editor.allEntries.filter { $0.id != editor.selection }) { entry in
-                        Annotation("", coordinate: entry.turn.coordinate) {
-                            CueEditorTurnPin(editor: editor, entry: entry)
-                                .onTapGesture {
-                                    editor.select(entry.id)
-                                }
-                        }
-                    }
-                    if let selID = editor.selection,
-                       let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
-                        Annotation("", coordinate: selEntry.turn.coordinate) {
-                            CueEditorTurnPin(editor: editor, entry: selEntry)
-                                .onTapGesture {
-                                    editor.select(nil)
-                                }
-                        }
-                    }
-
-                    // Editor-mode waypoint pins (imported + user-added).
-                    ForEach(editor.waypointEntries) { wp in
-                        Annotation("", coordinate: wp.coordinate) {
-                            CueEditorWaypointPin(
-                                isSelected: editor.waypointSelection == wp.id,
-                                isUserAdded: {
-                                    if case .userAdded = wp.source { return true }
-                                    return false
-                                }()
-                            )
-                            .onTapGesture {
-                                if editor.placementMode == .none {
-                                    if editor.waypointSelection == wp.id {
-                                        editor.selectWaypoint(nil)
-                                    } else {
-                                        editor.selectWaypoint(wp.id)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    cueEditorMapContent(editor: editor)
                 }
 
                 // Elevation markers
@@ -202,21 +129,25 @@ struct RouteDetailView: View {
                     }
                 }
 
-                // Mile markers
+                // Mile markers. The label stays upright (left→right) because
+                // MapKit annotations are screen-aligned. The arrow sits to the
+                // right of the label in screen space, but its icon rotates by
+                // (worldBearing − cameraHeading) so it always points in the
+                // direction of route travel.
                 ForEach(Array(cachedMileMarkers.enumerated()), id: \.offset) { _, marker in
                     Annotation("", coordinate: marker.coordinate) {
-                        Text("\(marker.mile) \(currentUnits.distance.label)")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.accentColor)
-                            .clipShape(Capsule())
+                        MileMarkerLabel(
+                            camera: cameraState,
+                            mile: marker.mile,
+                            unitLabel: currentUnits.distance.label,
+                            worldBearing: marker.bearingDegrees)
                     }
                 }
 
-                // Waypoints / POIs
-                ForEach(Array((route.waypoints?.pois ?? []).enumerated()), id: \.offset) { _, poi in
+                // Waypoints / POIs — including user edits + user-added POIs
+                // from the latest persisted overlay, so a waypoint dropped via
+                // the Cue Editor shows up here too.
+                ForEach(displayedPOIs) { poi in
                     Annotation(poi.name, coordinate: poi.coordinate) {
                         WaypointPin()
                     }
@@ -243,7 +174,7 @@ struct RouteDetailView: View {
                 MapScaleView()
             }
             .onMapCameraChange(frequency: .continuous) { context in
-                currentMapHeading = context.camera.heading
+                handleCameraChange(context)
             }
             // Forward map taps to the editor view-model while a placement
             // mode is active. SpatialTapGesture exposes the local point so we
@@ -476,7 +407,7 @@ struct RouteDetailView: View {
               let wp = editor.waypointEntries.first(where: { $0.id == id }) else {
             return
         }
-        let heading = currentMapHeading
+        let heading = cameraState.heading
         // Same constants as the cue path so both feel identical.
         let centerOffsetMeters: Double = 70
         let target = shiftedCoordinate(
@@ -500,6 +431,125 @@ struct RouteDetailView: View {
     /// edits made after entering the screen.
     private func liveRoute(store: RouteStore) -> Route {
         store.routes.first(where: { $0.id == route.id }) ?? route
+    }
+
+    /// Track camera heading for the arrow rotation, and rebucket the marker
+    /// interval based on visible map span. Recomputing markers is gated on the
+    /// interval bucket actually changing so pure pan/heading frames are cheap.
+    private func handleCameraChange(_ context: MapCameraUpdateContext) {
+        // Publish onto the dedicated camera-state object so only the views
+        // that visibly counter-rotate (HighlightChevron, MileMarkerLabel)
+        // re-render — keeps the Map body's heavyweight content stable while
+        // the user spins or pinches the camera.
+        cameraState.heading = context.camera.heading
+
+        let region = context.region
+        let latRad = region.center.latitude * .pi / 180
+        let cosLat = cos(latRad)
+        let widthMeters = region.span.longitudeDelta * 111_320 * cosLat
+        let heightMeters = region.span.latitudeDelta * 111_320
+        let visibleMeters = max(widthMeters, heightMeters)
+        let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
+        if interval != currentMarkerInterval && !cachedProcessedPoints.isEmpty {
+            currentMarkerInterval = interval
+            cachedMileMarkers = computeMileMarkers(
+                points: cachedProcessedPoints, interval: interval)
+        }
+    }
+
+    @MapContentBuilder
+    private func cueEditorMapContent(editor: CueEditorViewModel) -> some MapContent {
+        // Highlight overlay for the selected turn (thick white polyline +
+        // travel-direction chevrons at each end, counter-rotated against the
+        // live map heading so they stay aligned with the route).
+        if let selID = editor.selection,
+           let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
+            let highlight = editor.highlightCoordinates(for: selEntry)
+            if highlight.count >= 2 {
+                MapPolyline(coordinates: highlight)
+                    .stroke(.white.opacity(0.55), lineWidth: 9)
+                let startBearing = RouteProcessor.bearing(from: highlight[0], to: highlight[1])
+                let endBearing = RouteProcessor.bearing(
+                    from: highlight[highlight.count - 2],
+                    to: highlight[highlight.count - 1]
+                )
+                Annotation("", coordinate: highlight[0]) {
+                    HighlightChevron(camera: cameraState, worldBearing: startBearing)
+                }
+                Annotation("", coordinate: highlight[highlight.count - 1]) {
+                    HighlightChevron(camera: cameraState, worldBearing: endBearing)
+                }
+            }
+        }
+
+        // Draw unselected turn pins first; selected pin last so it sits on top
+        // of overlapping neighbors at loops / double-backs.
+        ForEach(editor.allEntries.filter { $0.id != editor.selection }) { entry in
+            Annotation("", coordinate: entry.turn.coordinate) {
+                CueEditorTurnPin(editor: editor, entry: entry)
+                    .onTapGesture { editor.select(entry.id) }
+            }
+        }
+        if let selID = editor.selection,
+           let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
+            Annotation("", coordinate: selEntry.turn.coordinate) {
+                CueEditorTurnPin(editor: editor, entry: selEntry)
+                    .onTapGesture { editor.select(nil) }
+            }
+        }
+
+        // Editor-mode waypoint pins (imported + user-added).
+        ForEach(editor.waypointEntries) { wp in
+            Annotation("", coordinate: wp.coordinate) {
+                CueEditorWaypointPin(
+                    isSelected: editor.waypointSelection == wp.id,
+                    isUserAdded: wp.source.isUserAdded
+                )
+                .onTapGesture {
+                    handleWaypointPinTap(editor: editor, wpID: wp.id)
+                }
+            }
+        }
+    }
+
+    /// Tap behavior for a waypoint pin — gated on placement mode and split
+    /// out of the Map closure to keep the MapContentBuilder small.
+    private func handleWaypointPinTap(editor: CueEditorViewModel, wpID: UUID) {
+        guard editor.placementMode == .none else { return }
+        if editor.waypointSelection == wpID {
+            editor.selectWaypoint(nil)
+        } else {
+            editor.selectWaypoint(wpID)
+        }
+    }
+
+    /// POIs to show on the map outside the editor — resolves the live overlay
+    /// against the imported waypoints. Mid-ride callers that don't pass
+    /// `routeStore` fall back to the navigation-captured route.
+    private var displayedPOIs: [DisplayedPOI] {
+        let liveRoute: Route = routeStore.flatMap { $0.routes.first(where: { $0.id == route.id }) } ?? route
+        let edits = liveRoute.cueEdits
+        var result: [DisplayedPOI] = []
+        for wp in (liveRoute.waypoints ?? []).filter({ $0.kind == .poi }) {
+            let d = edits?.poiDecisions[wp.id]
+            if d?.status == .skipped { continue }
+            let name = d?.titleOverride ?? wp.name
+            let lat = d?.latitudeOverride ?? wp.lat
+            let lon = d?.longitudeOverride ?? wp.lon
+            result.append(DisplayedPOI(
+                id: wp.id,
+                name: name,
+                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            ))
+        }
+        for added in edits?.addedPOIs ?? [] {
+            result.append(DisplayedPOI(
+                id: added.id,
+                name: added.name,
+                coordinate: CLLocationCoordinate2D(latitude: added.lat, longitude: added.lon)
+            ))
+        }
+        return result
     }
 
     /// Pan/zoom the map to focus on the selected turn, oriented so the rider's
@@ -578,6 +628,7 @@ struct RouteDetailView: View {
                     distanceFromStart: cumDist,
                     bearingToNext: 0))
             }
+            cachedProcessedPoints = processed
             cachedMileMarkers = computeMileMarkers(points: processed)
         }
 
@@ -612,6 +663,15 @@ struct RouteDetailView: View {
         }
         return cachedCoordinates.last
     }
+}
+
+/// Minimal POI shape for the default route-detail map. We keep our own struct
+/// (rather than reusing `RoutePOI`) because we don't need the route-distance
+/// metadata to render a pin.
+private struct DisplayedPOI: Identifiable {
+    let id: UUID
+    let name: String
+    let coordinate: CLLocationCoordinate2D
 }
 
 private struct StatItem: View {

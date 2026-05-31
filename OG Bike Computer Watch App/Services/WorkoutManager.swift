@@ -223,6 +223,21 @@ class WorkoutManager: NSObject, ObservableObject {
     private let fastSamplesForResume = 5
     private let minTentativeDuration: TimeInterval = 3.0
 
+    // Silent probe: once the HK session has been paused for ~75s, watchOS
+    // stops feeding HealthKit (and shortly after, CoreLocation) data — the
+    // state machine then has no signal to detect the rider moving again, so
+    // the ride is stuck paused forever. To work around this we periodically
+    // wake the system in the background: HK is silently resumed, GPS is
+    // sampled into the tentative buffer for a short window, then if no real
+    // movement is detected we re-pause silently and discard the probe data.
+    // Genuine movement during the probe promotes to a real resume via the
+    // existing tentativeResume → moving commit path.
+    private var pauseProbeTimer: Timer?
+    private var isSilentProbe = false
+    private var probeStartedAt: Date?
+    private let probeIntervalWhilePaused: TimeInterval = 75.0
+    private let probeWindow: TimeInterval = 15.0
+
     // Position-based fallback for stuck CLLocation.speed readings. CL sometimes
     // freezes speed at the last pre-stop value (e.g. 9 mph) when stationary,
     // which both prevents auto-pause from firing and lets a fake "high speed"
@@ -725,6 +740,7 @@ class WorkoutManager: NSObject, ObservableObject {
         if autoPauseState == .tentativeResume {
             discardTentativeBuffer()
         }
+        cancelPauseProbe()
         autoPauseState = .moving // manual pause resets auto-pause state
         pauseSession()
     }
@@ -754,6 +770,7 @@ class WorkoutManager: NSObject, ObservableObject {
         slowSampleCount = 0
         positionBuffer = []
         lastLocationUpdateAt = nil
+        cancelPauseProbe()
         autoPauseState = .moving
         resumeGraceUntil = Date().addingTimeInterval(5)
         resumeSession()
@@ -804,12 +821,88 @@ class WorkoutManager: NSObject, ObservableObject {
         return last.t.timeIntervalSince(first.t) >= positionBufferWindow * 0.6
     }
 
+    /// Schedule the next silent probe. Called whenever the ride settles into
+    /// `.paused`. The probe will fire after `probeIntervalWhilePaused` seconds
+    /// unless something cancels it first (manual resume, real movement, stop).
+    private func schedulePauseProbe() {
+        pauseProbeTimer?.invalidate()
+        pauseProbeTimer = Timer.scheduledTimer(withTimeInterval: probeIntervalWhilePaused,
+                                               repeats: false) { [weak self] _ in
+            self?.beginSilentProbe()
+        }
+    }
+
+    /// Cancel any pending probe and clear probe-in-progress state. Safe to
+    /// call from any auto-pause exit path.
+    private func cancelPauseProbe() {
+        pauseProbeTimer?.invalidate()
+        pauseProbeTimer = nil
+        isSilentProbe = false
+        probeStartedAt = nil
+    }
+
+    /// Silently wake the HK session + GPS so we can sample whether the rider
+    /// has started moving again. `isPaused` stays true so the UI doesn't
+    /// flicker — the probe is invisible unless real movement promotes it.
+    private func beginSilentProbe() {
+        guard isActive,
+              autoPauseState == .paused,
+              ridePreferences.autoPause.enabled else {
+            cancelPauseProbe()
+            return
+        }
+
+        print("[AutoPause] Starting silent probe")
+
+        // Wake HK (and indirectly CL) without going through resumeSession() —
+        // that flips isPaused / autoPauseState and announces an auto-resume.
+        // We want the ride to look paused while we sample underneath.
+        isLocalStateChange = true
+        session?.resume()
+        locationManager.startUpdatingLocation()
+
+        isSilentProbe = true
+        probeStartedAt = Date()
+
+        // Start the probe with a clean slate so noise from before the probe
+        // doesn't pollute the resume decision.
+        positionBuffer = []
+        lastLocationUpdateAt = nil
+        tentativeLocations = []
+        tentativeDistance = 0
+        tentativeStartTime = Date()
+        fastSampleCount = 0
+
+        autoPauseState = .tentativeResume
+    }
+
+    /// Probe window elapsed without confirming movement: discard everything
+    /// gathered during the probe, silently re-pause HK, and schedule the
+    /// next probe attempt.
+    private func endSilentProbeAndRePause() {
+        print("[AutoPause] Silent probe found no movement, re-pausing")
+
+        discardTentativeBuffer()
+
+        isLocalStateChange = true
+        session?.pause()
+
+        isSilentProbe = false
+        probeStartedAt = nil
+        autoPauseState = .paused
+        slowSampleCount = 0
+        positionBuffer = []
+
+        schedulePauseProbe()
+    }
+
     private func updateAutoPause() {
         guard ridePreferences.autoPause.enabled else {
             if autoPauseState == .paused || autoPauseState == .tentativeResume {
                 if autoPauseState == .tentativeResume {
                     commitTentativeBuffer()
                 }
+                cancelPauseProbe()
                 resumeSession()
                 autoPauseState = .moving
             }
@@ -852,12 +945,17 @@ class WorkoutManager: NSObject, ObservableObject {
                 if navigationAlerts.autoPauseAlerts.enabled {
                     VoiceNavigator.shared.announceAutoPause(mode: navigationAlerts.autoPauseAlerts.pauseMode)
                 }
+                schedulePauseProbe()
             }
 
         case .paused:
             // Resume decision uses buffer-derived speed only. A stuck-high
             // CL.speed produces no buffer displacement, so it can't false-fire.
             if bufferSpeedMPH >= resumeThreshold {
+                // Natural detection from a live CL stream — abandon any
+                // pending probe; if we regress back to .paused we'll
+                // reschedule a fresh probe at that point.
+                cancelPauseProbe()
                 autoPauseState = .tentativeResume
                 tentativeStartTime = Date()
                 tentativeLocations = []
@@ -883,16 +981,26 @@ class WorkoutManager: NSObject, ObservableObject {
                 if fastSampleCount >= fastSamplesForResume,
                    elapsed >= minTentativeDuration,
                    tentativeDistance >= resumeDistanceThreshold {
+                    cancelPauseProbe()
                     commitTentativeBuffer()
+                    // If we were in a silent probe, HK is already running —
+                    // session?.resume() inside resumeSession() is a no-op then.
                     resumeSession()
                     autoPauseState = .moving
                     if navigationAlerts.autoPauseAlerts.enabled {
                         VoiceNavigator.shared.announceAutoResume(mode: navigationAlerts.autoPauseAlerts.resumeMode)
                     }
                 }
-            } else {
+            } else if !isSilentProbe {
+                // Normal (non-silent) tentative resume that fell back below
+                // threshold — regress to paused immediately. During a silent
+                // probe we instead wait for the probe window to elapse so a
+                // slow-to-arrive GPS stream doesn't trip us back into paused
+                // before we've had a chance to detect real motion. The
+                // probe-window timeout is handled in tickAutoPauseFallback().
                 discardTentativeBuffer()
                 autoPauseState = .paused
+                schedulePauseProbe()
             }
         }
     }
@@ -919,8 +1027,16 @@ class WorkoutManager: NSObject, ObservableObject {
         routeInsertionTimer = nil
         
         if autoPauseState == .tentativeResume {
-            commitTentativeBuffer()
+            // Silent-probe samples are unverified — the rider was paused, the
+            // probe just happened to be in progress. Don't commit those to
+            // the saved ride.
+            if isSilentProbe {
+                discardTentativeBuffer()
+            } else {
+                commitTentativeBuffer()
+            }
         }
+        cancelPauseProbe()
 
         // Kill voice and navigation IMMEDIATELY
         VoiceNavigator.shared.reset()
@@ -1073,6 +1189,7 @@ class WorkoutManager: NSObject, ObservableObject {
             self.recordedPowers = []
             self.pendingRouteLocations = []
             self.autoPauseState = .moving
+            self.cancelPauseProbe()
             self.slowSampleCount = 0
             self.positionBuffer = []
             self.lastCommittedLocation = nil
@@ -1138,9 +1255,21 @@ class WorkoutManager: NSObject, ObservableObject {
     /// processLocation(). Without this, auto-pause never triggers — the
     /// state machine is otherwise purely event-driven on GPS updates.
     private func tickAutoPauseFallback() {
-        guard isActive, !isPaused,
-              ridePreferences.autoPause.enabled,
-              autoPauseState == .moving else { return }
+        guard isActive, ridePreferences.autoPause.enabled else { return }
+
+        // Silent probe timeout: if the probe window has elapsed without
+        // confirming movement (e.g. CL never delivered usable updates or
+        // the rider remained stationary), discard the staged buffer and
+        // silently re-pause. The probe scheduler queues the next attempt.
+        if isSilentProbe,
+           autoPauseState == .tentativeResume,
+           let probeStart = probeStartedAt,
+           Date().timeIntervalSince(probeStart) >= probeWindow {
+            endSilentProbeAndRePause()
+            return
+        }
+
+        guard !isPaused, autoPauseState == .moving else { return }
 
         // Shrink the position buffer using wall-clock time so stale "moving"
         // entries from before the stop age out even when no new GPS arrives.
@@ -1162,6 +1291,7 @@ class WorkoutManager: NSObject, ObservableObject {
         if navigationAlerts.autoPauseAlerts.enabled {
             VoiceNavigator.shared.announceAutoPause(mode: navigationAlerts.autoPauseAlerts.pauseMode)
         }
+        schedulePauseProbe()
     }
 
     private func stopDisplayTimer() {
@@ -1837,8 +1967,13 @@ class WorkoutManager: NSObject, ObservableObject {
         routeInsertionTimer = nil
 
         if autoPauseState == .tentativeResume {
-            commitTentativeBuffer()
+            if isSilentProbe {
+                discardTentativeBuffer()
+            } else {
+                commitTentativeBuffer()
+            }
         }
+        cancelPauseProbe()
 
         let rideID = currentRideID ?? UUID()
         let trackFilename = "\(rideID.uuidString).track"
@@ -2240,6 +2375,7 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 if self.autoPauseState == .tentativeResume {
                     self.clearTentativeBuffer()
                 }
+                self.cancelPauseProbe()
                 self.autoPauseState = .moving
 
             case .running where fromState == .paused:
@@ -2250,6 +2386,7 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 self.skipNextDistanceGap = true
                 self.slowSampleCount = 0
                 self.positionBuffer = []
+                self.cancelPauseProbe()
                 self.autoPauseState = .moving
                 self.resumeGraceUntil = Date().addingTimeInterval(5)
                 self.locationManager.startUpdatingLocation()

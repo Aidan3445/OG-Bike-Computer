@@ -42,6 +42,10 @@ struct RideDetailView: View {
     @State private var endCoord: CLLocationCoordinate2D?
     @State private var elevationExtremes: (high: ElevPoint, low: ElevPoint)?
     @State private var mileMarkers: [MileMarker] = []
+    @State private var currentMarkerInterval: Double = 0
+    /// Live map heading, updated from `onMapCameraChange`. Used so the mile
+    /// marker arrows can counter-rotate to point in their world-space heading.
+    @StateObject private var cameraState = MapCameraState()
     @State private var chartData: [ChartDataPoint] = []
     @State private var chartHasHR = false
     @State private var chartHasPower = false
@@ -140,6 +144,21 @@ struct RideDetailView: View {
             .mapControls {
                 MapCompass()
                 MapScaleView()
+            }
+            .onMapCameraChange(frequency: .continuous) { context in
+                cameraState.heading = context.camera.heading
+
+                let region = context.region
+                let cosLat = cos(region.center.latitude * .pi / 180)
+                let widthMeters = region.span.longitudeDelta * 111_320 * cosLat
+                let heightMeters = region.span.latitudeDelta * 111_320
+                let visibleMeters = max(widthMeters, heightMeters)
+                let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
+                if interval != currentMarkerInterval && !allLocations.isEmpty {
+                    currentMarkerInterval = interval
+                    mileMarkers = computeRideMileMarkers(
+                        locations: allLocations, interval: interval)
+                }
             }
 
             // Stats overlay — 3 states: collapsed (button) → compact (core stats) → expanded (all stats)
@@ -276,15 +295,16 @@ struct RideDetailView: View {
     
     @MapContentBuilder
     private func mileMarkerAnnotations() -> some MapContent {
+        // Label stays upright (screen-aligned). The arrow inside the label
+        // counter-rotates by the camera heading so it always points in the
+        // direction of route travel.
         ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
             Annotation("", coordinate: marker.coordinate) {
-                Text("\(marker.mile) \(currentUnits.distance.label)")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Color.accentColor)
-                    .clipShape(Capsule())
+                MileMarkerLabel(
+                    camera: cameraState,
+                    mile: marker.mile,
+                    unitLabel: currentUnits.distance.label,
+                    worldBearing: marker.bearingDegrees)
             }
         }
     }

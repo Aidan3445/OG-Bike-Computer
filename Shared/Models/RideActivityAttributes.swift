@@ -18,7 +18,11 @@ enum RideStatus: String, Codable, Hashable {
     case inactive
 }
 
-struct RideActivityAttributes: ActivityAttributes {
+/// Pure data attached to the Live Activity — explicitly nonisolated so its
+/// `ActivityAttributes` / `Codable` conformances aren't pulled onto the main
+/// actor by the project's default-isolation flag (ActivityKit calls into
+/// these from background contexts).
+nonisolated struct RideActivityAttributes: ActivityAttributes {
     /// Static data set when the activity starts
     var routeName: String?
     var startTime: Date
@@ -28,7 +32,7 @@ struct RideActivityAttributes: ActivityAttributes {
     var statSlots: [String] = ["distance", "movingTime", "averageSpeed", "heartRate", "elevationGain", "speed"]
 
     /// Dynamic data updated throughout the ride
-    struct ContentState: Codable, Hashable {
+    nonisolated struct ContentState: Codable, Hashable {
         // Core ride stats
         var elapsedTime: TimeInterval
         var movingTime: TimeInterval

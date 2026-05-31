@@ -50,6 +50,11 @@ struct WaypointEntry: Identifiable, Equatable {
     enum Source: Equatable {
         case imported(UUID)   // imported Waypoint id
         case userAdded(UUID)  // AddedPOI id
+
+        var isUserAdded: Bool {
+            if case .userAdded = self { return true }
+            return false
+        }
     }
     var id: UUID
     var source: Source
@@ -142,13 +147,45 @@ final class CueEditorViewModel: ObservableObject {
             calculated: processed.calculatedTurnPoints
         )
         // Start from whatever's already persisted (re-entering the editor).
-        self.edits = route.cueEdits ?? CueEdits()
+        let initialEdits = route.cueEdits ?? CueEdits()
+        self.edits = initialEdits
+
+        // Seed the caches synchronously, then keep them in lock-step with
+        // future `edits` changes. Recomputing on every body render was making
+        // typing in the form sluggish on long routes.
+        self.addedCueEntries = Self.buildAddedCueEntries(from: initialEdits, processed: processed)
+        self.allEntries = (classification.all + self.addedCueEntries)
+            .sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
+        self.waypointEntries = Self.buildWaypointEntries(from: initialEdits, route: route)
+
+        $edits.dropFirst()
+            .sink { [weak self] newEdits in
+                guard let self = self else { return }
+                let added = Self.buildAddedCueEntries(from: newEdits, processed: self.processed)
+                self.addedCueEntries = added
+                self.allEntries = (self.classification.all + added)
+                    .sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
+                self.waypointEntries = Self.buildWaypointEntries(from: newEdits, route: self.route)
+            }
+            .store(in: &cancellables)
     }
 
-    // MARK: - Computed entries
+    /// Combine subscriptions live here.
+    private var cancellables: Set<AnyCancellable> = []
 
-    /// User-added cues as editor entries. Recomputed from `edits.addedCues`.
-    var addedCueEntries: [CueEntry] {
+    // MARK: - Cached entry lists
+
+    /// User-added cues as editor entries. Recomputed when `edits` publishes.
+    @Published private(set) var addedCueEntries: [CueEntry] = []
+    /// All cue entries (classified + user-added) sorted by distance.
+    @Published private(set) var allEntries: [CueEntry] = []
+    /// Imported + user-added POI waypoints, with edits applied.
+    @Published private(set) var waypointEntries: [WaypointEntry] = []
+
+    private static func buildAddedCueEntries(
+        from edits: CueEdits,
+        processed: ProcessedRoute
+    ) -> [CueEntry] {
         edits.addedCues.compactMap { cue -> CueEntry? in
             guard cue.trackPointIndex >= 0, cue.trackPointIndex < processed.points.count else { return nil }
             let pt = processed.points[cue.trackPointIndex]
@@ -174,14 +211,10 @@ final class CueEditorViewModel: ObservableObject {
         }
     }
 
-    /// All cue entries (classified + user-added) sorted by distance.
-    var allEntries: [CueEntry] {
-        (classification.all + addedCueEntries)
-            .sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
-    }
-
-    /// Imported + user-added POI waypoints, with edits applied.
-    var waypointEntries: [WaypointEntry] {
+    private static func buildWaypointEntries(
+        from edits: CueEdits,
+        route: Route
+    ) -> [WaypointEntry] {
         let importedPOIs = (route.waypoints ?? []).filter { $0.kind == .poi }
         let imported: [WaypointEntry] = importedPOIs.compactMap { wp in
             let decision = edits.poiDecisions[wp.id]
@@ -812,12 +845,15 @@ final class CueEditorViewModel: ObservableObject {
             edits.addedCues.append(new)
             placementMode = .none
             commit()
-            // Auto-open the edit form for the newly placed cue. select(...)
-            // resets composing flags, so set isComposingEdit AFTER selection
-            // settles (the swap-shim may defer it a tick).
-            select(.userAddedCue(new.id))
+            // Defer selection so the panel's list mounts (with its scroll
+            // handlers wired up) BEFORE we select the new entry — otherwise
+            // the .onChange(of: selection) handler misses the change.
             DispatchQueue.main.async { [weak self] in
-                self?.isComposingEdit = true
+                guard let self = self else { return }
+                self.select(.userAddedCue(new.id))
+                DispatchQueue.main.async { [weak self] in
+                    self?.isComposingEdit = true
+                }
             }
         case .addingWaypoint:
             let new = AddedPOI(
@@ -828,8 +864,13 @@ final class CueEditorViewModel: ObservableObject {
             edits.addedPOIs.append(new)
             placementMode = .none
             commit()
-            selectWaypoint(new.id)
-            beginEditWaypointTitle(new.id)
+            // Same deferral as the cue path so the waypoint section's row
+            // is mounted before the selection-driven scroll fires.
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.selectWaypoint(new.id)
+                self.beginEditWaypointTitle(new.id)
+            }
         case .relocatingPOI(let id):
             relocateWaypoint(id, to: coordinate)
             placementMode = .none
