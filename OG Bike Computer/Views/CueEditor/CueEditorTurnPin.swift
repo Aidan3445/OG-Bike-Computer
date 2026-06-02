@@ -21,6 +21,10 @@ import SwiftUI
 struct CueEditorTurnPin: View {
     @ObservedObject var editor: CueEditorViewModel
     let entry: CueEntry
+    /// When set and > 1, draws a small "×N" capsule in the lower-right
+    /// corner to indicate the pin stands in for a colocated, same-direction
+    /// cue group (e.g. a loop hits this intersection multiple times).
+    var countBadge: Int? = nil
 
     var body: some View {
         let status = editor.status(for: entry)
@@ -33,7 +37,8 @@ struct CueEditorTurnPin: View {
             status: status,
             currentDirection: direction,
             isSelected: isSelected,
-            anySelected: anySelected
+            anySelected: anySelected,
+            countBadge: countBadge
         )
     }
 }
@@ -45,6 +50,7 @@ private struct CueEditorTurnPinBody: View {
     let currentDirection: TurnDirection
     let isSelected: Bool
     let anySelected: Bool
+    let countBadge: Int?
 
     var body: some View {
         let bright = !anySelected || isSelected
@@ -77,9 +83,24 @@ private struct CueEditorTurnPinBody: View {
                     .opacity(bright ? 1.0 : 0.55)
                     .offset(x: baseSize * 0.28, y: -baseSize * 0.28)
             }
+
+            // Cluster-count badge — small "×N" capsule pinned to the lower-
+            // right corner. Anchored from topTrailing so the offset pushes
+            // it down past the pin's bottom edge.
+            if let count = countBadge, count > 1 {
+                Text("×\(count)")
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 0.5)
+                    .background(Capsule().fill(Color.black.opacity(0.75)))
+                    .overlay(Capsule().stroke(Color.white, lineWidth: 0.8))
+                    .opacity(bright ? 1.0 : 0.55)
+                    .offset(x: baseSize * 0.4, y: baseSize * 0.85)
+            }
         }
-        // Leave room for the overhanging badge so taps still land on the pin.
-        .frame(width: baseSize * 1.4, height: baseSize * 1.4, alignment: .center)
+        // Leave room for the overhanging badges so taps still land on the pin.
+        .frame(width: baseSize * 1.8, height: baseSize * 1.8, alignment: .center)
     }
 
     /// Show the origin badge only once the row has been acted on AND the

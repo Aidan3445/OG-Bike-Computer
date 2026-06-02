@@ -36,8 +36,13 @@ struct MultiRideDetailView: View {
     /// rationale. Avoids the frozen-tab feeling caused by an offscreen
     /// MKMapView still burning CPU/GPU.
     @State private var isOnScreen: Bool = false
-    /// Snapshot of the user's last camera for tab-switch restore.
-    @State private var lastCamera: MapCamera? = nil
+    /// Cache key for MapCameraCache. The set of selected rides is the
+    /// natural identity here — the same multi-ride selection across opens
+    /// should land on the same camera. Order-independent so the user can
+    /// re-pick the same rides in any order.
+    private var cameraCacheKey: String {
+        "multi.\(rides.map { $0.id.uuidString }.sorted().joined(separator: ","))"
+    }
 
     struct RideRender: Identifiable {
         let id: UUID
@@ -106,7 +111,7 @@ struct MultiRideDetailView: View {
                 MapScaleView()
             }
             .onMapCameraChange(frequency: .onEnd) { context in
-                lastCamera = context.camera
+                MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
             }
             } else {
                 Color(.systemBackground)
@@ -136,7 +141,10 @@ struct MultiRideDetailView: View {
         .onAppear {
             isOnScreen = true
             if renders.isEmpty { buildCache() }
-            if let cam = lastCamera {
+            // Restore the cached camera (incl. zoom) from the shared cache
+            // so re-opening the same multi-ride selection picks up where
+            // the user left it.
+            if let cam = MapCameraCache.shared.camera(for: cameraCacheKey) {
                 mapPosition = .camera(cam)
             }
         }

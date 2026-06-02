@@ -45,10 +45,16 @@ struct RouteDetailView: View {
     // Cue Editor state
     @State private var isEditingCues: Bool = false
     @StateObject private var cueEditorHolder = CueEditorHolder()
-    /// Live map camera heading, owned by a tiny ObservableObject so only the
-    /// views that counter-rotate against it (HighlightChevron, MileMarkerLabel)
-    /// re-render on per-frame camera updates — not the entire Map body.
-    @StateObject private var cameraState = MapCameraState()
+    /// Live map camera heading. Held in `@State` (NOT `@StateObject`)
+    /// deliberately: we want only the small counter-rotating annotation
+    /// views (HighlightChevron, MileMarkerArrow) to observe the heading via
+    /// `@ObservedObject` and re-render per camera frame. `@StateObject`
+    /// would also subscribe the whole RouteDetailView body to every
+    /// `objectWillChange`, blowing the frame budget during rotation — the
+    /// very thing this ObservableObject was meant to avoid. `@State` keeps
+    /// the same reference across rebuilds without subscribing to its
+    /// publishers.
+    @State private var cameraState = MapCameraState()
     /// Tracks whether this view is currently visible. SwiftUI keeps each tab's
     /// view hierarchy alive across tab switches, and an alive MKMapView keeps
     /// burning CPU/GPU on tile rendering even when offscreen — which makes the
@@ -56,10 +62,10 @@ struct RouteDetailView: View {
     /// onDisappear lets us unmount the Map while the tab is hidden and rebuild
     /// it cheaply when the user returns (cached state is preserved).
     @State private var isOnScreen: Bool = false
-    /// Snapshot of the user's last camera so we can restore exactly where they
-    /// were after a tab-switch unmount/remount (`mapPosition` alone is not a
-    /// reliable round-trip across SwiftUI Map teardown).
-    @State private var lastCamera: MapCamera? = nil
+    /// Cache key for the shared MapCameraCache. Per-route so opening the
+    /// same route from different entry points (Routes tab, RideControlView
+    /// sheet, deep link) all land on the same remembered camera.
+    private var cameraCacheKey: String { "route.\(route.id.uuidString)" }
     /// Axis-aligned bounding region of what's currently visible. Used to drop
     /// off-screen annotations from the Map's ForEach so long routes (with
     /// hundreds of mile markers / POIs / turn pins) don't render every
@@ -228,7 +234,7 @@ struct RouteDetailView: View {
                 // user actually interacts with the map.
                 if visibleRegion == nil {
                     visibleRegion = context.region
-                    lastCamera = context.camera
+                    MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
                 }
             }
             .onMapCameraChange(frequency: .onEnd) { context in
@@ -451,10 +457,12 @@ struct RouteDetailView: View {
         .onAppear {
             isOnScreen = true
             if cachedCoordinates.isEmpty { buildRouteCache() }
-            // Restore the user's last camera after a tab-switch unmount.
-            // First-appearance leaves mapPosition at `.automatic` so the route
-            // still auto-fits when there is no remembered camera.
-            if let cam = lastCamera {
+            // Restore the user's last camera — including zoom (MapCamera
+            // carries `distance`) — from the shared cache so re-opening the
+            // route detail from anywhere (tab switch, RideControl sheet,
+            // navigation back) lands on the same view. First-ever appearance
+            // leaves mapPosition at `.automatic` so the route still auto-fits.
+            if let cam = MapCameraCache.shared.camera(for: cameraCacheKey) {
                 mapPosition = .camera(cam)
             }
         }
@@ -507,11 +515,12 @@ struct RouteDetailView: View {
     }
 
     /// Settled-camera handler: snapshot the visible region for annotation
-    /// filtering, cache the camera for tab-switch restore, and re-bucket the
-    /// marker interval if the zoom level changed enough to cross a bucket.
+    /// filtering, cache the camera (incl. zoom) for cross-view restore via
+    /// MapCameraCache, and re-bucket the marker interval if the zoom level
+    /// changed enough to cross a bucket.
     private func handleCameraChange(_ context: MapCameraUpdateContext) {
         visibleRegion = context.region
-        lastCamera = context.camera
+        MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
 
         let region = context.region
         let latRad = region.center.latitude * .pi / 180
@@ -729,9 +738,15 @@ struct RouteDetailView: View {
     private func cueEditorMapContent(editor: CueEditorViewModel) -> some MapContent {
         // Highlight overlay for the selected turn (thick white polyline +
         // travel-direction chevrons at each end, counter-rotated against the
-        // live map heading so they stay aligned with the route).
+        // live map heading so they stay aligned with the route). Resolved
+        // through the cue group so a non-anchor member selection still
+        // highlights the first-pass anchor — keeps the visual consistent
+        // with the displayed pin and badge.
         if let selID = editor.selection,
-           let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
+           let selGroup = editor.groupedEntries.first(where: {
+               $0.id == selID || $0.members.contains(where: { $0.id == selID })
+           }) {
+            let selEntry = selGroup.anchor
             let highlight = editor.highlightCoordinates(for: selEntry)
             if highlight.count >= 2 {
                 MapPolyline(coordinates: highlight)
@@ -750,46 +765,66 @@ struct RouteDetailView: View {
             }
         }
 
-        // Cluster nearby turn cues at zoomed-out levels so a turn-dense or
-        // long route doesn't render every single cue. Single-item clusters
-        // render as the usual turn pin; multi-item clusters render as a
-        // stacked indigo "expand" pin that zooms in on tap. Once zoomed in
-        // past the cluster cutoff, `clusterAnnotations` returns size-1
-        // clusters and we additionally fan out colocated turns via
-        // `turnOffsets` so loops/double-backs don't pile pins onto one
-        // pixel.
-        let visibleTurns = editor.allEntries.filter {
-            $0.id != editor.selection && inVisibleRegion($0.turn.coordinate)
+        // Iterate cue *groups* instead of raw entries — a loop hitting the
+        // same intersection twice (same direction, same name) collapses to
+        // one group and one map pin with a "×N" badge. Across groups,
+        // zoomed-out levels still cluster into stacked icons; zoomed-in
+        // levels fan out cross-direction colocations via
+        // `computeColocatedTurnOffsets`.
+        let selectedGroupID: CueEntryID? = editor.selection.flatMap { sel in
+            editor.groupedEntries.first {
+                $0.id == sel || $0.members.contains(where: { $0.id == sel })
+            }?.id
         }
-        let turnOffsets = computeColocatedTurnOffsets(visibleTurns)
+        let visibleGroups = editor.groupedEntries.filter {
+            $0.id != selectedGroupID && inVisibleRegion($0.anchor.turn.coordinate)
+        }
+        // The offset helper still consumes [CueEntry]; group.anchor.id ==
+        // group.id, so the resulting offset map is also keyed by group id.
+        let turnOffsets = computeColocatedTurnOffsets(visibleGroups.map { $0.anchor })
         let turnClusters = clusterAnnotations(
-            visibleTurns,
-            coordinate: { $0.turn.coordinate })
+            visibleGroups,
+            coordinate: { $0.anchor.turn.coordinate })
         ForEach(turnClusters) { cluster in
             if cluster.items.count == 1 {
-                let entry = cluster.items[0]
-                let displayCoord = turnOffsets[entry.id] ?? entry.turn.coordinate
+                let group = cluster.items[0]
+                let displayCoord = turnOffsets[group.id] ?? group.anchor.turn.coordinate
                 Annotation("", coordinate: displayCoord) {
-                    CueEditorTurnPin(editor: editor, entry: entry)
-                        .onTapGesture { editor.select(entry.id) }
+                    CueEditorTurnPin(
+                        editor: editor,
+                        entry: group.anchor,
+                        countBadge: group.isMultiple ? group.members.count : nil
+                    )
+                    .onTapGesture { editor.select(group.id) }
                 }
             } else {
                 Annotation("", coordinate: cluster.center) {
-                    MapPinCluster(count: cluster.items.count, color: .indigo)
+                    // Cluster count = total underlying turns, not group
+                    // count, so the stacked-disc indicator scales with the
+                    // actual visual density.
+                    let totalCount = cluster.items.reduce(0) { $0 + $1.members.count }
+                    MapPinCluster(count: totalCount, color: .indigo)
                         .onTapGesture {
-                            zoomToCoordinates(cluster.items.map { $0.turn.coordinate })
+                            zoomToCoordinates(cluster.items.map { $0.anchor.turn.coordinate })
                         }
                 }
             }
         }
-        // Selected turn pin is always rendered as an individual pin (never
+        // Selected group pin is always rendered as an individual pin (never
         // clustered), even if off-screen — the user explicitly chose it and
-        // may pan back to it.
-        if let selID = editor.selection,
-           let selEntry = editor.allEntries.first(where: { $0.id == selID }) {
-            Annotation("", coordinate: selEntry.turn.coordinate) {
-                CueEditorTurnPin(editor: editor, entry: selEntry)
-                    .onTapGesture { editor.select(nil) }
+        // may pan back to it. Looked up by group identity so a list tap on a
+        // non-anchor member still highlights the right pin.
+        if let sel = editor.selection,
+           let selGroup = editor.groupedEntries.first(where: {
+               $0.id == sel || $0.members.contains(where: { $0.id == sel })
+           }) {
+            Annotation("", coordinate: selGroup.anchor.turn.coordinate) {
+                CueEditorTurnPin(
+                    editor: editor,
+                    entry: selGroup.anchor,
+                    countBadge: selGroup.isMultiple ? selGroup.members.count : nil
+                )
+                .onTapGesture { editor.select(nil) }
             }
         }
 

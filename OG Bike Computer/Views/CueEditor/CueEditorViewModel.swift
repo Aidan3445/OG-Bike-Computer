@@ -157,6 +157,10 @@ final class CueEditorViewModel: ObservableObject {
         self.allEntries = (classification.all + self.addedCueEntries)
             .sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
         self.waypointEntries = Self.buildWaypointEntries(from: initialEdits, route: route)
+        // Group seeding happens after the other stored properties are set so
+        // the closures can read `self.edits` safely.
+        self.groupedEntries = []
+        self.groupedEntries = self.buildGroupedEntries(from: self.allEntries)
 
         $edits.dropFirst()
             .sink { [weak self] newEdits in
@@ -166,8 +170,27 @@ final class CueEditorViewModel: ObservableObject {
                 self.allEntries = (self.classification.all + added)
                     .sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
                 self.waypointEntries = Self.buildWaypointEntries(from: newEdits, route: self.route)
+                // Regroup with the new edits in scope — name/direction overrides
+                // can change which entries qualify to merge.
+                self.groupedEntries = self.buildGroupedEntries(from: self.allEntries)
             }
             .store(in: &cancellables)
+    }
+
+    /// Compute the grouped view of `entries` using the live edit overlay for
+    /// direction and parsed-name lookups (so renames and direction changes
+    /// take effect immediately). Lives on the instance because it needs
+    /// access to `displayDirection(for:)` / `displayName(for:)`.
+    private func buildGroupedEntries(from entries: [CueEntry]) -> [CueEntryGroup] {
+        CueDiff.groupColocated(
+            entries: entries,
+            direction: { [weak self] entry in
+                self?.displayDirection(for: entry) ?? entry.turn.direction
+            },
+            parsedName: { [weak self] entry in
+                self?.displayName(for: entry)
+            }
+        )
     }
 
     /// Combine subscriptions live here.
@@ -179,6 +202,12 @@ final class CueEditorViewModel: ObservableObject {
     @Published private(set) var addedCueEntries: [CueEntry] = []
     /// All cue entries (classified + user-added) sorted by distance.
     @Published private(set) var allEntries: [CueEntry] = []
+    /// `allEntries` collapsed into colocated same-direction groups. Used by
+    /// the Cue Editor to present one row / one map pin per logical turn — a
+    /// loop that hits the same intersection twice surfaces as one group with
+    /// two members instead of two separate rows. The watch still receives
+    /// every member individually; grouping is purely a presentation layer.
+    @Published private(set) var groupedEntries: [CueEntryGroup] = []
     /// Imported + user-added POI waypoints, with edits applied.
     @Published private(set) var waypointEntries: [WaypointEntry] = []
 

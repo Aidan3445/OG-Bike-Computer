@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import CoreLocation
 
 /// What kind of editor row this entry represents and which actions are valid.
 enum CueEntryKind: Equatable {
@@ -68,6 +69,29 @@ struct CueClassification {
 
     var all: [CueEntry] {
         (missing + extra + edit + good).sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
+    }
+}
+
+/// A row in the Cue Editor that may stand in for several underlying
+/// `CueEntry`s — e.g. a loop hits the same intersection twice in the same
+/// direction, so both passes resolve to the same logical turn. The watch
+/// still receives every member individually; the merge is purely a Cue
+/// Editor presentation thing so users don't see (and don't have to edit) the
+/// same turn N times.
+///
+/// `id` is always the earliest-by-distance member's id, which is stable
+/// across re-grouping since route-distance order doesn't change with edits.
+struct CueEntryGroup: Identifiable, Equatable {
+    let id: CueEntryID
+    var members: [CueEntry]
+
+    var isMultiple: Bool { members.count > 1 }
+    /// The "lead" member — the first pass through the intersection. Used as
+    /// the row's display source (name/direction/etc. all come from here).
+    var anchor: CueEntry { members[0] }
+
+    static func == (lhs: CueEntryGroup, rhs: CueEntryGroup) -> Bool {
+        lhs.id == rhs.id && lhs.members.map(\.id) == rhs.members.map(\.id)
     }
 }
 
@@ -232,5 +256,65 @@ enum CueDiff {
         case .straight:                         return .straight
         case .uTurn:                            return .uTurn
         }
+    }
+
+    /// Auto-group cues that share a physical intersection AND the same
+    /// turn direction (after edits). Used by the Cue Editor so a loop or
+    /// double-back doesn't surface the same logical turn N times in the
+    /// list — every member still exists in the data and still ships to the
+    /// watch, but the editor presents one row per logical turn.
+    ///
+    /// Two entries merge when:
+    ///   • their coordinates are within `colocationMeters` of each other, AND
+    ///   • `direction(a) == direction(b)` (resolved, after edits), AND
+    ///   • their resolved street names don't *positively disagree* — if both
+    ///     entries have a non-empty name and the names differ
+    ///     (case-insensitive), the merge is blocked. Missing names on
+    ///     either side don't disqualify.
+    ///
+    /// Loops put colocated passes far apart in the distance-sorted list, so
+    /// the algorithm checks every existing group on each entry rather than
+    /// only the most recent — O(n²) but n is the per-route cue count, which
+    /// is tiny.
+    static func groupColocated(
+        entries: [CueEntry],
+        direction: (CueEntry) -> TurnDirection,
+        parsedName: (CueEntry) -> String?,
+        colocationMeters: Double = 10
+    ) -> [CueEntryGroup] {
+        let sorted = entries.sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
+        var groups: [CueEntryGroup] = []
+        for entry in sorted {
+            if let idx = groups.firstIndex(where: { group in
+                let anchor = group.anchor
+                let close = approxMeters(anchor.turn.coordinate, entry.turn.coordinate)
+                    <= colocationMeters
+                if !close { return false }
+                if direction(anchor) != direction(entry) { return false }
+                if let a = parsedName(anchor), !a.isEmpty,
+                   let b = parsedName(entry), !b.isEmpty,
+                   a.caseInsensitiveCompare(b) != .orderedSame {
+                    return false
+                }
+                return true
+            }) {
+                groups[idx].members.append(entry)
+            } else {
+                groups.append(CueEntryGroup(id: entry.id, members: [entry]))
+            }
+        }
+        return groups
+    }
+
+    /// Flat-earth approximation, sufficient for the few-meters comparisons
+    /// the cue-editor grouper does.
+    private static func approxMeters(
+        _ a: CLLocationCoordinate2D,
+        _ b: CLLocationCoordinate2D
+    ) -> Double {
+        let dLat = (a.latitude - b.latitude) * 111_320
+        let dLon = (a.longitude - b.longitude) * 111_320
+            * cos(a.latitude * .pi / 180)
+        return sqrt(dLat * dLat + dLon * dLon)
     }
 }
