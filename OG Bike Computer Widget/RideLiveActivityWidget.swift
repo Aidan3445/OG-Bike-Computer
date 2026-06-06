@@ -37,6 +37,10 @@ private struct StatusBadge {
             icon = "hand.raised.fill"
             tint = .orange
             label = "Ride On Hold"
+        case .discarded:
+            icon = "trash.fill"
+            tint = .red
+            label = "Ride Discarded"
         case .active, .inactive:
             icon = "bicycle"
             tint = Theme.primaryLight
@@ -50,6 +54,7 @@ private struct StatusBadge {
         switch status {
         case .completed: return ("Done", Theme.primaryLight)
         case .held: return ("Held", .orange)
+        case .discarded: return ("Discarded", .red)
         case .active, .inactive: return nil
         }
     }
@@ -66,6 +71,8 @@ private func navIconForCompact(context: ActivityViewContext<RideActivityAttribut
         Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.primaryLight)
     case .held:
         Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
+    case .discarded:
+        Image(systemName: "trash.fill").foregroundStyle(.red)
     case .active, .inactive:
         if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
             Image(systemName: icon).foregroundStyle(Theme.primaryLight)
@@ -262,6 +269,7 @@ private struct LockScreenView: View {
     private var isActive: Bool { state.status == .active }
     private var isCompleted: Bool { state.status == .completed }
     private var isHeld: Bool { state.status == .held }
+    private var isDiscarded: Bool { state.status == .discarded }
 
     var body: some View {
         Group {
@@ -294,7 +302,11 @@ private struct LockScreenView: View {
         let icon: String
         let title: String
         let subtitle: String
+        /// Tint used for accents (chevron, shadow).
         let tint: Color
+        /// Gradient stops for the leading circle. Each status gets its own
+        /// pair so completed/held/discarded read at a glance.
+        let circleGradient: [Color]
         let showChevron: Bool
     }
 
@@ -303,15 +315,27 @@ private struct LockScreenView: View {
         case .completed:
             return .init(icon: "checkmark", title: "Ride Complete",
                          subtitle: "Tap to open ride details",
-                         tint: Theme.primary, showChevron: true)
+                         tint: Theme.primaryLight,
+                         circleGradient: [Theme.primaryLight, Theme.primary],
+                         showChevron: true)
         case .held:
             return .init(icon: "hand.raised.fill", title: "Ride On Hold",
                          subtitle: "Resume from the watch or rides list",
-                         tint: .orange, showChevron: true)
+                         tint: .orange,
+                         circleGradient: [Color.orange.opacity(0.9), Color.orange],
+                         showChevron: true)
+        case .discarded:
+            return .init(icon: "trash.fill", title: "Ride Discarded",
+                         subtitle: "Short ride wasn't saved",
+                         tint: .red,
+                         circleGradient: [Color.red.opacity(0.85), Color.red],
+                         showChevron: false)
         case .active, .inactive:
             return .init(icon: "bicycle", title: "No Active Ride",
                          subtitle: "Start a ride from the app or watch",
-                         tint: Theme.primary, showChevron: false)
+                         tint: Theme.primaryLight,
+                         circleGradient: [Theme.primaryLight, Theme.primary],
+                         showChevron: false)
         }
     }
 
@@ -322,9 +346,7 @@ private struct LockScreenView: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: isHeld
-                                ? [Color.orange.opacity(0.9), Color.orange]
-                                : [Theme.primaryLight, Theme.primary],
+                            colors: d.circleGradient,
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -348,7 +370,7 @@ private struct LockScreenView: View {
             if d.showChevron {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(isHeld ? .orange : Theme.primaryLight)
+                    .foregroundStyle(d.tint)
             }
         }
         .padding(.horizontal, 14)

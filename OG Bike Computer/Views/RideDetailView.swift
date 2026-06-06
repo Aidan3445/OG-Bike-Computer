@@ -595,11 +595,19 @@ struct RideDetailView: View {
         config.locationType = .outdoor
         HKHealthStore().startWatchApp(with: config) { _, _ in }
 
+        let resumedID = ride.id
         ConnectivityManager.shared.sendContinueHeldRide(summary: ride) { result in
             DispatchQueue.main.async {
                 isContinuing = false
                 switch result {
                 case .success:
+                    // ConnectivityManager already drops the held copy on a successful
+                    // watch ack, but call delete here too so this view's `ride`
+                    // reference can't outlive the store row if the navigation pop
+                    // races the async cleanup.
+                    if let stale = rideStore.rides.first(where: { $0.id == resumedID }) {
+                        rideStore.delete(stale)
+                    }
                     dismiss()
                 case .failure(let error):
                     heldRideError = error.localizedDescription

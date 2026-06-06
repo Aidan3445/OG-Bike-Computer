@@ -15,6 +15,7 @@ enum RideStatus: String, Codable, Hashable {
     case active
     case completed
     case held
+    case discarded
     case inactive
 }
 

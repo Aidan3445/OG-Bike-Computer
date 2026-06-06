@@ -14,6 +14,15 @@ class LiveActivityManager {
 
     private var currentActivity: Activity<RideActivityAttributes>?
 
+    /// Latched the moment we apply a terminal banner (held / completed) so
+    /// telemetry ticks racing in afterward can't rewrite `rideStatus` back to
+    /// `.active`. We can't rely on reading `activity.content.state.status` for
+    /// this because `activity.content` updates asynchronously — after
+    /// `await activity.update(...)` returns, the local proxy may still read
+    /// the previous status for a brief window. The flag is cleared when a new
+    /// activity starts.
+    private var terminalStateLatched = false
+
     private init() {}
 
     // MARK: - Lifecycle
@@ -25,6 +34,10 @@ class LiveActivityManager {
             print("[LiveActivity] Not authorized — activities disabled on system or no entitlement")
             return
         }
+
+        // Fresh activity — clear the terminal latch from any prior ride so
+        // telemetry can flow again.
+        terminalStateLatched = false
 
         // Check for existing activities — adopt one if found, end extras
         let existing = Activity<RideActivityAttributes>.activities
@@ -91,6 +104,13 @@ class LiveActivityManager {
 
     func update(from telemetry: [String: String]) {
         guard let activity = currentActivity else { return }
+
+        // Once the LA is in a terminal state (held / completed) we've already
+        // optimistically stamped a banner the rider is meant to see while the
+        // watch finishes tearing down. Telemetry keeps flowing for a beat
+        // after that — letting it through would rewrite `rideStatus` back to
+        // `.active` and flicker the banner off mid-teardown.
+        guard !terminalStateLatched else { return }
 
         let state = RideActivityAttributes.ContentState(
             elapsedTime: Double(telemetry["elapsedTime"] ?? "") ?? 0,
@@ -159,6 +179,13 @@ class LiveActivityManager {
         await applyTerminalStatus(.completed)
     }
 
+    /// Push a "discarded" state to all activities WITHOUT dismissing them.
+    /// Used for short-ride discards so the rider sees a red "Ride Discarded"
+    /// banner instead of a generic "Ride Complete" before teardown.
+    func markDiscarded() async {
+        await applyTerminalStatus(.discarded)
+    }
+
     func endActivity() {
         // End ALL activities of this type — catches orphans from crashes or
         // double-starts. Stamp a terminal status first so any lingering UI
@@ -169,15 +196,21 @@ class LiveActivityManager {
         guard !allActivities.isEmpty else {
             print("[LiveActivity] No activities to end")
             currentActivity = nil
+            terminalStateLatched = false
             return
         }
         print("[LiveActivity] Ending \(allActivities.count) activity(ies)")
         let dismissAt = Date().addingTimeInterval(Self.postEndDismissalDelay)
         for activity in allActivities {
-            let finalState = clearedState(
-                from: activity.content.state,
-                override: activity.content.state.status == .held ? nil : .completed
-            )
+            // Preserve any non-active terminal stamp that markHeld /
+            // markDiscarded / markCompleted already applied. Only default to
+            // .completed when no terminal flow has run yet (e.g. the watch
+            // ended the ride without going through the iPhone control path).
+            let existing = activity.content.state.status
+            let override: RideStatus? = (existing == .active || existing == .inactive)
+                ? .completed
+                : nil
+            let finalState = clearedState(from: activity.content.state, override: override)
             Task {
                 await activity.update(ActivityContent(state: finalState, staleDate: nil))
                 await activity.end(
@@ -198,6 +231,10 @@ class LiveActivityManager {
     private func applyTerminalStatus(_ status: RideStatus) async {
         let allActivities = Activity<RideActivityAttributes>.activities
         guard !allActivities.isEmpty else { return }
+        // Latch BEFORE awaiting so any telemetry tick racing in during the
+        // ActivityKit round-trip sees the latch and bails. If we set it
+        // after, the in-flight update would lose to the next telemetry write.
+        terminalStateLatched = true
         await withTaskGroup(of: Void.self) { group in
             for activity in allActivities {
                 let finalState = clearedState(from: activity.content.state, override: status)

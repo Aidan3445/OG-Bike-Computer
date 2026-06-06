@@ -1051,6 +1051,13 @@ class WorkoutManager: NSObject, ObservableObject {
         if !isSimulating {
             locationManager.stopUpdatingLocation()
             locationManager.stopUpdatingHeading()
+            // Discard path (save == false) needs the phone to flip its Live
+            // Activity to the red "Ride Discarded" banner before HK teardown
+            // races in and stamps the default `.completed`. The save==true
+            // path is a normal completion and intentionally sends no intent.
+            if !save {
+                ConnectivityManager.shared.sendRideTerminalIntent("discarded")
+            }
             session?.end()
         }
 
@@ -2071,6 +2078,15 @@ class WorkoutManager: NSObject, ObservableObject {
         // disk AND we've kicked off the transfer to the phone. If we deleted them
         // up-front and then crashed mid-async, both the checkpoint *and* the in-
         // flight summary would be gone.
+
+        // Tell the phone NOW (before HK tears down) that this end is a hold,
+        // not a normal completion. The HK mirroring `.ended` callback on
+        // iPhone will fire moments after `session?.end()` below; if it beats
+        // this WCSession message, the iPhone defaults the Live Activity to
+        // "Ride Complete" (purple) instead of the orange "On Hold" banner.
+        // iPhone's `stopPhoneAlerts` has a matching grace window to let this
+        // intent land before it tears the LA down.
+        ConnectivityManager.shared.sendRideTerminalIntent("held")
 
         // Finish the HK session for this segment so it saves to Fitness
         let endDate = Date()

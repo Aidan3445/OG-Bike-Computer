@@ -181,20 +181,22 @@ class RideSessionManager: ObservableObject {
     }
 
     /// Discard the ride with optimistic dismissal — flips the control screen
-    /// off and sends the discard command in the background. No visible delay
-    /// because the ride is being thrown away; the LA stamp is fire-and-forget.
+    /// off, stamps the Live Activity with a "Ride Discarded" (red) banner,
+    /// and after `terminalRepaintDelay` sends the discard command. The delay
+    /// matches Hold / End so the rider actually sees the banner before HK
+    /// teardown clears the activity.
     func optimisticDiscard() {
-        guard mirroredSession != nil else { return }
-        beginPending(.discard)
-        DispatchQueue.main.async {
-            self.isRideActive = false
-            self.isPaused = false
-            self.writeStateToAppGroup()
+        // Set the awaiting-placeholder suppression BEFORE beginTerminalCommand
+        // flips `isRideActive = false`. The original synchronous path got
+        // this for free because `sendDiscardRide()` (which sets the flag)
+        // ran before the queued main-thread didSet fired. Now that `send()`
+        // is deferred behind the 2.5s repaint delay, the didSet would
+        // otherwise see `suppressAwaitingOnNextEnd == false` and show the
+        // "Waiting for ride from watch" row, which is wrong for a discard.
+        suppressAwaitingOnNextEnd = true
+        beginTerminalCommand(.discard, markStatus: { await $0.markDiscarded() }) { [weak self] in
+            self?.sendDiscardRide()
         }
-        #if canImport(ActivityKit)
-        Task { await LiveActivityManager.shared.markCompleted() }
-        #endif
-        sendDiscardRide()
     }
 
     // MARK: - Pending Command Tracking
