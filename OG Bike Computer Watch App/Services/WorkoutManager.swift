@@ -2266,7 +2266,9 @@ class WorkoutManager: NSObject, ObservableObject {
 
         // Navigation data (when a route is loaded)
         if hasRoute {
-            payload["distToTurn"] = String(navigation.distanceToNextTurn)
+            if !navigation.isOffRoute {
+                payload["distToTurn"] = String(navigation.distanceToNextTurn)
+            }
             payload["routeRemaining"] = String(navigation.distanceRemaining)
             payload["isOffRoute"] = String(navigation.isOffRoute)
             if let routeID = activeRoute?.id {
@@ -2274,9 +2276,27 @@ class WorkoutManager: NSObject, ObservableObject {
             }
             if navigation.isOffRoute {
                 payload["distOffRoute"] = String(navigation.nearestRouteDistance)
+                if let missed = navigation.missedTurn {
+                    // Pre-formatted label so the phone widget doesn't need to
+                    // own TurnDirection's display logic. "Left" / "Sharp Right" /
+                    // "U-Turn" → "Missed Left Turn" etc.
+                    let dirWord = missed.direction.label
+                    let suffix = (missed.direction == .uTurn) ? "" : " Turn"
+                    payload["missedTurnLabel"] = "Missed \(dirWord)\(suffix)"
+                    if let desc = missed.description,
+                       let r = desc.range(of: " onto ", options: .caseInsensitive) {
+                        let name = String(desc[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+                        if !name.isEmpty {
+                            payload["missedTurnCue"] = "onto \(name)"
+                        }
+                    }
+                }
             }
 
-            if let turn = navigation.nextTurn {
+            // Suppress upcoming-turn payload when off-route — the rider isn't
+            // actually heading to that turn anymore. The off-route / missed-turn
+            // fields above take over the navigation slot on the live activity.
+            if !navigation.isOffRoute, let turn = navigation.nextTurn {
                 payload["turnDir"] = turn.direction.label
                 payload["turnIcon"] = turn.direction.icon
                 if let desc = turn.description {

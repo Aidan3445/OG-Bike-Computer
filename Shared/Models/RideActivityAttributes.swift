@@ -68,6 +68,12 @@ nonisolated struct RideActivityAttributes: ActivityAttributes {
         // Off-route
         var isOffRoute: Bool
         var distanceOffRoute: Double?   // meters from nearest route point
+        /// Pre-formatted label like "Missed Left Turn" when the rider's off-route
+        /// state coincides with passing near a turn they were meant to take.
+        var missedTurnLabel: String?
+        /// Street-name detail like "onto Main Street", when the missed turn's
+        /// cue description had a street name.
+        var missedTurnCue: String?
 
         // Rider location for potential map rendering
         var riderLatitude: Double?
