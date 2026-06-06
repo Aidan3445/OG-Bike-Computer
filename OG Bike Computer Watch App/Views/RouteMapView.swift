@@ -207,6 +207,25 @@ struct RouteMapView: View {
 
                     Spacer()
 
+                    // Repeat the upcoming turn alert. Only meaningful when
+                    // there's actually an upcoming turn and we're on-route.
+                    if !workout.navigation.isOffRoute, workout.navigation.nextTurn != nil {
+                        Button {
+                            VoiceNavigator.shared.repeatUpcomingTurnAlert()
+                        } label: {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 16, weight: .bold))
+                                .frame(width: 36, height: 36)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Rectangle())
+
+                        Spacer()
+                    }
+
                     Button {
                         let idx = effectiveZoomIndex
                         if idx > 0 {
@@ -260,8 +279,10 @@ struct RouteMapView: View {
                     }
                 }
 
-                // Turn info
-                if mapConfig.showTurnInfo, let turn = workout.navigation.nextTurn {
+                // Turn info (hidden when off-route — the OFF ROUTE banner above
+                // covers the same row, and the upcoming turn is moot until the
+                // rider rejoins the route)
+                if mapConfig.showTurnInfo, !offRoute, let turn = workout.navigation.nextTurn {
                     HStack(spacing: 4) {
                         Image(systemName: turn.direction.icon)
                             .font(.system(size: 13, weight: .bold))

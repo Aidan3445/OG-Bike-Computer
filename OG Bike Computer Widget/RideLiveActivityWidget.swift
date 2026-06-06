@@ -176,10 +176,11 @@ struct RideLiveActivity: Widget {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.subheadline.weight(.bold))
                                 .foregroundStyle(.orange)
-                            Text("Off Route")
+                            Text(context.state.missedTurnLabel ?? "Off Route")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.orange)
-                            if let dist = context.state.distanceOffRoute {
+                            if context.state.missedTurnLabel == nil,
+                               let dist = context.state.distanceOffRoute {
                                 Text("+\(formatTurnDistance(dist, imperial: context.attributes.isImperial))")
                                     .font(.footnote.weight(.medium))
                                     .foregroundStyle(.orange.opacity(0.85))
@@ -206,9 +207,12 @@ struct RideLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     let status = context.state.status
                     if status == .active {
-                        if let cue = context.state.nextTurnCue, !cue.isEmpty {
+                        let cue = context.state.isOffRoute
+                            ? context.state.missedTurnCue
+                            : context.state.nextTurnCue
+                        if let cue, !cue.isEmpty {
                             MarqueeText(text: cue, font: .footnote)
-                                .foregroundStyle(.white.opacity(0.7))
+                                .foregroundStyle(context.state.isOffRoute ? .orange.opacity(0.85) : .white.opacity(0.7))
                                 .frame(maxWidth: .infinity)
                                 .padding(.horizontal, 12)
                                 .padding(.bottom, 2)
@@ -498,10 +502,13 @@ private struct LockScreenView: View {
                         .foregroundStyle(.orange)
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Off Route")
+                    Text(state.missedTurnLabel ?? "Off Route")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.orange)
-                    if let dist = state.distanceOffRoute {
+                    if let cue = state.missedTurnCue, !cue.isEmpty {
+                        MarqueeText(text: cue, font: .caption2)
+                            .foregroundStyle(.orange.opacity(0.8))
+                    } else if let dist = state.distanceOffRoute {
                         Text("+\(formatTurnDistance(dist, imperial: isImperial)) from route")
                             .font(.caption2)
                             .foregroundStyle(.orange.opacity(0.8))

@@ -20,7 +20,12 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var alertDistances: [Double] {
         preferences.turnAlerts.alertDistances
     }
-    private let groupTurnThreshold: Double = 150 // meters between turns to group them
+    private let groupTurnThreshold: Double = 150 // meters between turns to group approach alerts
+    /// Tighter threshold (≈150 ft) for fully tying turns together: the at-turn
+    /// alert merges into "turn left then right" and the second turn's at-turn
+    /// is suppressed. Riders move through this gap too fast for separate
+    /// announcements to land.
+    private let tightGroupTurnThreshold: Double = 46
 
     private let atTurnThreshold: Double = 20
     private let cooldown: TimeInterval = 4
@@ -31,6 +36,9 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var currentTurnIndex: Int?
     private var firedTurnAlerts: Set<Int> = []
     private var groupedApproachTurnIndices: Set<Int> = []
+    /// Indices of turns whose at-turn alert is suppressed because they were
+    /// folded into the *previous* turn's merged at-turn ("turn left then right").
+    private var groupedAtTurnIndices: Set<Int> = []
 
     private var trackingFinish = false
     private var firedFinishAlerts: Set<Int> = []
@@ -81,6 +89,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         currentTurnIndex = nil
         firedTurnAlerts.removeAll()
         groupedApproachTurnIndices.removeAll()
+        groupedAtTurnIndices.removeAll()
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
@@ -109,6 +118,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         currentTurnIndex = nil
         firedTurnAlerts.removeAll()
         groupedApproachTurnIndices.removeAll()
+        groupedAtTurnIndices.removeAll()
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
@@ -272,15 +282,26 @@ class VoiceNavigator: NSObject, ObservableObject {
 
         if let turn = nav.nextTurn {
             let approachSuppressed = groupedApproachTurnIndices.contains(turn.index)
-            let followingTurn = nav.nearbyFollowingTurn(after: turn)
+            let atTurnSuppressed = groupedAtTurnIndices.contains(turn.index)
+            let followingTurn = nav.nearbyFollowingTurn(after: turn, threshold: groupTurnThreshold)
+            let tightFollowingTurn = nav.nearbyFollowingTurn(after: turn, threshold: tightGroupTurnThreshold)
 
             if fireDistanceAlert(
                 distance: nav.distanceToNextTurn,
                 speed: speed,
                 fired: &firedTurnAlerts,
                 suppressApproach: approachSuppressed,
+                suppressAtTurn: atTurnSuppressed,
                 turnIndex: turn.index,
-                atZeroText: "\(self.atTurnText(for: turn).localizedCapitalized).",
+                atZeroText: {
+                    if let ft = tightFollowingTurn {
+                        // Fully tie the pair together: speak both directions
+                        // in one breath and suppress the next turn's at-turn.
+                        self.groupedAtTurnIndices.insert(ft.index)
+                        return "\(turn.direction.voiceLabel) then \(ft.direction.voiceLabelDirection).".localizedCapitalized
+                    }
+                    return "\(self.atTurnText(for: turn).localizedCapitalized)."
+                },
                 approachText: { d in
                     if let ft = followingTurn {
                         self.groupedApproachTurnIndices.insert(ft.index)
@@ -327,7 +348,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                 distance: nav.distanceRemaining,
                 speed: speed,
                 fired: &firedFinishAlerts,
-                atZeroText: "You have arrived. Route complete.",
+                atZeroText: { "You have arrived. Route complete." },
                 approachText: { d in "Finish \(formatVoiceDistance(d))." },
                 isTurnAlert: false
             ) { return }
@@ -534,8 +555,9 @@ class VoiceNavigator: NSObject, ObservableObject {
         speed: Double,
         fired: inout Set<Int>,
         suppressApproach: Bool = false,
+        suppressAtTurn: Bool = false,
         turnIndex: Int? = nil,
-        atZeroText: String,
+        atZeroText: () -> String,
         approachText: (Double) -> String,
         isTurnAlert: Bool = true
     ) -> Bool {
@@ -563,6 +585,11 @@ class VoiceNavigator: NSObject, ObservableObject {
                 continue
             }
 
+            if isAtTurn && suppressAtTurn {
+                fired.insert(i)
+                continue
+            }
+
             if !isAtTurn && isTurnAlert && distance > 200 {
                 let gap = Date().timeIntervalSince(lastTurnAlertTime)
                 if gap < preferences.turnAlerts.minimumAlertGap {
@@ -583,7 +610,7 @@ class VoiceNavigator: NSObject, ObservableObject {
 
             fired.insert(i)
 
-            let text = isAtTurn ? atZeroText : approachText(distance)
+            let text = isAtTurn ? atZeroText() : approachText(distance)
             let cat = isTurnAlert ? (isAtTurn ? "atTurn" : "turnApproach") : nil
 
             if isTurnAlert, let idx = turnIndex {
@@ -665,6 +692,41 @@ class VoiceNavigator: NSObject, ObservableObject {
             category: "autoResume",
             alertKey: "pause-state",
             mutualCancelKey: "pause-state"
+        ))
+    }
+
+    /// Re-announce the upcoming turn with the current distance. Driven by the
+    /// watch map's repeat-alert button so the rider can ask for the cue again
+    /// after missing it (headphones disconnected, music too loud, etc.).
+    func repeatUpcomingTurnAlert() {
+        guard isEnabled, !isStopped else { return }
+        guard let nav = workoutManager?.navigation, let turn = nav.nextTurn else { return }
+        let dist = nav.distanceToNextTurn
+        let followingTurn = nav.nearbyFollowingTurn(after: turn, threshold: groupTurnThreshold)
+
+        let text: String
+        if dist <= atTurnThreshold {
+            if let ft = nav.nearbyFollowingTurn(after: turn, threshold: tightGroupTurnThreshold) {
+                text = "\(turn.direction.voiceLabel) then \(ft.direction.voiceLabelDirection).".localizedCapitalized
+            } else {
+                text = "\(self.atTurnText(for: turn).localizedCapitalized)."
+            }
+        } else if let ft = followingTurn {
+            text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn)) then \(followingTurnPhrase(for: ft))."
+        } else {
+            text = "in \(formatVoiceDistance(dist)), \(voiceText(for: turn))."
+        }
+
+        let turnIndex = turn.index
+        enqueueAlert(VoiceAlert(
+            priority: .immediateTurn,
+            text: text,
+            mode: .voiceAndHaptic,
+            category: "turnApproach",
+            alertKey: "turn-repeat-\(turnIndex)",
+            relevanceCheck: { [weak self] in
+                self?.workoutManager?.navigation.nextTurn?.index == turnIndex
+            }
         ))
     }
 
@@ -1069,6 +1131,21 @@ extension TurnDirection {
         case .right:       return "right turn"
         case .slightRight: return "slight right"
         case .sharpRight:  return "sharp right turn"
+        case .uTurn:       return "U-turn"
+        case .straight:    return "straight"
+        }
+    }
+
+    /// Direction word without the "turn " prefix, for "turn left then right"
+    /// style compound phrases where the leading verb is shared.
+    var voiceLabelDirection: String {
+        switch self {
+        case .left:        return "left"
+        case .slightLeft:  return "slight left"
+        case .sharpLeft:   return "sharp left"
+        case .right:       return "right"
+        case .slightRight: return "slight right"
+        case .sharpRight:  return "sharp right"
         case .uTurn:       return "U-turn"
         case .straight:    return "straight"
         }

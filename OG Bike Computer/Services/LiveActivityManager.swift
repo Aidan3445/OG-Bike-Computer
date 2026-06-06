@@ -83,6 +83,8 @@ class LiveActivityManager {
             isAutoPaused: false,
             isOffRoute: false,
             distanceOffRoute: nil,
+            missedTurnLabel: nil,
+            missedTurnCue: nil,
             riderLatitude: nil,
             riderLongitude: nil,
             rideStatus: .active
@@ -138,6 +140,8 @@ class LiveActivityManager {
             isAutoPaused: telemetry["isAutoPaused"] == "true",
             isOffRoute: telemetry["isOffRoute"] == "true",
             distanceOffRoute: Double(telemetry["distOffRoute"] ?? ""),
+            missedTurnLabel: telemetry["missedTurnLabel"],
+            missedTurnCue: telemetry["missedTurnCue"],
             riderLatitude: Double(telemetry["lat"] ?? ""),
             riderLongitude: Double(telemetry["lon"] ?? ""),
             rideStatus: .active
@@ -260,6 +264,8 @@ class LiveActivityManager {
         s.nextTurnIcon = nil
         s.nextTurnCue = nil
         s.distanceToNextTurn = nil
+        s.missedTurnLabel = nil
+        s.missedTurnCue = nil
         return s
     }
 }
