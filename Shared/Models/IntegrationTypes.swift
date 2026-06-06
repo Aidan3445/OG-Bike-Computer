@@ -65,16 +65,21 @@ struct ServiceUploadRecord: Codable, Equatable, Identifiable {
     var uploadedAt: Date
     var webURL: String?
     let uploadId: Int?
+    /// True when the remote service reported this activity was already uploaded.
+    /// Treated as terminal — no remoteID/webURL, but never retried.
+    var isDuplicate: Bool?
 
-    /// Upload is complete when we have the remote activity ID
-    var isComplete: Bool { remoteID != nil }
+    /// Upload is settled (no further work) when we either have the remote
+    /// activity ID or the remote rejected it as a duplicate.
+    var isComplete: Bool { remoteID != nil || isDuplicate == true }
 
-    init(service: IntegrationServiceID, remoteID: String? = nil, uploadedAt: Date, webURL: String?, uploadId: Int? = nil) {
+    init(service: IntegrationServiceID, remoteID: String? = nil, uploadedAt: Date, webURL: String?, uploadId: Int? = nil, isDuplicate: Bool? = nil) {
         self.service = service
         self.remoteID = remoteID
         self.uploadedAt = uploadedAt
         self.webURL = webURL
         self.uploadId = uploadId
+        self.isDuplicate = isDuplicate
     }
 
     init(from decoder: Decoder) throws {
@@ -84,6 +89,7 @@ struct ServiceUploadRecord: Codable, Equatable, Identifiable {
         uploadedAt = try c.decode(Date.self, forKey: .uploadedAt)
         webURL = try c.decodeIfPresent(String.self, forKey: .webURL)
         uploadId = try c.decodeIfPresent(Int.self, forKey: .uploadId)
+        isDuplicate = try c.decodeIfPresent(Bool.self, forKey: .isDuplicate)
     }
 }
 

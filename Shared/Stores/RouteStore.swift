@@ -89,4 +89,36 @@ class RouteStore: ObservableObject {
         routes[index] = updated
         onChange?()
     }
+
+    /// Persist Cue Editor decisions back to the stored Route. Returns the updated
+    /// Route so callers (and the watch sync layer) can pick it up.
+    /// If the route is currently on the watch, also queues an automatic
+    /// resync so the watch's stored copy stays in lock-step with the edits.
+    @discardableResult
+    func updateCueEdits(routeID: UUID, edits: CueEdits?) -> Route? {
+        guard let index = routes.firstIndex(where: { $0.id == routeID }) else { return nil }
+        var updated = routes[index]
+        // Treat an empty edits structure as nil so unedited routes stay clean.
+        updated.cueEdits = (edits?.isEmpty == true) ? nil : edits
+        let fileURL = directory.appendingPathComponent("\(routeID.uuidString).json")
+        if let data = try? JSONEncoder().encode(updated) {
+            try? data.write(to: fileURL)
+        }
+        routes[index] = updated
+        onChange?()
+        autoResyncIfOnWatch(updated)
+        return updated
+    }
+
+    /// If a route is already on the watch, replace it with the latest copy so
+    /// edits propagate without the user having to tap "Send to Watch" again.
+    /// The send is queued via WatchConnectivity; if the watch is unreachable
+    /// the transfer will resume when it comes back online.
+    private func autoResyncIfOnWatch(_ route: Route) {
+        #if os(iOS)
+        let cm = ConnectivityManager.shared
+        guard cm.routeIDsOnWatch.contains(route.id) else { return }
+        cm.sendRoute(route) { _ in }
+        #endif
+    }
 }

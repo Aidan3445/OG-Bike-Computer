@@ -172,7 +172,7 @@ class StravaClient: ServiceClient, UploadableServiceClient {
                 if let activityID = status.activity_id {
                     return (activityID, "https://www.strava.com/activities/\(activityID)")
                 }
-                throw ServiceError.uploadFailed("Activity already exists on Strava (duplicate)")
+                throw ServiceError.duplicate
             }
             throw ServiceError.uploadFailed(error)
         }

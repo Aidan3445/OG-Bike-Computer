@@ -33,6 +33,8 @@ enum ServiceError: LocalizedError {
     case networkError(Error)
     case decodingError(Error)
     case uploadFailed(String)
+    /// Strava reports the activity already exists. Terminal — no point retrying.
+    case duplicate
     case noData
     case invalidURL
 
@@ -45,6 +47,7 @@ enum ServiceError: LocalizedError {
         case .networkError(let error): return "Network error: \(error.localizedDescription)"
         case .decodingError: return "Failed to parse response from server."
         case .uploadFailed(let msg): return "Upload failed: \(msg)"
+        case .duplicate: return "Activity already exists on Strava."
         case .noData: return "No data received from server."
         case .invalidURL: return "Unable to parse URL. Please check and try again."
         }

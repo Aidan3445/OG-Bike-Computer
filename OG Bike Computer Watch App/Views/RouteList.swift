@@ -24,33 +24,34 @@ struct RouteList: View {
         NavigationStack {
             Group {
                 if store.routes.isEmpty {
-                    VStack(spacing: 8) {
-                        if let held = rideStore.heldRide {
-                            heldRideButton(held)
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            Image(systemName: "arrow.down.circle")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("No Routes")
+                                .font(.headline)
+                            Text("Import from phone")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+
                             Divider().padding(.vertical, 4)
+
+                            if let held = rideStore.heldRide {
+                                heldRideButton(held)
+                            }
+
+                            NavigationLink {
+                                StartRideView(route: nil, workout: workout, rideStore: rideStore)
+                            } label: {
+                                Label("Free Ride", systemImage: "record.circle")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .tint(.orange)
                         }
-
-                        Image(systemName: "arrow.down.circle")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
-                        Text("No Routes")
-                            .font(.headline)
-                        Text("Import from phone")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-
-                        Divider().padding(.vertical, 4)
-
-                        NavigationLink {
-                            StartRideView(route: nil, workout: workout, rideStore: rideStore)
-                        } label: {
-                            Label("Free Ride", systemImage: "record.circle")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .tint(.orange)
+                        .padding()
                     }
-                    .padding()
                 } else {
                     List {
                         if let held = rideStore.heldRide {
@@ -126,7 +127,12 @@ struct RouteList: View {
                 .foregroundStyle(.orange)
         }
         .alert("Held Ride", isPresented: $showHeldRideAlert) {
-            Button("Continue") { workout.continueHeldRide(summary: held) }
+            Button("Continue") {
+                let route = held.heldRouteID.flatMap { id in
+                    store.routes.first { $0.id == id }
+                }
+                workout.continueHeldRide(summary: held, route: route)
+            }
             Button("End & Save") { workout.finalizeHeldRide(summary: held) }
             Button("Discard", role: .destructive) { showDiscardConfirmation = true }
             Button("Cancel", role: .cancel) {}
@@ -140,20 +146,6 @@ struct RouteList: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will permanently delete your held ride. This cannot be undone.")
-        }
-        // Phone-initiated start that needs confirmation (held ride would be discarded)
-        .alert("Discard Held Ride?", isPresented: Binding(
-            get: { workout.pendingStartConfirmation != nil },
-            set: { if !$0 { workout.pendingStartConfirmation = nil } }
-        )) {
-            Button("Discard & Start", role: .destructive) {
-                let action = workout.pendingStartConfirmation
-                workout.pendingStartConfirmation = nil
-                action?()
-            }
-            Button("Cancel", role: .cancel) { workout.pendingStartConfirmation = nil }
-        } message: {
-            Text("Starting a new ride will discard your held ride. This cannot be undone.")
         }
     }
 }

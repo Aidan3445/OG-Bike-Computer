@@ -91,6 +91,12 @@ class UploadManager: ObservableObject {
                         completeUploadRecord(uploadId: uploadId, activityID: result.activityID, webURL: result.webURL, for: rideID)
                     }
                     logger.info("[UploadManager] Resumed upload for \(ride.name): \(result.activityID)")
+                } catch ServiceError.duplicate {
+                    // Terminal — stamp the record so we don't poll forever.
+                    await MainActor.run {
+                        markUploadAsDuplicate(uploadId: uploadId, for: rideID)
+                    }
+                    logger.info("[UploadManager] Resume marked duplicate for \(ride.name) — won't retry")
                 } catch {
                     logger.error("[UploadManager] Resume failed for \(ride.name): \(error.localizedDescription)")
                     saveFailedUpload(rideID: rideID, service: .strava)
@@ -126,6 +132,15 @@ class UploadManager: ObservableObject {
                 completeUploadRecord(uploadId: uploadId, activityID: result.activityID, webURL: result.webURL, for: rideID)
             }
             logger.info("[UploadManager] Uploaded \(ride.name) to Strava: \(result.activityID)")
+        } catch ServiceError.duplicate {
+            // Fresh upload hit a duplicate during polling. We already wrote
+            // the partial record at step 4b, so stamp that record duplicate.
+            // If we crashed before 4b, the resume path will hit the same
+            // case on next launch and stamp it then.
+            await MainActor.run {
+                markLatestStravaUploadDuplicate(for: rideID)
+            }
+            logger.info("[UploadManager] Marked duplicate for \(ride.name) — won't retry")
         } catch {
             logger.error("[UploadManager] Strava upload failed for \(ride.name): \(error.localizedDescription)")
             saveFailedUpload(rideID: rideID, service: .strava)
@@ -145,7 +160,15 @@ class UploadManager: ObservableObject {
         // Resume in-progress upload if one exists
         if let existing = ride.uploads?.first(where: { $0.service == .strava }),
            let uploadId = existing.uploadId {
-            let result = try await stravaClient.pollUpload(uploadID: uploadId)
+            let result: (activityID: Int, webURL: String)
+            do {
+                result = try await stravaClient.pollUpload(uploadID: uploadId)
+            } catch ServiceError.duplicate {
+                await MainActor.run {
+                    markUploadAsDuplicate(uploadId: uploadId, for: rideID)
+                }
+                throw ServiceError.duplicate
+            }
             await MainActor.run {
                 completeUploadRecord(uploadId: uploadId, activityID: result.activityID, webURL: result.webURL, for: rideID)
             }
@@ -170,7 +193,15 @@ class UploadManager: ObservableObject {
             appendUploadRecord(partialRecord, to: rideID)
         }
 
-        let result = try await stravaClient.pollUpload(uploadID: uploadId)
+        let result: (activityID: Int, webURL: String)
+        do {
+            result = try await stravaClient.pollUpload(uploadID: uploadId)
+        } catch ServiceError.duplicate {
+            await MainActor.run {
+                markUploadAsDuplicate(uploadId: uploadId, for: rideID)
+            }
+            throw ServiceError.duplicate
+        }
 
         await MainActor.run {
             completeUploadRecord(uploadId: uploadId, activityID: result.activityID, webURL: result.webURL, for: rideID)
@@ -198,6 +229,37 @@ class UploadManager: ObservableObject {
             rideStore.rides[index] = ride
             persistRide(ride, rideID: rideID)
         }
+    }
+
+    /// Stamp a specific in-flight Strava record (matched by uploadId) as a
+    /// duplicate so `isComplete` returns true and we stop retrying.
+    private func markUploadAsDuplicate(uploadId: Int, for rideID: UUID) {
+        guard let rideStore,
+              let rideIndex = rideStore.rides.firstIndex(where: { $0.id == rideID }) else { return }
+        var ride = rideStore.rides[rideIndex]
+        guard var uploads = ride.uploads,
+              let uploadIndex = uploads.firstIndex(where: { $0.uploadId == uploadId && $0.service == .strava }) else { return }
+        uploads[uploadIndex].isDuplicate = true
+        uploads[uploadIndex].uploadedAt = Date()
+        ride.uploads = uploads
+        rideStore.rides[rideIndex] = ride
+        persistRide(ride, rideID: rideID)
+    }
+
+    /// Stamp the most recently-appended Strava record on this ride as a
+    /// duplicate. Used after a fresh upload throws `.duplicate` from polling,
+    /// where the originating uploadId is no longer in scope.
+    private func markLatestStravaUploadDuplicate(for rideID: UUID) {
+        guard let rideStore,
+              let rideIndex = rideStore.rides.firstIndex(where: { $0.id == rideID }) else { return }
+        var ride = rideStore.rides[rideIndex]
+        guard var uploads = ride.uploads,
+              let uploadIndex = uploads.lastIndex(where: { $0.service == .strava && !$0.isComplete }) else { return }
+        uploads[uploadIndex].isDuplicate = true
+        uploads[uploadIndex].uploadedAt = Date()
+        ride.uploads = uploads
+        rideStore.rides[rideIndex] = ride
+        persistRide(ride, rideID: rideID)
     }
 
     private func completeUploadRecord(uploadId: Int, activityID: Int, webURL: String, for rideID: UUID) {

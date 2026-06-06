@@ -17,16 +17,6 @@ struct PhoneAlertSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Turn Notifications", isOn: prefs.showTurnNotifications)
-            } header: {
-                Text("Notifications")
-            } footer: {
-                Text("Post a banner notification on the iPhone for each upcoming turn, in addition to the spoken alert. Requires a loaded route.")
-            }
-
-            Section {
-                Toggle("Show Map Preview", isOn: prefs.liveActivityShowMap)
-
                 NavigationLink {
                     LiveActivityCustomizationView(userSettings: userSettings)
                 } label: {
@@ -42,18 +32,26 @@ struct PhoneAlertSettingsView: View {
             } header: {
                 Text("Live Activity")
             } footer: {
-                Text("The Live Activity is shown on the Lock Screen and Dynamic Island whenever a ride is in progress. When a route is loaded, it also displays the next turn and an optional map preview.")
+                Text("The Live Activity is shown on the Lock Screen and Dynamic Island whenever a ride is in progress. Pick the six stats that appear in its lock-screen grid.")
+            }
+
+            Section {
+                Toggle("Turn Notifications", isOn: prefs.showTurnNotifications)
+            } header: {
+                Text("Phone Notifications")
+            } footer: {
+                Text("Also post a banner notification on the iPhone for each upcoming turn, in addition to the spoken alert. Requires a loaded route.")
             }
 
             if userSettings.settings.phoneAlerts != .default {
                 Section {
-                    Button("Reset Phone Alerts to Defaults", role: .destructive) {
+                    Button("Reset to Defaults", role: .destructive) {
                         userSettings.settings.phoneAlerts = .default
                     }
                 }
             }
         }
-        .settingsPageTitle("Phone Alerts", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Live Activity", profile: userSettings.activeProfileName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

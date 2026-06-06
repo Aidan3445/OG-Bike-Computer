@@ -8,6 +8,7 @@
 import Foundation
 import HealthKit
 import CoreLocation
+import CoreMotion
 import Combine
 
 import WatchKit
@@ -87,6 +88,20 @@ class WorkoutManager: NSObject, ObservableObject {
     private var liveElevRefAltitude: Double?
     private var liveElevMinDelta: Double { ridePreferences.elevationSmoothing.elevMinDelta }
 
+    // Barometric altitude: when available, the Watch's pressure sensor gives
+    // sub-meter relative altitude with far less noise than GPS. We accumulate
+    // gain/loss off the altimeter and prefer those numbers over GPS-derived
+    // ones. GPS still drives currentElevation's absolute reference (offset by
+    // the barometer delta so the on-screen number tracks the trusted signal).
+    private let altimeter = CMAltimeter()
+    private var altimeterRunning = false
+    private var baroRefRelativeAltitude: Double?
+    private var lastBaroRelativeAltitude: Double?
+    private var baroElevationGain: Double = 0
+    private var baroElevationLoss: Double = 0
+    private let baroMinDelta: Double = 0.5  // meters — barometric noise floor
+    private var hasBarometer: Bool { CMAltimeter.isRelativeAltitudeAvailable() }
+
     // User-configurable mass for power estimate (synced from phone)
     var riderMass: Double = 75  // kg
     var bikeMass: Double = 10   // kg
@@ -116,12 +131,21 @@ class WorkoutManager: NSObject, ObservableObject {
     private var splitHRCount: Int = 0
     var navigationAlerts: NavigationAlertPreferences = .default {
         didSet {
-            // When split distance changes mid-ride, reset accumulators so the next
-            // split is measured from the current position with current stats.
-            // Without this, changing e.g. 5mi → 0.5mi fires immediately using stale baselines.
+            // When split distance changes mid-ride, re-anchor to the nearest split
+            // boundary at-or-below current distance — NOT to the current position.
+            // Anchoring to current position offsets every future split by however
+            // many miles were already ridden when the change landed (e.g. phone
+            // settings sync arrives at mile 3 → first 10mi split fires at 13, then
+            // 23, 33, …).
             guard isActive,
                   navigationAlerts.splitAlerts.splitDistance != oldValue.splitAlerts.splitDistance else { return }
-            lastSplitDistance = totalDistance
+            let splitDist = navigationAlerts.splitAlerts.splitDistance
+            if splitDist > 0 {
+                currentSplitNumber = Int(totalDistance / splitDist)
+                lastSplitDistance = Double(currentSplitNumber) * splitDist
+            } else {
+                lastSplitDistance = totalDistance
+            }
             resetSplitAccumulators()
         }
     }
@@ -145,9 +169,10 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var completedRideSummary: WatchRideSummary?
     /// Set when healthKitAutoUpload is off — prompts the user to save or discard the HK workout
     @Published var showHealthKitPrompt = false
-    /// Set when starting a new ride would discard an existing held ride.
-    /// The watch UI should show a confirmation sheet and call the closure to proceed or nil to cancel.
-    @Published var pendingStartConfirmation: (() -> Void)?
+    /// Set when the rider attempts to hold the current ride while another held
+    /// ride already exists. The watch UI shows a "Save & Hold / Discard & Hold
+    /// / Cancel" alert and dispatches via `resolveHoldConflict(_:)`.
+    @Published var pendingHoldConflict = false
     /// Continuation called with `true` to save to HealthKit, `false` to discard
     var healthKitPromptHandler: ((Bool) -> Void)?
 
@@ -197,6 +222,40 @@ class WorkoutManager: NSObject, ObservableObject {
     private var fastSampleCount = 0
     private let fastSamplesForResume = 5
     private let minTentativeDuration: TimeInterval = 3.0
+
+    // Silent probe: once the HK session has been paused for ~75s, watchOS
+    // stops feeding HealthKit (and shortly after, CoreLocation) data — the
+    // state machine then has no signal to detect the rider moving again, so
+    // the ride is stuck paused forever. To work around this we periodically
+    // wake the system in the background: HK is silently resumed, GPS is
+    // sampled into the tentative buffer for a short window, then if no real
+    // movement is detected we re-pause silently and discard the probe data.
+    // Genuine movement during the probe promotes to a real resume via the
+    // existing tentativeResume → moving commit path.
+    private var pauseProbeTimer: Timer?
+    private var isSilentProbe = false
+    private var probeStartedAt: Date?
+    private let probeIntervalWhilePaused: TimeInterval = 75.0
+    private let probeWindow: TimeInterval = 15.0
+
+    // Position-based fallback for stuck CLLocation.speed readings. CL sometimes
+    // freezes speed at the last pre-stop value (e.g. 9 mph) when stationary,
+    // which both prevents auto-pause from firing and lets a fake "high speed"
+    // false-trigger resume. We derive a trusted speed from a rolling window of
+    // actual positions, and force-pause when displacement is near zero.
+    private var positionBuffer: [(loc: CLLocation, t: Date)] = []
+    private let positionBufferWindow: TimeInterval = 8.0
+    private let stationaryDistanceThreshold: Double = 6.0  // meters over window → paused
+    private let resumeDistanceThreshold: Double = 15.0     // meters of tentative buffer travel to confirm resume
+
+    // Wall-clock of the last GPS update we processed. The 1Hz displayTimer
+    // uses this to force an auto-pause re-check when CoreLocation throttles
+    // updates while the rider is standing still (otherwise updateAutoPause
+    // would never get called and the ride stays in .moving forever).
+    private var lastLocationUpdateAt: Date?
+    /// Seconds of GPS silence before the displayTimer fallback treats the
+    /// rider as stationary and trips auto-pause directly.
+    private let gpsSilenceForcedPauseSeconds: TimeInterval = 8.0
 
     // Gap-safe distance tracking
     private var lastCommittedLocation: CLLocation?
@@ -276,12 +335,17 @@ class WorkoutManager: NSObject, ObservableObject {
         isPaused = false
         autoPauseState = .moving
         slowSampleCount = 0
+        positionBuffer = []
+        lastLocationUpdateAt = nil
         lastCommittedLocation = nil
         skipNextDistanceGap = false
         lastSplitDistance = 0
         currentSplitNumber = 0
         resetSplitAccumulators()
         initialRouteName = navigation.processedRoute?.name
+        baroElevationGain = 0
+        baroElevationLoss = 0
+        startAltimeter()
         startTelemetryTimer()
     }
     #else
@@ -291,6 +355,9 @@ class WorkoutManager: NSObject, ObservableObject {
     func processLocation(_ location: CLLocation) {
         DispatchQueue.main.async {
             self.currentLocation = location
+            self.lastLocationUpdateAt = Date()
+            self.appendToPositionBuffer(location)
+
             // CLLocation.speed can be stale or unreliable when stationary.
             // Reject readings with invalid speedAccuracy so they don't keep the
             // display pinned to an old value and block auto-pause from firing.
@@ -298,6 +365,14 @@ class WorkoutManager: NSObject, ObservableObject {
                 self.speed = 0
             } else {
                 self.speed = max(location.speed, 0)
+            }
+
+            // While auto-paused (or staging a tentative resume), force speed
+            // to 0 *before* navigation/voice/updateAutoPause read it. CL can
+            // freeze at a stuck non-zero value when stationary, which both
+            // misleads the UI and false-triggers tentative resume otherwise.
+            if self.autoPauseState != .moving {
+                self.speed = 0
             }
 
             self.updateExtendedMetrics(location)
@@ -329,10 +404,10 @@ class WorkoutManager: NSObject, ObservableObject {
 
             self.updateAutoPause()
 
-            // While auto-paused, force the displayed speed to 0 regardless of
-            // what GPS reports — stale/noisy CL readings shouldn't show motion
-            // when the rider is stopped.
-            if self.autoPauseState == .paused {
+            // Re-clamp after updateAutoPause in case state transitioned this tick
+            // (e.g. .moving → .paused). Keeps the UI from briefly flashing the
+            // pre-pause speed value before the next location update.
+            if self.autoPauseState != .moving {
                 self.speed = 0
             }
 
@@ -529,10 +604,9 @@ class WorkoutManager: NSObject, ObservableObject {
 
     /// Start a ride by creating a new local HKWorkoutSession (default path).
     func start(activity: ActivityType) {
-        // Discard any existing held ride (caller must have already confirmed with user)
-        if continuationBase == nil {
-            autoFinalizeHeldRideIfNeeded()
-        }
+        // A held ride is allowed to coexist with an active ride. The rider only
+        // has to resolve the conflict when they try to *hold* this new ride —
+        // see `attemptHold()`. Starting never silently discards held data.
 
         let config = HKWorkoutConfiguration()
         config.activityType = activity.hkType
@@ -599,6 +673,11 @@ class WorkoutManager: NSObject, ObservableObject {
 
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
+        // When continuing a held ride, carry the prior gain/loss totals so
+        // barometric deltas continue accumulating from where we left off.
+        baroElevationGain = liveElevationGain
+        baroElevationLoss = liveElevationLoss
+        startAltimeter()
 
         workoutStartDate = Date()
         timerStart = workoutStartDate
@@ -613,6 +692,8 @@ class WorkoutManager: NSObject, ObservableObject {
         isPaused = false
         autoPauseState = .moving
         slowSampleCount = 0
+        positionBuffer = []
+        lastLocationUpdateAt = nil
         // Seed lastCommittedLocation from restored track end when continuing
         lastCommittedLocation = continuationBase != nil ? recordedLocations.last : nil
         skipNextDistanceGap = false
@@ -659,6 +740,7 @@ class WorkoutManager: NSObject, ObservableObject {
         if autoPauseState == .tentativeResume {
             discardTentativeBuffer()
         }
+        cancelPauseProbe()
         autoPauseState = .moving // manual pause resets auto-pause state
         pauseSession()
     }
@@ -673,6 +755,10 @@ class WorkoutManager: NSObject, ObservableObject {
             autoPauseState = .moving
             clearTentativeBuffer()
         }
+        // Pressure drift across the pause window would otherwise be booked
+        // as gain/loss on the first post-resume sample. Anchor to the most
+        // recent reading instead.
+        rebaseBarometer()
     }
 
     func resume() {
@@ -682,9 +768,132 @@ class WorkoutManager: NSObject, ObservableObject {
         // Skip the distance gap from pause period
         skipNextDistanceGap = true
         slowSampleCount = 0
+        positionBuffer = []
+        lastLocationUpdateAt = nil
+        cancelPauseProbe()
         autoPauseState = .moving
         resumeGraceUntil = Date().addingTimeInterval(5)
         resumeSession()
+    }
+
+    /// Append a location to the rolling position buffer and drop entries
+    /// older than `positionBufferWindow` seconds.
+    private func appendToPositionBuffer(_ location: CLLocation) {
+        positionBuffer.append((loc: location, t: Date()))
+        evictStalePositionBuffer()
+    }
+
+    /// Drop position-buffer entries older than the window. Called both on new
+    /// GPS updates and from the 1Hz displayTimer so the buffer shrinks even
+    /// when CoreLocation goes silent (stationary rider scenario).
+    private func evictStalePositionBuffer() {
+        let cutoff = Date().addingTimeInterval(-positionBufferWindow)
+        while let first = positionBuffer.first, first.t < cutoff {
+            positionBuffer.removeFirst()
+        }
+    }
+
+    /// Distance (meters) from the oldest buffered location to the newest.
+    /// Returns 0 when the buffer doesn't yet span a meaningful interval.
+    private func positionBufferDisplacement() -> Double {
+        guard let first = positionBuffer.first,
+              let last = positionBuffer.last,
+              last.t.timeIntervalSince(first.t) >= positionBufferWindow * 0.6 else {
+            return 0
+        }
+        return last.loc.distance(from: first.loc)
+    }
+
+    /// Average ground speed (m/s) derived from the buffer's displacement and
+    /// time span. Independent of CLLocation.speed, so immune to stuck readings.
+    private func positionBufferSpeed() -> Double {
+        guard let first = positionBuffer.first,
+              let last = positionBuffer.last else { return 0 }
+        let dt = last.t.timeIntervalSince(first.t)
+        guard dt >= positionBufferWindow * 0.6 else { return 0 }
+        return last.loc.distance(from: first.loc) / dt
+    }
+
+    /// True once the buffer spans enough time to trust its displacement signal.
+    private var positionBufferReady: Bool {
+        guard let first = positionBuffer.first,
+              let last = positionBuffer.last else { return false }
+        return last.t.timeIntervalSince(first.t) >= positionBufferWindow * 0.6
+    }
+
+    /// Schedule the next silent probe. Called whenever the ride settles into
+    /// `.paused`. The probe will fire after `probeIntervalWhilePaused` seconds
+    /// unless something cancels it first (manual resume, real movement, stop).
+    private func schedulePauseProbe() {
+        pauseProbeTimer?.invalidate()
+        pauseProbeTimer = Timer.scheduledTimer(withTimeInterval: probeIntervalWhilePaused,
+                                               repeats: false) { [weak self] _ in
+            self?.beginSilentProbe()
+        }
+    }
+
+    /// Cancel any pending probe and clear probe-in-progress state. Safe to
+    /// call from any auto-pause exit path.
+    private func cancelPauseProbe() {
+        pauseProbeTimer?.invalidate()
+        pauseProbeTimer = nil
+        isSilentProbe = false
+        probeStartedAt = nil
+    }
+
+    /// Silently wake the HK session + GPS so we can sample whether the rider
+    /// has started moving again. `isPaused` stays true so the UI doesn't
+    /// flicker — the probe is invisible unless real movement promotes it.
+    private func beginSilentProbe() {
+        guard isActive,
+              autoPauseState == .paused,
+              ridePreferences.autoPause.enabled else {
+            cancelPauseProbe()
+            return
+        }
+
+        print("[AutoPause] Starting silent probe")
+
+        // Wake HK (and indirectly CL) without going through resumeSession() —
+        // that flips isPaused / autoPauseState and announces an auto-resume.
+        // We want the ride to look paused while we sample underneath.
+        isLocalStateChange = true
+        session?.resume()
+        locationManager.startUpdatingLocation()
+
+        isSilentProbe = true
+        probeStartedAt = Date()
+
+        // Start the probe with a clean slate so noise from before the probe
+        // doesn't pollute the resume decision.
+        positionBuffer = []
+        lastLocationUpdateAt = nil
+        tentativeLocations = []
+        tentativeDistance = 0
+        tentativeStartTime = Date()
+        fastSampleCount = 0
+
+        autoPauseState = .tentativeResume
+    }
+
+    /// Probe window elapsed without confirming movement: discard everything
+    /// gathered during the probe, silently re-pause HK, and schedule the
+    /// next probe attempt.
+    private func endSilentProbeAndRePause() {
+        print("[AutoPause] Silent probe found no movement, re-pausing")
+
+        discardTentativeBuffer()
+
+        isLocalStateChange = true
+        session?.pause()
+
+        isSilentProbe = false
+        probeStartedAt = nil
+        autoPauseState = .paused
+        slowSampleCount = 0
+        positionBuffer = []
+
+        schedulePauseProbe()
     }
 
     private func updateAutoPause() {
@@ -693,72 +902,105 @@ class WorkoutManager: NSObject, ObservableObject {
                 if autoPauseState == .tentativeResume {
                     commitTentativeBuffer()
                 }
+                cancelPauseProbe()
                 resumeSession()
                 autoPauseState = .moving
             }
             return
         }
 
-        let speedMPH = speed * 2.23694
         let pauseThreshold = ridePreferences.autoPause.speedThreshold * 2.23694
         let resumeThreshold = pauseThreshold + 1.0
+
+        // Trust the position buffer over CL.speed for the pause decisions.
+        // CL.speed can freeze at a stale value when stationary (sometimes well
+        // above threshold, sometimes just below it), breaking the velocity-only
+        // logic. Buffer speed/displacement are derived from actual movement.
+        let bufferSpeedMPH = positionBufferSpeed() * 2.23694
+        let bufferDisplacement = positionBufferDisplacement()
+        let clSpeedMPH = speed * 2.23694
 
         switch autoPauseState {
         case .moving:
             guard Date() >= resumeGraceUntil else { return }
 
-            if speedMPH < pauseThreshold {
+            // Velocity-based trigger (unchanged): consecutive slow CL samples.
+            if clSpeedMPH < pauseThreshold {
                 slowSampleCount += 1
             } else {
                 slowSampleCount = 0
             }
+            let velocitySaysPaused = slowSampleCount >= slowSamplesForPause
 
-            if slowSampleCount >= slowSamplesForPause && !isPaused {
+            // Position-based trigger: rolling-window displacement near zero.
+            // Catches the case where CL.speed is frozen above threshold while
+            // the rider is actually stationary.
+            let positionSaysPaused = positionBufferReady &&
+                bufferDisplacement < stationaryDistanceThreshold
+
+            if (velocitySaysPaused || positionSaysPaused) && !isPaused {
                 autoPauseState = .paused
                 pauseSession()
                 slowSampleCount = 0
                 if navigationAlerts.autoPauseAlerts.enabled {
                     VoiceNavigator.shared.announceAutoPause(mode: navigationAlerts.autoPauseAlerts.pauseMode)
                 }
+                schedulePauseProbe()
             }
 
         case .paused:
-            if speedMPH >= resumeThreshold {
-                // Don't resume HK session yet — just start staging
+            // Resume decision uses buffer-derived speed only. A stuck-high
+            // CL.speed produces no buffer displacement, so it can't false-fire.
+            if bufferSpeedMPH >= resumeThreshold {
+                // Natural detection from a live CL stream — abandon any
+                // pending probe; if we regress back to .paused we'll
+                // reschedule a fresh probe at that point.
+                cancelPauseProbe()
                 autoPauseState = .tentativeResume
                 tentativeStartTime = Date()
                 tentativeLocations = []
                 tentativeDistance = 0
                 fastSampleCount = 1
 
-                // Seed buffer with current location
                 if let loc = currentLocation {
                     tentativeLocations.append(loc)
                 }
             }
 
         case .tentativeResume:
-            if speedMPH >= resumeThreshold {
+            if bufferSpeedMPH >= resumeThreshold {
                 fastSampleCount += 1
 
                 let elapsed = tentativeStartTime
                     .map { Date().timeIntervalSince($0) } ?? 0
 
+                // Require sustained fast samples, minimum duration, *and*
+                // enough real displacement in the tentative buffer. The
+                // distance gate is what makes a stuck CL reading unable to
+                // false-confirm: no real movement → no tentativeDistance.
                 if fastSampleCount >= fastSamplesForResume,
-                   elapsed >= minTentativeDuration {
-                    // Confirmed real movement — commit and go live
+                   elapsed >= minTentativeDuration,
+                   tentativeDistance >= resumeDistanceThreshold {
+                    cancelPauseProbe()
                     commitTentativeBuffer()
+                    // If we were in a silent probe, HK is already running —
+                    // session?.resume() inside resumeSession() is a no-op then.
                     resumeSession()
                     autoPauseState = .moving
                     if navigationAlerts.autoPauseAlerts.enabled {
                         VoiceNavigator.shared.announceAutoResume(mode: navigationAlerts.autoPauseAlerts.resumeMode)
                     }
                 }
-            } else {
-                // False alarm — discard buffer, stay paused
+            } else if !isSilentProbe {
+                // Normal (non-silent) tentative resume that fell back below
+                // threshold — regress to paused immediately. During a silent
+                // probe we instead wait for the probe window to elapse so a
+                // slow-to-arrive GPS stream doesn't trip us back into paused
+                // before we've had a chance to detect real motion. The
+                // probe-window timeout is handled in tickAutoPauseFallback().
                 discardTentativeBuffer()
                 autoPauseState = .paused
-                // HK session was never resumed, so no need to re-pause it
+                schedulePauseProbe()
             }
         }
     }
@@ -780,12 +1022,21 @@ class WorkoutManager: NSObject, ObservableObject {
         stopDisplayTimer()
         stopTelemetryTimer()
         stopCheckpointTimer()
+        stopAltimeter()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
         
         if autoPauseState == .tentativeResume {
-            commitTentativeBuffer()
+            // Silent-probe samples are unverified — the rider was paused, the
+            // probe just happened to be in progress. Don't commit those to
+            // the saved ride.
+            if isSilentProbe {
+                discardTentativeBuffer()
+            } else {
+                commitTentativeBuffer()
+            }
         }
+        cancelPauseProbe()
 
         // Kill voice and navigation IMMEDIATELY
         VoiceNavigator.shared.reset()
@@ -800,6 +1051,13 @@ class WorkoutManager: NSObject, ObservableObject {
         if !isSimulating {
             locationManager.stopUpdatingLocation()
             locationManager.stopUpdatingHeading()
+            // Discard path (save == false) needs the phone to flip its Live
+            // Activity to the red "Ride Discarded" banner before HK teardown
+            // races in and stamps the default `.completed`. The save==true
+            // path is a normal completion and intentionally sends no intent.
+            if !save {
+                ConnectivityManager.shared.sendRideTerminalIntent("discarded")
+            }
             session?.end()
         }
 
@@ -938,7 +1196,9 @@ class WorkoutManager: NSObject, ObservableObject {
             self.recordedPowers = []
             self.pendingRouteLocations = []
             self.autoPauseState = .moving
+            self.cancelPauseProbe()
             self.slowSampleCount = 0
+            self.positionBuffer = []
             self.lastCommittedLocation = nil
             self.skipNextDistanceGap = false
             self.clearTentativeBuffer()
@@ -991,13 +1251,117 @@ class WorkoutManager: NSObject, ObservableObject {
                 if !self.isAutoPaused && !self.isPaused {
                     self.movingTime += 1
                 }
+                self.tickAutoPauseFallback()
             }
         }
+    }
+
+    /// Runs every second from the displayTimer. Catches the case where the
+    /// rider has stopped moving and CoreLocation has throttled GPS updates
+    /// to the point that updateAutoPause() stops being called from
+    /// processLocation(). Without this, auto-pause never triggers — the
+    /// state machine is otherwise purely event-driven on GPS updates.
+    private func tickAutoPauseFallback() {
+        guard isActive, ridePreferences.autoPause.enabled else { return }
+
+        // Silent probe timeout: if the probe window has elapsed without
+        // confirming movement (e.g. CL never delivered usable updates or
+        // the rider remained stationary), discard the staged buffer and
+        // silently re-pause. The probe scheduler queues the next attempt.
+        if isSilentProbe,
+           autoPauseState == .tentativeResume,
+           let probeStart = probeStartedAt,
+           Date().timeIntervalSince(probeStart) >= probeWindow {
+            endSilentProbeAndRePause()
+            return
+        }
+
+        guard !isPaused, autoPauseState == .moving else { return }
+
+        // Shrink the position buffer using wall-clock time so stale "moving"
+        // entries from before the stop age out even when no new GPS arrives.
+        evictStalePositionBuffer()
+
+        guard let last = lastLocationUpdateAt else { return }
+        let silence = Date().timeIntervalSince(last)
+        guard silence >= gpsSilenceForcedPauseSeconds,
+              Date() >= resumeGraceUntil else { return }
+
+        // No fresh GPS for several seconds → treat as stationary. Drive the
+        // state machine through its normal pause path so all the existing
+        // side-effects (HK pause, voice cue, slowSampleCount reset) run.
+        speed = 0
+        autoPauseState = .paused
+        pauseSession()
+        slowSampleCount = 0
+        positionBuffer = []
+        if navigationAlerts.autoPauseAlerts.enabled {
+            VoiceNavigator.shared.announceAutoPause(mode: navigationAlerts.autoPauseAlerts.pauseMode)
+        }
+        schedulePauseProbe()
     }
 
     private func stopDisplayTimer() {
         displayTimer?.invalidate()
         displayTimer = nil
+    }
+
+    private func startAltimeter() {
+        guard hasBarometer, !altimeterRunning else { return }
+        altimeterRunning = true
+        baroRefRelativeAltitude = nil
+        lastBaroRelativeAltitude = nil
+        altimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, _ in
+            guard let self = self, let data = data else { return }
+            self.handleBarometerUpdate(relativeAltitude: data.relativeAltitude.doubleValue)
+        }
+    }
+
+    private func stopAltimeter() {
+        guard altimeterRunning else { return }
+        altimeter.stopRelativeAltitudeUpdates()
+        altimeterRunning = false
+    }
+
+    /// Re-anchor the barometer reference so a stretch where we're not
+    /// accumulating (manual pause, auto-pause, ride start) doesn't roll its
+    /// pressure drift into the next accumulating sample.
+    private func rebaseBarometer() {
+        baroRefRelativeAltitude = lastBaroRelativeAltitude
+    }
+
+    private func handleBarometerUpdate(relativeAltitude: Double) {
+        lastBaroRelativeAltitude = relativeAltitude
+
+        // Don't accumulate while the ride isn't actively recording. Keep the
+        // reference glued to the latest reading so pause-window pressure
+        // drift doesn't get booked as gain when we resume.
+        guard isActive, !isPaused, autoPauseState == .moving else {
+            baroRefRelativeAltitude = relativeAltitude
+            return
+        }
+
+        guard let ref = baroRefRelativeAltitude else {
+            baroRefRelativeAltitude = relativeAltitude
+            return
+        }
+
+        let delta = relativeAltitude - ref
+        if delta > baroMinDelta {
+            baroElevationGain += delta
+            baroRefRelativeAltitude = relativeAltitude
+            liveElevationGain = baroElevationGain
+            // Keep currentElevation tracking the trusted delta when we have
+            // a GPS-anchored absolute baseline.
+            currentElevation += delta
+            if currentElevation > highestElevation { highestElevation = currentElevation }
+        } else if delta < -baroMinDelta {
+            baroElevationLoss -= delta
+            baroRefRelativeAltitude = relativeAltitude
+            liveElevationLoss = baroElevationLoss
+            currentElevation += delta
+            if currentElevation < lowestElevation { lowestElevation = currentElevation }
+        }
     }
 
     var averageSpeed: Double {
@@ -1010,25 +1374,30 @@ class WorkoutManager: NSObject, ObservableObject {
         if spd > maxSpeed { maxSpeed = spd }
         if spd > splitMaxSpeed { splitMaxSpeed = spd }
 
-        // Elevation (only if valid vertical accuracy)
-        if location.verticalAccuracy >= 0 {
+        // Elevation: absolute altitude (currentElevation, highest/lowest) is
+        // GPS-driven and gated on a usable verticalAccuracy. Gain/loss prefers
+        // the barometer when available — see handleBarometerUpdate. The GPS
+        // gain path here only runs as a fallback when no barometer is present,
+        // and uses a stricter accuracy gate (<10m) than the previous code.
+        if location.verticalAccuracy >= 0 && location.verticalAccuracy < 20 {
             let alt = location.altitude
             currentElevation = alt
             if alt > highestElevation { highestElevation = alt }
             if alt < lowestElevation { lowestElevation = alt }
 
-            // Live elevation gain/loss with noise filtering
-            if let ref = liveElevRefAltitude {
-                let delta = alt - ref
-                if delta > liveElevMinDelta {
-                    liveElevationGain += delta
-                    liveElevRefAltitude = alt
-                } else if delta < -liveElevMinDelta {
-                    liveElevationLoss -= delta
+            if !hasBarometer && location.verticalAccuracy < 10 {
+                if let ref = liveElevRefAltitude {
+                    let delta = alt - ref
+                    if delta > liveElevMinDelta {
+                        liveElevationGain += delta
+                        liveElevRefAltitude = alt
+                    } else if delta < -liveElevMinDelta {
+                        liveElevationLoss -= delta
+                        liveElevRefAltitude = alt
+                    }
+                } else {
                     liveElevRefAltitude = alt
                 }
-            } else {
-                liveElevRefAltitude = alt
             }
         }
 
@@ -1216,22 +1585,24 @@ class WorkoutManager: NSObject, ObservableObject {
         let avgSpeed = movingTime > 0 ? totalDistance / movingTime : 0
         var elevGain: Double = 0
         var elevLoss: Double = 0
-        if recordedLocations.count > 1 {
-            // Minimum altitude change (meters) to count — filters GPS noise.
-            // CLLocation vertical accuracy is typically ±5-10m.
-            let minDelta: Double = 4.0
-
-            // Use a rolling reference altitude that only advances when
-            // the cumulative change exceeds the threshold. This avoids
-            // both spike noise and the problem of many small real changes
-            // getting individually filtered out.
+        if hasBarometer {
+            // Barometric totals are the source of truth when the Watch has a
+            // pressure sensor — the GPS track was never used to accumulate
+            // gain in that case, so recomputing from it would just reintroduce
+            // GPS noise.
+            elevGain = liveElevationGain
+            elevLoss = liveElevationLoss
+        } else if recordedLocations.count > 1 {
+            // No barometer → recompute from GPS using the same threshold as
+            // the live path so live and saved totals agree. Floor at 2m so a
+            // user who picked .off doesn't ship a noise-dominated number.
+            let minDelta = max(ridePreferences.elevationSmoothing.elevMinDelta, 2.0)
             var refAltitude = recordedLocations[0].altitude
 
             for i in 1..<recordedLocations.count {
                 let alt = recordedLocations[i].altitude
-
-                // Skip points with invalid/unknown altitude
-                guard recordedLocations[i].verticalAccuracy >= 0 else { continue }
+                guard recordedLocations[i].verticalAccuracy >= 0,
+                      recordedLocations[i].verticalAccuracy < 10 else { continue }
 
                 let delta = alt - refAltitude
                 if delta > minDelta {
@@ -1241,9 +1612,6 @@ class WorkoutManager: NSObject, ObservableObject {
                     elevLoss -= delta
                     refAltitude = alt
                 }
-                // If within ±minDelta, don't move the reference —
-                // lets real gradual climbs accumulate until they
-                // cross the threshold.
             }
         }
 
@@ -1560,6 +1928,43 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
+    /// Attempt to hold the current ride. If another held ride already exists,
+    /// surface a confirmation alert (via `pendingHoldConflict`) instead of
+    /// silently discarding it — only one held ride is allowed at a time.
+    /// Resolves through `resolveHoldConflict(_:)`.
+    func attemptHold() {
+        guard isActive, !isSimulating else { return }
+        if let existing = rideStore?.heldRide, existing.id != currentRideID {
+            pendingHoldConflict = true
+        } else {
+            holdRide()
+        }
+    }
+
+    enum HoldConflictResolution {
+        case saveAndHold
+        case discardAndHold
+        case cancel
+    }
+
+    /// Resolve a `pendingHoldConflict`. Save = finalize the existing held ride
+    /// and then hold the current ride; Discard = drop the existing held ride
+    /// and then hold the current ride; Cancel = leave both untouched.
+    func resolveHoldConflict(_ resolution: HoldConflictResolution) {
+        pendingHoldConflict = false
+        guard let existing = rideStore?.heldRide else { return }
+        switch resolution {
+        case .saveAndHold:
+            finalizeHeldRide(summary: existing)
+            holdRide()
+        case .discardAndHold:
+            discardHeldRide(summary: existing)
+            holdRide()
+        case .cancel:
+            break
+        }
+    }
+
     func holdRide() {
         guard isActive, !isSimulating else { return }
 
@@ -1569,8 +1974,13 @@ class WorkoutManager: NSObject, ObservableObject {
         routeInsertionTimer = nil
 
         if autoPauseState == .tentativeResume {
-            commitTentativeBuffer()
+            if isSilentProbe {
+                discardTentativeBuffer()
+            } else {
+                commitTentativeBuffer()
+            }
         }
+        cancelPauseProbe()
 
         let rideID = currentRideID ?? UUID()
         let trackFilename = "\(rideID.uuidString).track"
@@ -1605,7 +2015,8 @@ class WorkoutManager: NSObject, ObservableObject {
             maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
             highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
             lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil,
-            isOnHold: true
+            isOnHold: true,
+            heldRouteID: activeRoute?.id
         )
 
         let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
@@ -1668,6 +2079,15 @@ class WorkoutManager: NSObject, ObservableObject {
         // up-front and then crashed mid-async, both the checkpoint *and* the in-
         // flight summary would be gone.
 
+        // Tell the phone NOW (before HK tears down) that this end is a hold,
+        // not a normal completion. The HK mirroring `.ended` callback on
+        // iPhone will fire moments after `session?.end()` below; if it beats
+        // this WCSession message, the iPhone defaults the Live Activity to
+        // "Ride Complete" (purple) instead of the orange "On Hold" banner.
+        // iPhone's `stopPhoneAlerts` has a matching grace window to let this
+        // intent land before it tears the LA down.
+        ConnectivityManager.shared.sendRideTerminalIntent("held")
+
         // Finish the HK session for this segment so it saves to Fitness
         let endDate = Date()
         session?.end()
@@ -1713,13 +2133,21 @@ class WorkoutManager: NSObject, ObservableObject {
         }
     }
 
-    func continueHeldRide(summary: RideSummary) {
+    func continueHeldRide(summary: RideSummary, route: Route? = nil) {
         guard !isActive else { return }
 
         let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
         guard let trackData = try? Data(contentsOf: trackURL) else {
             print("[Continue] Could not load track for held ride")
             return
+        }
+
+        // Restore the route that was loaded when the ride was held, if it's still
+        // available on the watch. Free ride otherwise.
+        if let route {
+            loadRoute(route)
+        } else {
+            clearRoute()
         }
 
         let points = TrackEncoder.decodeV5Full(trackData)
@@ -1765,6 +2193,14 @@ class WorkoutManager: NSObject, ObservableObject {
         currentRideID = summary.id
         lastCheckpointLocationCount = recordedLocations.count
 
+        // Drop the held flag locally and on the phone so neither side shows a
+        // stale "On Hold" row while the resumed ride is active. The eventual
+        // hold/end will re-save the ride with the proper flag.
+        var resumed = summary
+        resumed.isOnHold = nil
+        rideStore?.update(resumed)
+        ConnectivityManager.shared.sendRideContinued(rideID: summary.id)
+
         start(activity: summary.activityType)
     }
 
@@ -1790,19 +2226,6 @@ class WorkoutManager: NSObject, ObservableObject {
         // Notify phone to remove it as well
         ConnectivityManager.shared.sendDiscardRide(rideID: summary.id)
         print("[Hold] Discarded held ride: \(summary.name)")
-    }
-
-    func autoFinalizeHeldRideIfNeeded() {
-        guard let held = rideStore?.heldRide else { return }
-
-        var completed = held
-        completed.isOnHold = nil
-        completed.wasAutoFinalized = true
-
-        rideStore?.update(completed)
-        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(held.trackFilename)
-        ConnectivityManager.shared.sendRide(summary: completed, trackURL: trackURL)
-        print("[Hold] Auto-finalized held ride before new ride: \(held.name)")
     }
 
     private func sendTelemetry() {
@@ -1968,6 +2391,7 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 if self.autoPauseState == .tentativeResume {
                     self.clearTentativeBuffer()
                 }
+                self.cancelPauseProbe()
                 self.autoPauseState = .moving
 
             case .running where fromState == .paused:
@@ -1977,6 +2401,8 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 self.isPaused = false
                 self.skipNextDistanceGap = true
                 self.slowSampleCount = 0
+                self.positionBuffer = []
+                self.cancelPauseProbe()
                 self.autoPauseState = .moving
                 self.resumeGraceUntil = Date().addingTimeInterval(5)
                 self.locationManager.startUpdatingLocation()

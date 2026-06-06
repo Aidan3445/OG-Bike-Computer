@@ -17,7 +17,7 @@ final class ConnectivityManager: NSObject, ObservableObject {
     @Published var activationState: WCSessionActivationState = .notActivated
     @Published var isPaired = false
     @Published var isWatchAppInstalled = false
-    @Published var routeNamesOnWatch: Set<String> = []
+    @Published var routeIDsOnWatch: Set<UUID> = []
     @Published var watchStorageSize: Int64 = 0
     @Published var lastEvent: String = "none"
 
@@ -38,6 +38,12 @@ final class ConnectivityManager: NSObject, ObservableObject {
     #endif
     #if os(iOS)
     var onRideReceived: ((RideSummary) -> Void)?
+    /// Watch is about to end its HK session for a non-completion reason
+    /// (currently `"held"` or `"discarded"`). The phone uses this to stamp
+    /// the Live Activity with the correct terminal banner BEFORE the HK
+    /// mirroring delegate fires `.ended` and tears the activity down with a
+    /// default `.completed`. See `sendRideTerminalIntent(_:)` on watchOS.
+    var onWatchTerminalIntent: ((String) -> Void)?
     /// Ride IDs currently being transferred from the watch (file in flight).
     @Published var pendingTransferRideIDs: Set<UUID> = []
     /// True when the phone has detected the watch's ride session ended but the
@@ -167,8 +173,8 @@ extension ConnectivityManager {
         let ctx = WCSession.default.receivedApplicationContext
 
         DispatchQueue.main.async {
-            if let names = ctx["watchRouteNames"] as? [String] {
-                self.routeNamesOnWatch = Set(names)
+            if let ids = ctx["watchRouteIDs"] as? [String] {
+                self.routeIDsOnWatch = Set(ids.compactMap(UUID.init(uuidString:)))
             }
             if let size = ctx["watchStorageSize"] as? Int64 {
                 self.watchStorageSize = size
@@ -364,8 +370,14 @@ extension ConnectivityManager {
         ]
 
         if WCSession.default.isReachable {
-            WCSession.default.sendMessage(msg, replyHandler: { reply in
+            WCSession.default.sendMessage(msg, replyHandler: { [weak self] reply in
                 if let ok = reply["ok"] as? Bool, ok {
+                    // Drop the phone's held copy now so the user can't End & Save
+                    // an actively recording ride if the watch's `rideContinued`
+                    // notification lags or is lost.
+                    DispatchQueue.main.async {
+                        self?.dropContinuedHeldRide(rideID: summary.id)
+                    }
                     completion(.success(()))
                 } else {
                     let reason = (reply["error"] as? String)
@@ -455,6 +467,20 @@ extension ConnectivityManager {
         }
     }
 
+    /// Drop the phone's local copy of a held ride that has been resumed on the
+    /// watch. The live ride is now authoritative on the watch and a fresh
+    /// summary will arrive via the normal transfer when it ends or is re-held;
+    /// keeping the stale snapshot here would leave a phantom row in the ride
+    /// list and let the user press End & Save against an active ride.
+    func dropContinuedHeldRide(rideID: UUID) {
+        deleteLocalRide(rideID: rideID, dir: Self.ridesDirectory, fm: FileManager.default)
+        DispatchQueue.main.async { [weak self] in
+            guard let store = self?.rideStore,
+                  let ride = store.rides.first(where: { $0.id == rideID }) else { return }
+            store.delete(ride)
+        }
+    }
+
     func sendRideAck(rideID: UUID) {
         guard WCSession.default.activationState == .activated else { return }
 
@@ -527,11 +553,58 @@ extension ConnectivityManager {
     }
 
     /// Notify phone that a held ride was discarded on the watch so it can remove its copy.
+    /// A no-op `replyHandler` is supplied because iOS only routes `sendMessage` to
+    /// `session(_:didReceiveMessage:replyHandler:)` when the sender provided one —
+    /// messages sent with `replyHandler: nil` get silently dropped on the receiver.
     func sendDiscardRide(rideID: UUID) {
         guard WCSession.default.activationState == .activated else { return }
         let msg: [String: Any] = ["type": "deleteHeldRide", "rideID": rideID.uuidString]
         if WCSession.default.isReachable {
-            WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+            WCSession.default.sendMessage(msg, replyHandler: { _ in }, errorHandler: { _ in
+                WCSession.default.transferUserInfo(msg)
+            })
+        } else {
+            WCSession.default.transferUserInfo(msg)
+        }
+    }
+
+    /// Notify the phone that the watch is about to end the HK session for a
+    /// non-completion reason — currently `"held"` or `"discarded"`. The phone
+    /// uses this to stamp the Live Activity with the correct terminal banner
+    /// (orange "On Hold" / red "Discarded") BEFORE its HK mirroring delegate
+    /// fires `.ended` and tears the activity down with a default
+    /// `.completed`. Fire-and-forget via `sendMessage` so it races ahead of
+    /// the HK end on the reachable path; falls back to `transferUserInfo`
+    /// when the phone is unreachable (in that case the banner won't change
+    /// until the ride file transfer lands, which is acceptable — the LA on
+    /// an unreachable phone is mostly moot anyway).
+    func sendRideTerminalIntent(_ kind: String) {
+        guard WCSession.default.activationState == .activated else { return }
+        let msg: [String: Any] = ["type": "rideTerminalIntent", "kind": kind]
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: { _ in }, errorHandler: { _ in
+                WCSession.default.transferUserInfo(msg)
+            })
+        } else {
+            WCSession.default.transferUserInfo(msg)
+        }
+    }
+
+    /// Notify phone that a held ride is being resumed on the watch. The phone
+    /// uses this to drop the held copy immediately so it can't show a stale "On
+    /// Hold" row (or let the user End & Save) while the ride is recording on
+    /// the watch. The eventual ride transfer (next hold or end) re-introduces
+    /// the updated summary.
+    ///
+    /// A no-op `replyHandler` is supplied because iOS only routes `sendMessage`
+    /// to `session(_:didReceiveMessage:replyHandler:)` when the sender provided
+    /// one — messages sent with `replyHandler: nil` get silently dropped on the
+    /// receiver, which was why watch-initiated resumes never cleared the phone.
+    func sendRideContinued(rideID: UUID) {
+        guard WCSession.default.activationState == .activated else { return }
+        let msg: [String: Any] = ["type": "rideContinued", "rideID": rideID.uuidString]
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(msg, replyHandler: { _ in }, errorHandler: { _ in
                 WCSession.default.transferUserInfo(msg)
             })
         } else {
@@ -666,10 +739,10 @@ extension ConnectivityManager {
 
     func reportRoutes(_ routes: [Route]) {
         guard WCSession.default.activationState == .activated else { return }
-        let names = routes.map { $0.name }
+        let ids = routes.map { $0.id.uuidString }
         let totalSize = routes.reduce(0) { $0 + ($1.points.count * 32) } // ~32 bytes per coordinate
         try? WCSession.default.updateApplicationContext([
-            "watchRouteNames": names,
+            "watchRouteIDs": ids,
             "watchStorageSize": totalSize
         ])
     }
@@ -743,7 +816,9 @@ extension ConnectivityManager: WCSessionDelegate {
         let activityString = file.metadata?["activityType"]  as? String
 
         DispatchQueue.main.async {
-            if let existing = self.routeStore?.routes.first(where: { $0.name == route.name }) {
+            // Match by UUID so re-sends of an updated route overwrite the prior copy,
+            // while distinct routes that happen to share a name remain separate.
+            if let existing = self.routeStore?.routes.first(where: { $0.id == route.id }) {
                 self.routeStore?.delete(existing)
             }
             self.routeStore?.save(route)
@@ -788,8 +863,8 @@ extension ConnectivityManager: WCSessionDelegate {
         didReceiveApplicationContext applicationContext: [String: Any]
     ) {
         DispatchQueue.main.async {
-            if let names = applicationContext["watchRouteNames"] as? [String] {
-                self.routeNamesOnWatch = Set(names)
+            if let ids = applicationContext["watchRouteIDs"] as? [String] {
+                self.routeIDsOnWatch = Set(ids.compactMap(UUID.init(uuidString:)))
             }
             if let size = applicationContext["watchStorageSize"] as? Int64 {
                 self.watchStorageSize = size
@@ -898,6 +973,16 @@ extension ConnectivityManager: WCSessionDelegate {
         }
 
         #if os(iOS)
+        // Watch is telling us the in-flight ride is ending as held / discarded
+        // (not a normal completion). Route to the LA terminal-stamp handler.
+        if let type = userInfo["type"] as? String,
+           type == "rideTerminalIntent",
+           let kind = userInfo["kind"] as? String {
+            DispatchQueue.main.async {
+                self.onWatchTerminalIntent?(kind)
+            }
+        }
+
         // Watch is about to transfer a ride file — show it as pending in the ride list
         if let type = userInfo["type"] as? String,
            type == "rideTransferStarting",
@@ -929,6 +1014,17 @@ extension ConnectivityManager: WCSessionDelegate {
                    let ride = store.rides.first(where: { $0.id == rideID }) {
                     store.delete(ride)
                 }
+            }
+        }
+
+        // Watch resumed a held ride (userInfo fallback if watch wasn't reachable
+        // when the message was sent).
+        if let type = userInfo["type"] as? String,
+           type == "rideContinued",
+           let idStr = userInfo["rideID"] as? String,
+           let rideID = UUID(uuidString: idStr) {
+            DispatchQueue.main.async {
+                self.dropContinuedHeldRide(rideID: rideID)
             }
         }
         #endif
@@ -1119,6 +1215,33 @@ extension ConnectivityManager: WCSessionDelegate {
                 }
             }
             replyHandler(["deleted": true])
+            return
+        }
+        // Watch is about to end its HK session as held / discarded — stamp
+        // the LA's terminal banner now so the HK `.ended` callback (which
+        // races this message over WCSession) preserves the correct state
+        // instead of defaulting to `.completed`.
+        if let type = message["type"] as? String,
+           type == "rideTerminalIntent",
+           let kind = message["kind"] as? String {
+            DispatchQueue.main.async {
+                self.onWatchTerminalIntent?(kind)
+            }
+            replyHandler(["received": true])
+            return
+        }
+        // Watch resumed a held ride — drop the "On Hold" row immediately so the
+        // user doesn't see a stale duplicate. The full updated summary will
+        // arrive later via the normal ride transfer when the ride ends or is
+        // held again.
+        if let type = message["type"] as? String,
+           type == "rideContinued",
+           let idStr = message["rideID"] as? String,
+           let rideID = UUID(uuidString: idStr) {
+            DispatchQueue.main.async {
+                self.dropContinuedHeldRide(rideID: rideID)
+            }
+            replyHandler(["received": true])
             return
         }
         #endif

@@ -16,6 +16,10 @@ class PhoneTelemetryStore: ObservableObject {
 
     // Core ride stats
     @Published var elapsedTime: TimeInterval = 0
+    /// Wall-clock instant the ride started, derived as `now - elapsedTime` on each
+    /// telemetry update. Lets the UI tick elapsed time live every second instead
+    /// of jumping in sync with telemetry updates.
+    @Published var rideStartTime: Date?
     @Published var movingTime: TimeInterval = 0
     @Published var totalDistance: Double = 0       // meters
     @Published var averageSpeed: Double = 0        // m/s
@@ -60,6 +64,19 @@ class PhoneTelemetryStore: ObservableObject {
     func update(from telemetry: [String: String]) {
         DispatchQueue.main.async { [self] in
             elapsedTime = Double(telemetry["elapsedTime"] ?? "") ?? elapsedTime
+            // Backsolve the ride's wall-clock start so the UI can tick live
+            // between telemetry messages. We only update if it drifts by more
+            // than a half second from the existing estimate — otherwise every
+            // telemetry tick would fire a @Published change that forces the
+            // entire metric grid to re-render without any visible change.
+            let newStart = Date().addingTimeInterval(-elapsedTime)
+            if let existing = rideStartTime {
+                if abs(existing.timeIntervalSince(newStart)) > 0.5 {
+                    rideStartTime = newStart
+                }
+            } else {
+                rideStartTime = newStart
+            }
             movingTime = Double(telemetry["movingTime"] ?? "") ?? movingTime
             totalDistance = Double(telemetry["distance"] ?? "") ?? totalDistance
             averageSpeed = Double(telemetry["avgSpeed"] ?? "") ?? averageSpeed
@@ -132,6 +149,7 @@ class PhoneTelemetryStore: ObservableObject {
 
     func reset() {
         elapsedTime = 0
+        rideStartTime = nil
         movingTime = 0
         totalDistance = 0
         averageSpeed = 0

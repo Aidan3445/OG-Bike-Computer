@@ -9,7 +9,21 @@
 import ActivityKit
 import Foundation
 
-struct RideActivityAttributes: ActivityAttributes {
+/// Lifecycle status of the ride that the live activity is showing.
+/// Wire-encoded as its raw string so existing telemetry payloads keep working.
+enum RideStatus: String, Codable, Hashable {
+    case active
+    case completed
+    case held
+    case discarded
+    case inactive
+}
+
+/// Pure data attached to the Live Activity — explicitly nonisolated so its
+/// `ActivityAttributes` / `Codable` conformances aren't pulled onto the main
+/// actor by the project's default-isolation flag (ActivityKit calls into
+/// these from background contexts).
+nonisolated struct RideActivityAttributes: ActivityAttributes {
     /// Static data set when the activity starts
     var routeName: String?
     var startTime: Date
@@ -19,7 +33,7 @@ struct RideActivityAttributes: ActivityAttributes {
     var statSlots: [String] = ["distance", "movingTime", "averageSpeed", "heartRate", "elevationGain", "speed"]
 
     /// Dynamic data updated throughout the ride
-    struct ContentState: Codable, Hashable {
+    nonisolated struct ContentState: Codable, Hashable {
         // Core ride stats
         var elapsedTime: TimeInterval
         var movingTime: TimeInterval
@@ -59,10 +73,12 @@ struct RideActivityAttributes: ActivityAttributes {
         var riderLatitude: Double?
         var riderLongitude: Double?
 
-        /// Lifecycle status. nil/"active" = ride in progress; "completed" = ride
-        /// has ended (widget shows a summary message); "inactive" = no ride.
-        /// Optional for back-compat with previously-encoded states.
-        var rideStatus: String?
+        /// Lifecycle status. nil → active for back-compat with previously-
+        /// encoded states.
+        var rideStatus: RideStatus?
+
+        /// Convenience accessor that treats a nil status as `.active`.
+        var status: RideStatus { rideStatus ?? .active }
     }
 }
 #endif

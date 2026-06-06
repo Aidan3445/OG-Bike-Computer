@@ -240,7 +240,17 @@ extension AppDelegate: HKWorkoutSessionDelegate {
     private func stopPhoneAlerts() {
         lastShowTurnNotifications = false
         #if canImport(ActivityKit)
-        LiveActivityManager.shared.endActivity()
+        // Grace window for a `rideTerminalIntent` (held / discarded) from the
+        // watch to land via WCSession and latch the LA's terminal banner
+        // BEFORE we tear it down. Without this delay, the HK mirroring
+        // `.ended` callback races the WCSession message and `endActivity()`
+        // ends up defaulting to `.completed` for a hold initiated on the
+        // watch. The intent itself is sent right before `session?.end()` on
+        // watchOS so the typical lag is well under this window. If no intent
+        // arrives, `endActivity()` keeps its existing default of `.completed`.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            LiveActivityManager.shared.endActivity()
+        }
         #endif
         TurnNotificationManager.shared.clearAll()
     }
@@ -272,11 +282,10 @@ struct OG_Bike_ComputerApp: App {
     @StateObject private var integrationSettings = IntegrationSettingsStore()
 
     @State private var importedFileURL: URL?
-    @State private var showRideControl = false
 
     var body: some Scene {
         WindowGroup {
-            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings, showRideControlFullScreen: $showRideControl)
+            ContentView(routeStore: routeStore, rideStore: rideStore, metricConfig: metricConfig, userSettings: userSettings, integrationSettings: integrationSettings)
                 .onAppear {
                     RouteImportPipeline.shared.configure(routeStore: routeStore)
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
@@ -289,6 +298,25 @@ struct OG_Bike_ComputerApp: App {
                     ConnectivityManager.shared.onRideReceived = { ride in
                         UploadManager.shared.handleNewRide(ride)
                     }
+                    // Watch is about to end its HK session as held / discarded.
+                    // Stamp the LA terminal banner immediately so the HK
+                    // mirroring `.ended` callback (which races this WCSession
+                    // message) preserves the right state instead of falling
+                    // back to a default `.completed`.
+                    #if canImport(ActivityKit)
+                    ConnectivityManager.shared.onWatchTerminalIntent = { kind in
+                        Task {
+                            switch kind {
+                            case "held":
+                                await LiveActivityManager.shared.markHeld()
+                            case "discarded":
+                                await LiveActivityManager.shared.markDiscarded()
+                            default:
+                                break
+                            }
+                        }
+                    }
+                    #endif
                     if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                        let window = windowScene.windows.first {
                         OAuthManager.shared.setPresentationAnchor(window)
@@ -303,9 +331,12 @@ struct OG_Bike_ComputerApp: App {
                 }
                 .onOpenURL { url in
                     if url.scheme == "ogbikecomputer" && url.host == "ridecontrol" {
-                        if RideSessionManager.shared.isRideActive {
-                            showRideControl = true
-                        }
+                        // Tapping the live activity should just switch to the
+                        // dynamic Ride tab when a ride is active, or fall back
+                        // to the rides list otherwise — no overlay/popover.
+                        let defaults = UserDefaults(suiteName: "group.com.aidan3445.computa")
+                        let dest = RideSessionManager.shared.isRideActive ? "ride" : "rides"
+                        defaults?.set(dest, forKey: "pendingAppNavigation")
                     } else {
                         handleIncomingFile(url)
                     }

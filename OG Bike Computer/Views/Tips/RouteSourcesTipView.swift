@@ -12,9 +12,9 @@ struct RouteSourcesTipView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(spacing: 6) {
-                    Image(systemName: "map.and.arrow.up")
+                    Image(systemName: "location.north.line")
                         .font(.system(size: 48))
-                        .foregroundStyle(.accent)
+                        .foregroundStyle(.orange)
                     Text("Route Sources & Navigation")
                         .font(.title2)
                         .bold()

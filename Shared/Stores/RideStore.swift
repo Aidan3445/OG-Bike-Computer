@@ -147,6 +147,55 @@ class RideStore: ObservableObject {
         }
     }
 
+    /// Combined GPX of multiple rides — one `<trkseg>` per ride, preserving
+    /// each ride's real timestamps so the gaps between rides are visible to
+    /// downstream tools.
+    func exportCombinedGPX(rides: [RideSummary], combinedName: String? = nil) -> URL? {
+        guard !rides.isEmpty else { return nil }
+
+        var segments: [GPXExporter.Segment] = []
+        for ride in rides {
+            let url = directory.appendingPathComponent(ride.trackFilename)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let pts = TrackEncoder.decodeV5Full(data)
+            guard !pts.isEmpty else { continue }
+            let locations = pts.map { pt in
+                CLLocation(
+                    coordinate: CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lon),
+                    altitude: pt.altitude,
+                    horizontalAccuracy: 0,
+                    verticalAccuracy: 0,
+                    timestamp: Date(timeIntervalSince1970: pt.timestamp))
+            }
+            let extras = pts.map { pt in
+                GPXExporter.PointExtras(
+                    power: pt.power > 0 ? pt.power : nil,
+                    heartRate: pt.heartRate > 0 ? pt.heartRate : nil)
+            }
+            segments.append(GPXExporter.Segment(name: ride.name, locations: locations, pointExtras: extras))
+        }
+        guard !segments.isEmpty else { return nil }
+
+        let name = combinedName ?? "Combined Ride (\(rides.count))"
+        let activity = rides.first?.activityType.rawValue ?? "cycling"
+        let gpx = GPXExporter.exportMulti(name: name, segments: segments, activityType: activity)
+        guard let data = gpx.data(using: .utf8) else { return nil }
+
+        let sanitized = name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: " ", with: "_")
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(sanitized)_\(Int(Date().timeIntervalSince1970)).gpx")
+        do {
+            try data.write(to: tempURL)
+            return tempURL
+        } catch {
+            logger.log("[RideStore] combined GPX export error: \(error)")
+            return nil
+        }
+    }
+
     func loadAll() {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil) else {

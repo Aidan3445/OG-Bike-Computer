@@ -42,6 +42,16 @@ struct RideDetailView: View {
     @State private var endCoord: CLLocationCoordinate2D?
     @State private var elevationExtremes: (high: ElevPoint, low: ElevPoint)?
     @State private var mileMarkers: [MileMarker] = []
+    @State private var currentMarkerInterval: Double = 0
+    /// Live map heading, updated from `onMapCameraChange`. Held in `@State`
+    /// (NOT `@StateObject`) deliberately — we want only the small annotation
+    /// views (MileMarkerArrow, HighlightChevron) to observe the heading via
+    /// `@ObservedObject` and re-render per camera frame. `@StateObject` here
+    /// would also subscribe the whole RideDetailView body to every heading
+    /// change, blowing past the 16ms frame budget on each rotation tick.
+    /// `@State` holds the same reference across rebuilds without subscribing
+    /// to the object's publishers.
+    @State private var cameraState = MapCameraState()
     @State private var chartData: [ChartDataPoint] = []
     @State private var chartHasHR = false
     @State private var chartHasPower = false
@@ -52,12 +62,30 @@ struct RideDetailView: View {
     /// red for HR). Drives the map dot color so the dot matches the chart.
     @State private var scrubColor: Color = .green
     @State private var allLocations: [CLLocation] = []
+    /// Unmount the Map while the tab is hidden — see RouteDetailView for the
+    /// rationale. SwiftUI keeps tab content alive across switches, and an
+    /// alive MKMapView keeps burning CPU/GPU rendering tiles offscreen, which
+    /// makes the destination tab feel frozen for a beat.
+    @State private var isOnScreen: Bool = false
+    /// Cache key for MapCameraCache. Per-ride so opening the same ride
+    /// from multiple paths lands on the same remembered camera + zoom.
+    private var cameraCacheKey: String { "ride.\(ride.id.uuidString)" }
+    /// Visible-region snapshot used to filter off-screen mile markers on long
+    /// rides. Updated on camera-settle (.onEnd) so mid-gesture frames don't
+    /// invalidate the Map body. See `inVisibleRegion`.
+    @State private var visibleRegion: MKCoordinateRegion? = nil
 
     var body: some View {
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
+            if isOnScreen {
             Map(position: $mapPosition) {
-                ForEach(coloredSegments) { seg in
+                // Long rides break into hundreds of colored polyline
+                // segments. Drop the ones whose bounding box doesn't
+                // overlap the visible region (with a 50% pad so small pans
+                // mid-gesture don't drop edge segments). At full ride zoom
+                // every segment passes; zoomed in, only a handful render.
+                ForEach(visibleColoredSegments) { seg in
                     MapPolyline(coordinates: seg.coords)
                         .stroke(seg.color, lineWidth: 4)
                 }
@@ -140,6 +168,37 @@ struct RideDetailView: View {
             .mapControls {
                 MapCompass()
                 MapScaleView()
+            }
+            // Continuous handler does only the cheap per-frame work (arrow
+            // counter-rotation via cameraState). Heavier work — region
+            // snapshot for annotation filtering, marker interval bucket,
+            // camera cache for tab-switch restore — runs on .onEnd so the
+            // Map body doesn't invalidate mid-gesture.
+            .onMapCameraChange(frequency: .continuous) { context in
+                cameraState.heading = context.camera.heading
+                if visibleRegion == nil {
+                    visibleRegion = context.region
+                    MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+                }
+            }
+            .onMapCameraChange(frequency: .onEnd) { context in
+                visibleRegion = context.region
+                MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+
+                let region = context.region
+                let cosLat = cos(region.center.latitude * .pi / 180)
+                let widthMeters = region.span.longitudeDelta * 111_320 * cosLat
+                let heightMeters = region.span.latitudeDelta * 111_320
+                let visibleMeters = max(widthMeters, heightMeters)
+                let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
+                if interval != currentMarkerInterval && !allLocations.isEmpty {
+                    currentMarkerInterval = interval
+                    mileMarkers = computeRideMileMarkers(
+                        locations: allLocations, interval: interval)
+                }
+            }
+            } else {
+                Color(.systemBackground)
             }
 
             // Stats overlay — 3 states: collapsed (button) → compact (core stats) → expanded (all stats)
@@ -270,22 +329,65 @@ struct RideDetailView: View {
             Text(uploadError ?? "")
         }
         .onAppear {
-            buildRideCache()
+            isOnScreen = true
+            if allLocations.isEmpty { buildRideCache() }
+            // Restore the cached camera (incl. zoom level) from the shared
+            // cache so re-opening this ride lands exactly where the user
+            // left it.
+            if let cam = MapCameraCache.shared.camera(for: cameraCacheKey) {
+                mapPosition = .camera(cam)
+            }
         }
+        .onDisappear { isOnScreen = false }
     }
     
     @MapContentBuilder
     private func mileMarkerAnnotations() -> some MapContent {
-        ForEach(Array(mileMarkers.enumerated()), id: \.offset) { _, marker in
+        // Label is a static capsule at the marker position; the direction
+        // arrow is a separate annotation placed halfway along the route to
+        // the next marker so only the arrow re-renders on camera rotation.
+        // Filtered to the visible region so a long ride doesn't render every
+        // marker at once.
+        ForEach(visibleMileMarkers, id: \.offset) { _, marker in
             Annotation("", coordinate: marker.coordinate) {
-                Text("\(marker.mile) \(currentUnits.distance.label)")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Color.accentColor)
-                    .clipShape(Capsule())
+                MileMarkerLabel(
+                    mile: marker.mile,
+                    unitLabel: currentUnits.distance.label)
             }
+            if let arrowCoord = marker.arrowCoordinate,
+               inVisibleRegion(arrowCoord) {
+                Annotation("", coordinate: arrowCoord) {
+                    MileMarkerArrow(
+                        camera: cameraState,
+                        worldBearing: marker.bearingDegrees)
+                }
+            }
+        }
+    }
+
+    /// Visible-region inflated by ~50% on each axis so a small pan during a
+    /// gesture doesn't drop markers from the view before `.onEnd` refreshes
+    /// the cached region. nil region treats every marker as visible.
+    private func inVisibleRegion(_ coord: CLLocationCoordinate2D) -> Bool {
+        guard let r = visibleRegion else { return true }
+        return abs(coord.latitude - r.center.latitude) <= r.span.latitudeDelta
+            && abs(coord.longitude - r.center.longitude) <= r.span.longitudeDelta
+    }
+
+    /// Colored polyline segments whose bounding boxes overlap the current
+    /// visible region (with a 50% pad on each side). nil region returns
+    /// everything — first frame can't be filtered.
+    private var visibleColoredSegments: [ColoredSegment] {
+        guard let r = visibleRegion else { return coloredSegments }
+        return coloredSegments.filter { $0.bbox.overlaps(r) }
+    }
+
+    /// Mile markers filtered to the visible region; `\.offset` keeps stable
+    /// ForEach identity across filter changes (it's the index in the full
+    /// `mileMarkers`, not in the filtered subset).
+    private var visibleMileMarkers: [EnumeratedSequence<[MileMarker]>.Element] {
+        Array(mileMarkers.enumerated()).filter {
+            inVisibleRegion($0.element.coordinate)
         }
     }
     
@@ -307,6 +409,13 @@ struct RideDetailView: View {
                 // Lock paging while scrub is active so the chart drag doesn't
                 // bleed into a horizontal page swap.
                 .scrollDisabled(scrubDistance != nil)
+                .onChange(of: panelPage) { _, newPage in
+                    if newPage == 1 && panelState == .compact {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            panelState = .expanded
+                        }
+                    }
+                }
 
                 panelPageDots()
             } else {
@@ -339,7 +448,7 @@ struct RideDetailView: View {
         .onTapGesture {
             if panelState == .collapsed {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    panelState = .compact
+                    panelState = panelPage == 1 ? .expanded : .compact
                 }
             }
         }
@@ -362,11 +471,12 @@ struct RideDetailView: View {
                     .onEnded { value in
                         guard abs(value.translation.height) > 10 else { return }
 
+                        let skipsCompact = (panelPage == 1)
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                             if value.translation.height > 0 {
                                 switch panelState {
                                 case .expanded:
-                                    panelState = .compact
+                                    panelState = skipsCompact ? .collapsed : .compact
                                 case .compact:
                                     panelState = .collapsed
                                 case .collapsed:
@@ -375,7 +485,7 @@ struct RideDetailView: View {
                             } else {
                                 switch panelState {
                                 case .collapsed:
-                                    panelState = .compact
+                                    panelState = skipsCompact ? .expanded : .compact
                                 case .compact:
                                     panelState = .expanded
                                 case .expanded:
@@ -485,11 +595,19 @@ struct RideDetailView: View {
         config.locationType = .outdoor
         HKHealthStore().startWatchApp(with: config) { _, _ in }
 
+        let resumedID = ride.id
         ConnectivityManager.shared.sendContinueHeldRide(summary: ride) { result in
             DispatchQueue.main.async {
                 isContinuing = false
                 switch result {
                 case .success:
+                    // ConnectivityManager already drops the held copy on a successful
+                    // watch ack, but call delete here too so this view's `ride`
+                    // reference can't outlive the store row if the navigation pop
+                    // races the async cleanup.
+                    if let stale = rideStore.rides.first(where: { $0.id == resumedID }) {
+                        rideStore.delete(stale)
+                    }
                     dismiss()
                 case .failure(let error):
                     heldRideError = error.localizedDescription
@@ -606,36 +724,107 @@ struct RideDetailView: View {
 
 // MARK: - Speed coloring
 
+/// Axis-aligned lat/lon bounds, pre-computed once per segment so the
+/// per-frame Map body can drop off-screen segments in constant time.
+struct SegmentBBox {
+    let minLat: Double
+    let maxLat: Double
+    let minLon: Double
+    let maxLon: Double
+
+    static func compute(_ coords: [CLLocationCoordinate2D]) -> SegmentBBox {
+        var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0
+        for c in coords {
+            if c.latitude < minLat { minLat = c.latitude }
+            if c.latitude > maxLat { maxLat = c.latitude }
+            if c.longitude < minLon { minLon = c.longitude }
+            if c.longitude > maxLon { maxLon = c.longitude }
+        }
+        return SegmentBBox(
+            minLat: minLat, maxLat: maxLat,
+            minLon: minLon, maxLon: maxLon)
+    }
+
+    /// True when this bbox overlaps the visible region inflated by
+    /// `padFraction` on each side — gives the user some pan room before
+    /// segments at the edge drop out (visibleRegion only refreshes on
+    /// gesture-end).
+    func overlaps(_ region: MKCoordinateRegion, padFraction: Double = 0.5) -> Bool {
+        let latPad = region.span.latitudeDelta * (0.5 + padFraction)
+        let lonPad = region.span.longitudeDelta * (0.5 + padFraction)
+        let visMinLat = region.center.latitude - latPad
+        let visMaxLat = region.center.latitude + latPad
+        let visMinLon = region.center.longitude - lonPad
+        let visMaxLon = region.center.longitude + lonPad
+        return !(maxLat < visMinLat || minLat > visMaxLat
+                 || maxLon < visMinLon || minLon > visMaxLon)
+    }
+}
+
 private struct ColoredSegment: Identifiable {
     let id = UUID()
     let coords: [CLLocationCoordinate2D]
     let color: Color
+    /// Pre-computed bounding box for visible-region filtering. Long rides
+    /// can produce hundreds of segments; computing the bbox once at build
+    /// time keeps the Map body's per-render filter O(N).
+    let bbox: SegmentBBox
 }
 
 /// Splits a track into ridden runs separated by long elapsed-time gaps.
 /// Returns both the runs (each ≥1 point) and the gap pairs — adjacent
 /// `(lastPointBeforeGap, firstPointAfterGap)` — so the caller can render
 /// the gaps differently (e.g. dashed grey) from the ridden segments.
+///
+/// Runs that are shorter than `minRunMeters` *or* `minRunSeconds` are
+/// considered too trivial to draw a dashed connector to — typically a
+/// pause-immediately-after-resume blip or GPS jitter — and are dropped
+/// from both the runs and the gap list. The underlying track data is
+/// untouched on disk; this is purely a render-time filter.
 private func splitAtPauseGaps(
     locations: [CLLocation],
-    gapSeconds: TimeInterval = 30
+    gapSeconds: TimeInterval = 30,
+    minRunMeters: Double = 3.048,      // ~10 feet
+    minRunSeconds: TimeInterval = 3
 ) -> (runs: [[CLLocation]], gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)]) {
     guard locations.count >= 2 else { return (runs: [locations], gaps: []) }
-    var runs: [[CLLocation]] = []
-    var gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)] = []
+
+    // 1. Carve into raw runs at every >gapSeconds break.
+    var rawRuns: [[CLLocation]] = []
     var current: [CLLocation] = [locations[0]]
     for i in 1..<locations.count {
         let dt = locations[i].timestamp.timeIntervalSince(locations[i - 1].timestamp)
         if dt > gapSeconds {
-            if current.count >= 1 { runs.append(current) }
-            gaps.append((locations[i - 1].coordinate, locations[i].coordinate))
+            rawRuns.append(current)
             current = [locations[i]]
         } else {
             current.append(locations[i])
         }
     }
-    if !current.isEmpty { runs.append(current) }
-    return (runs: runs.filter { $0.count >= 2 }, gaps: gaps)
+    rawRuns.append(current)
+
+    // 2. Keep only runs that are meaningful in both distance and time.
+    let meaningfulRuns: [[CLLocation]] = rawRuns.filter { run in
+        guard run.count >= 2,
+              let first = run.first,
+              let last = run.last else { return false }
+        let duration = last.timestamp.timeIntervalSince(first.timestamp)
+        var dist: Double = 0
+        for i in 1..<run.count {
+            dist += run[i].distance(from: run[i - 1])
+        }
+        return duration >= minRunSeconds && dist >= minRunMeters
+    }
+
+    // 3. Rebuild gaps as connectors between consecutive *meaningful* runs.
+    var gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)] = []
+    for i in 1..<meaningfulRuns.count {
+        guard let prevEnd = meaningfulRuns[i - 1].last?.coordinate,
+              let nextStart = meaningfulRuns[i].first?.coordinate else { continue }
+        gaps.append((prevEnd, nextStart))
+    }
+
+    return (runs: meaningfulRuns, gaps: gaps)
 }
 
 /// Splits the track into `segmentCount` equal-sized chunks, computes average speed per chunk,
@@ -674,7 +863,8 @@ private func buildColoredSegments(
     // ── Step 2: normalize speeds to p10–p90 ──────────────────────────────────
     let speeds = chunks.map(\.avgSpeed).filter { $0 > 0.5 }.sorted()
     guard !speeds.isEmpty else {
-        return [ColoredSegment(coords: locations.map(\.coordinate), color: .blue)]
+        let coords = locations.map(\.coordinate)
+        return [ColoredSegment(coords: coords, color: .blue, bbox: SegmentBBox.compute(coords))]
     }
     let p10   = speeds[speeds.count / 10]
     let p90   = speeds[min(speeds.count - 1, speeds.count * 9 / 10)]
@@ -699,7 +889,8 @@ private func buildColoredSegments(
             // Color changed — flush current batch, start new one
             segments.append(ColoredSegment(
                 coords: batchCoords,
-                color:  rideSpeedColor(ratio: Double(batchStep) / Double(colorSteps - 1))
+                color:  rideSpeedColor(ratio: Double(batchStep) / Double(colorSteps - 1)),
+                bbox:   SegmentBBox.compute(batchCoords)
             ))
             batchCoords = chunk.coords
             batchStep   = step
@@ -708,7 +899,8 @@ private func buildColoredSegments(
     if !batchCoords.isEmpty {
         segments.append(ColoredSegment(
             coords: batchCoords,
-            color:  rideSpeedColor(ratio: Double(batchStep) / Double(colorSteps - 1))
+            color:  rideSpeedColor(ratio: Double(batchStep) / Double(colorSteps - 1)),
+            bbox:   SegmentBBox.compute(batchCoords)
         ))
     }
     return segments

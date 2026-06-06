@@ -19,7 +19,7 @@ struct RouteImportTipView: View {
                 VStack(spacing: 6) {
                     Image(systemName: "arrow.down.doc")
                         .font(.system(size: 48))
-                        .foregroundStyle(.accent)
+                        .foregroundStyle(.blue)
                     Text("Importing Routes")
                         .font(.title2)
                         .bold()

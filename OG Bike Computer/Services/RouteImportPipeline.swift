@@ -103,6 +103,18 @@ final class RouteImportCoordinator: ObservableObject {
         }
     }
 
+    /// Fire the auto-send-to-watch behavior for a single route without showing
+    /// the action sheet. Used by service imports (Strava / RWGPS) where the
+    /// user is already inside a picker UI and doesn't need the sheet — they
+    /// just want the same "send-to-watch on import" honored as for GPX files.
+    func autoSendIfEnabled(_ route: Route) {
+        let autoSend = UserDefaults.standard.bool(forKey: Self.autoSendDefaultsKey)
+        guard autoSend else { return }
+        let conn = ConnectivityManager.shared
+        guard conn.isPaired, conn.isWatchAppInstalled else { return }
+        conn.sendRoute(route) { _ in }
+    }
+
     func clear() {
         pendingRoutes = []
         autoSentRouteIDs = []

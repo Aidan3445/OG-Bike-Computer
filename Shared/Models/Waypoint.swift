@@ -15,13 +15,15 @@ enum WaypointKind: String, Codable {
 }
 
 struct Waypoint: Codable, Equatable {
+    let id: UUID
     let lat: Double
     let lon: Double
     let name: String         // Direction keyword for turnCue ("Left"); display name for POI ("Mt Washington")
     let description: String? // Full instruction or POI description
     let kind: WaypointKind
 
-    init(lat: Double, lon: Double, name: String, description: String? = nil, kind: WaypointKind = .turnCue) {
+    init(id: UUID = UUID(), lat: Double, lon: Double, name: String, description: String? = nil, kind: WaypointKind = .turnCue) {
+        self.id = id
         self.lat = lat
         self.lon = lon
         self.name = name
@@ -31,6 +33,8 @@ struct Waypoint: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Older route data didn't include an id — synthesize one on decode.
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         lat = try c.decode(Double.self, forKey: .lat)
         lon = try c.decode(Double.self, forKey: .lon)
         name = try c.decode(String.self, forKey: .name)

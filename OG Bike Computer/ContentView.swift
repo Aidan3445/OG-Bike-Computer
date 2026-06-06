@@ -16,7 +16,6 @@ struct ContentView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject var integrationSettings: IntegrationSettingsStore
-    @Binding var showRideControlFullScreen: Bool
     @StateObject private var connectivity = ConnectivityManager.shared
 
     @ObservedObject private var importCoordinator = RouteImportCoordinator.shared
@@ -52,7 +51,7 @@ struct ContentView: View {
             // Dynamic Ride tab — appears only during active rides
             if rideSession.isRideActive {
                 NavigationStack {
-                    RideControlView(metricConfig: metricConfig, userSettings: userSettings, routeStore: routeStore)
+                    RideControlView(metricConfig: metricConfig, userSettings: userSettings, routeStore: routeStore, rideStore: rideStore)
                 }
                 .tabItem {
                     Label("Ride", systemImage: "helmet.fill")
@@ -83,19 +82,20 @@ struct ContentView: View {
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                 }
-                .onReceive(connectivity.$routeNamesOnWatch) { _ in
+                .onReceive(connectivity.$routeIDsOnWatch) { _ in
                     uploadingRouteID = nil
                     queuedRouteID = nil
                 }
                 .navigationDestination(for: Route.self) { route in
                     RouteDetailView(
                         route: route,
-                        isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                        isOnWatch: connectivity.routeIDsOnWatch.contains(route.id),
                         isUploading: uploadingRouteID == route.id,
                         isQueued: queuedRouteID == route.id,
                         isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
                         canSendToWatch: canSendToWatch,
-                        onSend: { sendToWatch(route) }
+                        onSend: { sendToWatch(route) },
+                        routeStore: routeStore
                     )
                 }
                 .toolbar {
@@ -195,28 +195,24 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { consumePendingNavigation() }
         }
-        .fullScreenCover(isPresented: $showRideControlFullScreen) {
-            NavigationStack {
-                RideControlView(metricConfig: metricConfig, userSettings: userSettings, routeStore: routeStore)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Done") {
-                                showRideControlFullScreen = false
-                            }
-                        }
-                    }
-            }
-        }
     }
 
-    /// If a LiveActivityIntent requested a tab switch, honor it once.
+    /// If a LiveActivityIntent or live-activity deep link requested a tab
+    /// switch, honor it once.
     private func consumePendingNavigation() {
         let defaults = UserDefaults(suiteName: "group.com.aidan3445.computa")
         guard let dest = defaults?.string(forKey: "pendingAppNavigation"), !dest.isEmpty else { return }
         defaults?.removeObject(forKey: "pendingAppNavigation")
         switch dest {
+        case "ride":
+            // Dynamic Ride tab only exists while a ride is active. If it
+            // isn't, fall through to the rides list.
+            if rideSession.isRideActive {
+                selectedTab = 3
+            } else {
+                selectedTab = 1
+            }
         case "rides":
-            showRideControlFullScreen = false
             selectedTab = 1
         default:
             break
@@ -283,7 +279,7 @@ extension ContentView {
             NavigationLink(value: route) {
                 RouteRow(
                     route: route,
-                    isOnWatch: connectivity.routeNamesOnWatch.contains(route.name),
+                    isOnWatch: connectivity.routeIDsOnWatch.contains(route.id),
                     isUploading: uploadingRouteID == route.id,
                     isQueued: queuedRouteID == route.id,
                     isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,

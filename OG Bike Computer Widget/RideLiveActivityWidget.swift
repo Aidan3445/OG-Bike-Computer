@@ -18,6 +18,70 @@ struct RideLiveActivityWidget: WidgetBundle {
     }
 }
 
+// MARK: - Status Badge
+
+/// Maps a ride lifecycle status to the icon / tint / label triple the various
+/// live activity surfaces show when the ride isn't actively in progress.
+private struct StatusBadge {
+    let icon: String
+    let tint: Color
+    let label: String
+
+    init(status: RideStatus) {
+        switch status {
+        case .completed:
+            icon = "checkmark.circle.fill"
+            tint = Theme.primaryLight
+            label = "Ride Complete"
+        case .held:
+            icon = "hand.raised.fill"
+            tint = .orange
+            label = "Ride On Hold"
+        case .discarded:
+            icon = "trash.fill"
+            tint = .red
+            label = "Ride Discarded"
+        case .active, .inactive:
+            icon = "bicycle"
+            tint = Theme.primaryLight
+            label = "No Active Ride"
+        }
+    }
+
+    /// Compact-trailing badge: nil when the ride is active (so the caller can
+    /// fall back to nav / distance) or `label` is short enough for the pill.
+    static func compact(for status: RideStatus) -> (label: String, tint: Color)? {
+        switch status {
+        case .completed: return ("Done", Theme.primaryLight)
+        case .held: return ("Held", .orange)
+        case .discarded: return ("Discarded", .red)
+        case .active, .inactive: return nil
+        }
+    }
+}
+
+/// Compact-leading / minimal icon shared between two Dynamic Island regions:
+/// show the terminal-status glyph when set, otherwise the upcoming-turn arrow,
+/// otherwise the bike fallback.
+@ViewBuilder
+private func navIconForCompact(context: ActivityViewContext<RideActivityAttributes>) -> some View {
+    let status = context.state.status
+    switch status {
+    case .completed:
+        Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.primaryLight)
+    case .held:
+        Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
+    case .discarded:
+        Image(systemName: "trash.fill").foregroundStyle(.red)
+    case .active, .inactive:
+        if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
+            Image(systemName: icon).foregroundStyle(Theme.primaryLight)
+        } else {
+            Image(systemName: "bicycle").foregroundStyle(Theme.primaryLight)
+        }
+    }
+}
+
 // MARK: - Theme
 
 private enum Theme {
@@ -49,128 +113,142 @@ struct RideLiveActivity: Widget {
             DynamicIsland {
                 // Expanded
                 DynamicIslandExpandedRegion(.leading) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Label {
-                            Text(formatDistance(context.state.totalDistance, imperial: context.attributes.isImperial))
-                                .font(.caption.weight(.semibold))
-                                .monospacedDigit()
-                        } icon: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 5) {
                             Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                                .font(.footnote.weight(.semibold))
                                 .foregroundStyle(Theme.primaryLight)
+                            Text(formatDistance(context.state.totalDistance, imperial: context.attributes.isImperial))
+                                .font(.body.weight(.semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
                         }
-                        Text(formatSpeed(context.state.averageSpeed, imperial: context.attributes.isImperial))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
+                        HStack(spacing: 5) {
+                            Image(systemName: "speedometer")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(formatSpeed(context.state.averageSpeed, imperial: context.attributes.isImperial))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
                     }
+                    .padding(.leading, 6)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Label {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        HStack(spacing: 5) {
                             Text(formatDuration(context.state.movingTime, hideSeconds: false))
-                                .font(.caption.weight(.semibold))
+                                .font(.body.weight(.semibold))
                                 .monospacedDigit()
-                        } icon: {
+                                .foregroundStyle(.white)
                             Image(systemName: "timer")
+                                .font(.footnote.weight(.semibold))
                                 .foregroundStyle(Theme.primaryLight)
                         }
                         if let hr = context.state.heartRate, hr > 0 {
-                            Label("\(Int(hr))", systemImage: "heart.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.pink)
+                            HStack(spacing: 5) {
+                                Text("\(Int(hr))")
+                                    .font(.subheadline.weight(.medium))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.white.opacity(0.9))
+                                Image(systemName: "heart.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.pink)
+                            }
+                        } else {
+                            HStack(spacing: 5) {
+                                Text(formatSpeed(context.state.currentSpeed, imperial: context.attributes.isImperial))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                                Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
+                    .padding(.trailing, 6)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     if context.state.isOffRoute {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.subheadline.weight(.bold))
                                 .foregroundStyle(.orange)
                             Text("Off Route")
-                                .font(.caption.weight(.semibold))
+                                .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.orange)
                             if let dist = context.state.distanceOffRoute {
-                                Text("+\(formatDistance(dist, imperial: context.attributes.isImperial))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.orange.opacity(0.8))
+                                Text("+\(formatTurnDistance(dist, imperial: context.attributes.isImperial))")
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(.orange.opacity(0.85))
+                                    .monospacedDigit()
                             }
                         }
                     } else if let dir = context.state.nextTurnDirection {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 6) {
                             Image(systemName: context.state.nextTurnIcon ?? turnIcon(dir))
-                                .font(.caption.weight(.bold))
+                                .font(.subheadline.weight(.bold))
                                 .foregroundStyle(Theme.primaryLight)
-                            Text(dir)
-                                .font(.caption.weight(.medium))
+                            Text(dir.capitalized)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
                             if let dist = context.state.distanceToNextTurn {
-                                Text("in \(formatDistance(dist, imperial: context.attributes.isImperial))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                Text("· \(formatTurnDistance(dist, imperial: context.attributes.isImperial))")
+                                    .font(.footnote)
+                                    .foregroundStyle(Theme.primaryLight.opacity(0.85))
+                                    .monospacedDigit()
                             }
                         }
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    let status = context.state.rideStatus ?? "active"
-                    if status == "active" {
+                    let status = context.state.status
+                    if status == .active {
                         if let cue = context.state.nextTurnCue, !cue.isEmpty {
-                            Text(cue)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .center)
+                            MarqueeText(text: cue, font: .footnote)
+                                .foregroundStyle(.white.opacity(0.7))
+                                .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 2)
                         }
                     } else {
-                        HStack(spacing: 6) {
-                            Image(systemName: status == "completed" ? "checkmark.circle.fill" : "bicycle")
-                                .foregroundStyle(Theme.primaryLight)
-                            Text(status == "completed" ? "Ride Complete" : "No Active Ride")
-                                .font(.caption.weight(.semibold))
+                        let badge = StatusBadge(status: status)
+                        HStack(spacing: 8) {
+                            Image(systemName: badge.icon)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(badge.tint)
+                            Text(badge.label)
+                                .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.white)
                         }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 4)
                     }
                 }
             } compactLeading: {
-                let status = context.state.rideStatus ?? "active"
-                if status == "completed" {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Theme.primaryLight)
-                } else if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
-                    Image(systemName: icon)
-                        .foregroundStyle(Theme.primaryLight)
-                } else {
-                    Image(systemName: "bicycle")
-                        .foregroundStyle(Theme.primaryLight)
-                }
+                navIconForCompact(context: context)
             } compactTrailing: {
-                let status = context.state.rideStatus ?? "active"
-                if status == "completed" {
-                    Text("Done")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Theme.primaryLight)
+                let status = context.state.status
+                if let badge = StatusBadge.compact(for: status) {
+                    Text(badge.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(badge.tint)
                 } else if let dist = context.state.distanceToNextTurn {
-                    Text(formatDistance(dist, imperial: context.attributes.isImperial))
-                        .font(.caption2.weight(.semibold))
+                    Text(formatTurnDistance(dist, imperial: context.attributes.isImperial))
+                        .font(.caption.weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(Theme.primaryLight)
                 } else {
                     Text(formatDistanceCompact(context.state.totalDistance, imperial: context.attributes.isImperial))
-                        .font(.caption2.weight(.semibold))
+                        .font(.caption.weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(Theme.primaryLight)
                 }
             } minimal: {
-                let status = context.state.rideStatus ?? "active"
-                if status == "completed" {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Theme.primaryLight)
-                } else if let icon = context.state.nextTurnIcon ?? context.state.nextTurnDirection.map({ turnIcon($0) }) {
-                    Image(systemName: icon)
-                        .foregroundStyle(Theme.primaryLight)
-                } else {
-                    Image(systemName: "bicycle")
-                        .foregroundStyle(Theme.primaryLight)
-                }
+                navIconForCompact(context: context)
             }
             .widgetURL(URL(string: "ogbikecomputer://ridecontrol"))
             .keylineTint(Theme.primary)
@@ -188,8 +266,10 @@ private struct LockScreenView: View {
     private var isImperial: Bool { context.attributes.isImperial }
     private var statSlots: [String] { context.attributes.statSlots }
     private var hasNav: Bool { state.nextTurnDirection != nil || state.isOffRoute }
-    private var isActive: Bool { (state.rideStatus ?? "active") == "active" }
-    private var isCompleted: Bool { state.rideStatus == "completed" }
+    private var isActive: Bool { state.status == .active }
+    private var isCompleted: Bool { state.status == .completed }
+    private var isHeld: Bool { state.status == .held }
+    private var isDiscarded: Bool { state.status == .discarded }
 
     var body: some View {
         Group {
@@ -213,41 +293,84 @@ private struct LockScreenView: View {
         }
     }
 
-    // MARK: - Inactive / Completed state
+    // MARK: - Inactive / Completed / Held state
+
+    /// Display copy for the inactive/completed/held lock-screen banner.
+    /// Computed once per render so the body doesn't fan out into three
+    /// parallel switches on `state.status`.
+    private struct Display {
+        let icon: String
+        let title: String
+        let subtitle: String
+        /// Tint used for accents (chevron, shadow).
+        let tint: Color
+        /// Gradient stops for the leading circle. Each status gets its own
+        /// pair so completed/held/discarded read at a glance.
+        let circleGradient: [Color]
+        let showChevron: Bool
+    }
+
+    private var display: Display {
+        switch state.status {
+        case .completed:
+            return .init(icon: "checkmark", title: "Ride Complete",
+                         subtitle: "Tap to open ride details",
+                         tint: Theme.primaryLight,
+                         circleGradient: [Theme.primaryLight, Theme.primary],
+                         showChevron: true)
+        case .held:
+            return .init(icon: "hand.raised.fill", title: "Ride On Hold",
+                         subtitle: "Resume from the watch or rides list",
+                         tint: .orange,
+                         circleGradient: [Color.orange.opacity(0.9), Color.orange],
+                         showChevron: true)
+        case .discarded:
+            return .init(icon: "trash.fill", title: "Ride Discarded",
+                         subtitle: "Short ride wasn't saved",
+                         tint: .red,
+                         circleGradient: [Color.red.opacity(0.85), Color.red],
+                         showChevron: false)
+        case .active, .inactive:
+            return .init(icon: "bicycle", title: "No Active Ride",
+                         subtitle: "Start a ride from the app or watch",
+                         tint: Theme.primaryLight,
+                         circleGradient: [Theme.primaryLight, Theme.primary],
+                         showChevron: false)
+        }
+    }
 
     private var inactiveBody: some View {
-        HStack(spacing: 12) {
+        let d = display
+        return HStack(spacing: 12) {
             ZStack {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Theme.primaryLight, Theme.primary],
+                            colors: d.circleGradient,
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
                     .frame(width: 36, height: 36)
-                    .shadow(color: Theme.primary.opacity(0.6), radius: 5, y: 1)
-                Image(systemName: isCompleted ? "checkmark" : "bicycle")
+                    .shadow(color: d.tint.opacity(0.6), radius: 5, y: 1)
+                Image(systemName: d.icon)
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(isCompleted ? "Ride Complete" : "No Active Ride")
+                Text(d.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                Text(isCompleted
-                     ? "Tap to open ride details"
-                     : "Start a ride from the app or watch")
+                Text(d.subtitle)
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.65))
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            if isCompleted {
+            if d.showChevron {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.primaryLight)
+                    .foregroundStyle(d.tint)
             }
         }
         .padding(.horizontal, 14)
@@ -379,7 +502,7 @@ private struct LockScreenView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.orange)
                     if let dist = state.distanceOffRoute {
-                        Text("+\(formatDistance(dist, imperial: isImperial)) from route")
+                        Text("+\(formatTurnDistance(dist, imperial: isImperial)) from route")
                             .font(.caption2)
                             .foregroundStyle(.orange.opacity(0.8))
                     }
@@ -407,17 +530,15 @@ private struct LockScreenView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                         if let dist = state.distanceToNextTurn {
-                            Text("· \(formatDistance(dist, imperial: isImperial))")
+                            Text("· \(formatTurnDistance(dist, imperial: isImperial))")
                                 .font(.caption)
                                 .foregroundStyle(Theme.primaryLight)
                                 .monospacedDigit()
                         }
                     }
                     if let cue = state.nextTurnCue, !cue.isEmpty {
-                        Text(cue)
-                            .font(.caption2)
+                        MarqueeText(text: cue, font: .caption2)
                             .foregroundStyle(.white.opacity(0.6))
-                            .lineLimit(1)
                     }
                 }
                 Spacer()
@@ -547,7 +668,7 @@ private struct LockScreenView: View {
             return "\(Int(v))W"
         case "nextTurnDistance":
             guard let v = state.distanceToNextTurn else { return "--" }
-            return formatDistance(v, imperial: isImperial)
+            return formatTurnDistance(v, imperial: isImperial)
         case "nextTurnDirection":
             return state.nextTurnDirection ?? "--"
         default:
@@ -561,21 +682,38 @@ private struct LockScreenView: View {
 private func formatDistance(_ meters: Double, imperial: Bool) -> String {
     if imperial {
         let miles = meters / 1609.34
-        if miles < 0.1 {
-            let feet = Int(meters * 3.28084)
-            return "\(feet) ft"
-        }
-        return miles < 10
-            ? String(format: "%.1f mi", miles)
-            : String(format: "%.0f mi", miles)
+        return String(format: "%.1f mi", miles)
     } else {
-        if meters < 1000 {
-            return "\(Int(meters)) m"
-        }
         let km = meters / 1000
-        return km < 10
-            ? String(format: "%.1f km", km)
-            : String(format: "%.0f km", km)
+        return String(format: "%.1f km", km)
+    }
+}
+
+/// Mirrors the watch's `formatTurnDistance` — steps down through tenths
+/// before switching to feet/meters so short turn distances aren't shown as "0.1 mi".
+private func formatTurnDistance(_ meters: Double, imperial: Bool) -> String {
+    if imperial {
+        let miles = meters / 1609.34
+        if miles >= 1.0 {
+            return String(format: "%.1f mi", miles)
+        }
+        if miles >= 0.1 {
+            let tenths = (miles * 10).rounded() / 10
+            return String(format: "%.1f mi", tenths)
+        }
+        let feet = Int(meters * 3.28084)
+        return "\((feet / 50) * 50) ft"
+    } else {
+        let km = meters / 1000
+        if km >= 1.0 {
+            return String(format: "%.1f km", km)
+        }
+        if km >= 0.1 {
+            let tenths = (km * 10).rounded() / 10
+            return String(format: "%.1f km", tenths)
+        }
+        let m = Int(meters)
+        return "\((m / 50) * 50) m"
     }
 }
 

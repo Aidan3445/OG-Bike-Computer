@@ -16,6 +16,85 @@ struct GPXExporter {
         let heartRate: Double?  // bpm
     }
 
+    /// One track segment for multi-segment exports.
+    struct Segment {
+        let name: String
+        let locations: [CLLocation]
+        let pointExtras: [PointExtras]?
+    }
+
+    /// Export multiple rides into a single GPX with one `<trkseg>` per segment.
+    /// Each segment keeps its own real timestamps so a route reader can still see
+    /// the gap between rides.
+    static func exportMulti(
+        name: String,
+        segments: [Segment],
+        activityType: String = "cycling"
+    ) -> String {
+        let df = ISO8601DateFormatter()
+        df.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let hasExtensions = segments.contains { seg in
+            seg.pointExtras?.contains(where: { $0.power != nil || $0.heartRate != nil }) ?? false
+        }
+        let firstTime = segments.first?.locations.first?.timestamp ?? Date()
+
+        var xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <gpx version="1.1" creator="Computa"
+          xmlns="http://www.topografix.com/GPX/1/1"
+        """
+        if hasExtensions {
+            xml += """
+
+              xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
+            """
+        }
+        xml += """
+        >
+          <metadata>
+            <name>\(escapeXML(name))</name>
+            <time>\(df.string(from: firstTime))</time>
+          </metadata>
+          <trk>
+            <name>\(escapeXML(name))</name>
+            <type>\(activityType)</type>\n
+        """
+
+        for seg in segments {
+            xml += "    <trkseg>\n"
+            xml += "      <!-- \(escapeXML(seg.name)) -->\n"
+            for (i, loc) in seg.locations.enumerated() {
+                xml += "      <trkpt lat=\"\(loc.coordinate.latitude)\" lon=\"\(loc.coordinate.longitude)\">"
+                if loc.altitude != 0 {
+                    xml += "<ele>\(String(format: "%.1f", loc.altitude))</ele>"
+                }
+                xml += "<time>\(df.string(from: loc.timestamp))</time>"
+                if let extras = seg.pointExtras, i < extras.count {
+                    let ext = extras[i]
+                    if ext.power != nil || ext.heartRate != nil {
+                        xml += "<extensions><gpxtpx:TrackPointExtension>"
+                        if let hr = ext.heartRate {
+                            xml += "<gpxtpx:hr>\(Int(hr.rounded()))</gpxtpx:hr>"
+                        }
+                        if let power = ext.power {
+                            xml += "<gpxtpx:power>\(Int(power.rounded()))</gpxtpx:power>"
+                        }
+                        xml += "</gpxtpx:TrackPointExtension></extensions>"
+                    }
+                }
+                xml += "</trkpt>\n"
+            }
+            xml += "    </trkseg>\n"
+        }
+
+        xml += """
+          </trk>
+        </gpx>
+        """
+        return xml
+    }
+
     static func export(
         name: String,
         locations: [CLLocation],

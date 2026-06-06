@@ -18,7 +18,7 @@ struct TipsView: View {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Watch Settings")
-                        Text("Keep watch app open before and during a ride.")
+                        Text("Review welcome screen: Keep watch app open before and during a ride.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -73,6 +73,38 @@ struct TipsView: View {
                 } icon: {
                     Image(systemName: "location.north.line")
                         .foregroundStyle(.orange)
+                }
+            }
+
+            NavigationLink {
+                CueEditorTipView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Cue Editor")
+                        Text("Add, edit, or skip turns on any imported route.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "arrow.triangle.turn.up.right.diamond")
+                        .foregroundStyle(.cyan)
+                }
+            }
+
+            NavigationLink {
+                MultiRideTipView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Multi-Ride Viewer")
+                        Text("Stack multiple rides into one map and stats summary.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "square.stack.3d.up")
+                        .foregroundStyle(.indigo)
                 }
             }
 

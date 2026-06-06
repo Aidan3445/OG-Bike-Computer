@@ -106,12 +106,13 @@ struct RouteMapFullRouteCanvas: View {
                                    style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 }
 
-                // Mile markers — alternate above/below the route line
-                let markers = computeMileMarkers(points: points)
-                for (idx, marker) in markers.enumerated() {
+                // Mile markers — auto-pick interval so long routes don't get
+                // overcrowded.
+                let interval = autoMileMarkerInterval(totalMeters: processed.totalDistance)
+                let markers = computeMileMarkers(points: points, interval: interval)
+                for marker in markers {
                     let pt = project(marker.coordinate, transform: transform)
-                    let below = idx.isMultiple(of: 2) == false
-                    let dir: CGFloat = below ? 1 : -1
+                    let dir: CGFloat = -1
                     let poleTip = CGPoint(x: pt.x, y: pt.y + 10 * dir)
                     let flagMid = CGPoint(x: pt.x, y: pt.y + 6 * dir)
                     let flagOuter = CGPoint(x: pt.x + 7, y: pt.y + 8 * dir)
@@ -495,12 +496,11 @@ struct RouteMapBreadcrumbCanvas: View {
         // Mile markers — cached so the TimelineView ticker doesn't recompute
         // them every frame on long routes.
         let markers = MileMarkerCache.markers(for: points)
-        for (idx, marker) in markers.enumerated() {
+        for marker in markers {
             let pt = toScreen(marker.coordinate)
             guard pt.x >= -10 && pt.x <= screenW + 10 &&
                   pt.y >= -10 && pt.y <= screenH + 10 else { continue }
-            let below = idx.isMultiple(of: 2) == false
-            let dir: CGFloat = below ? 1 : -1
+            let dir: CGFloat = -1
             let poleTip = CGPoint(x: pt.x, y: pt.y + 12 * dir)
             let flagMid = CGPoint(x: pt.x, y: pt.y + 7 * dir)
             let flagOuter = CGPoint(x: pt.x + 8, y: pt.y + 9.5 * dir)
