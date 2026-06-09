@@ -199,6 +199,10 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
     var showFullRouteToggle: Bool
     /// Show cardinal direction indicator
     var showHeading: Bool
+    /// Show the "repeat upcoming turn alert" button (waveform icon) on the
+    /// map screen. Defaults true — a rider can quickly silence/restore it
+    /// from the customization screen.
+    var showRepeatAlertButton: Bool
     /// Closest zoom level in meters (most zoomed in)
     var zoomMin: Double
     /// Farthest zoom level in meters (most zoomed out)
@@ -222,6 +226,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         showTurnInfo: true,
         showFullRouteToggle: true,
         showHeading: true,
+        showRepeatAlertButton: true,
         zoomMin: 200,
         zoomMax: 1600,
         defaultZoom: 400,
@@ -253,6 +258,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         showTurnInfo: Bool = true,
         showFullRouteToggle: Bool = true,
         showHeading: Bool = true,
+        showRepeatAlertButton: Bool = true,
         zoomMin: Double = 200,
         zoomMax: Double = 1600,
         defaultZoom: Double = 400,
@@ -266,6 +272,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         self.showTurnInfo = showTurnInfo
         self.showFullRouteToggle = showFullRouteToggle
         self.showHeading = showHeading
+        self.showRepeatAlertButton = showRepeatAlertButton
         self.zoomMin = zoomMin
         self.zoomMax = zoomMax
         self.defaultZoom = defaultZoom
@@ -282,6 +289,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         showTurnInfo = try c.decodeIfPresent(Bool.self, forKey: .showTurnInfo) ?? true
         showFullRouteToggle = try c.decodeIfPresent(Bool.self, forKey: .showFullRouteToggle) ?? true
         showHeading = try c.decodeIfPresent(Bool.self, forKey: .showHeading) ?? true
+        showRepeatAlertButton = try c.decodeIfPresent(Bool.self, forKey: .showRepeatAlertButton) ?? true
         zoomMin = try c.decodeIfPresent(Double.self, forKey: .zoomMin) ?? 200
         zoomMax = try c.decodeIfPresent(Double.self, forKey: .zoomMax) ?? 1600
         defaultZoom = try c.decodeIfPresent(Double.self, forKey: .defaultZoom) ?? 400

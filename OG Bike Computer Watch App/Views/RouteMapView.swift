@@ -149,35 +149,68 @@ struct RouteMapView: View {
 
                 Spacer()
 
-                VStack(spacing: 2) {
-                    if workout.hasRoute && mapConfig.showFullRouteToggle {
-                        Button {
-                            showFullRoute.toggle()
-                            if showFullRoute {
-                                scheduleAutoSwitch()
-                                scheduleToggleFade()
-                            } else {
-                                autoSwitchTask?.cancel()
-                                toggleFadeTask?.cancel()
-                                withAnimation(.easeIn(duration: 0.15)) { toggleButtonOpacity = 1.0 }
+                VStack(alignment: .trailing, spacing: -3) {
+                    HStack(spacing: -10) {
+                        if mapConfig.showHeading {
+                            // Mount the cardinal inside the same 40 × 40
+                            // outer slot the buttons use, with the text
+                            // centered in a 36-pt circle area (matching the
+                            // buttons' visible circle). This way the cardinal
+                            // aligns identically whether the toggle is on or
+                            // off, and stays in column with the waveform
+                            // button below.
+                            Text(cardinalDirection)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.7))
+                                .frame(width: 36, height: 36)
+                                .frame(width: 40, height: 40)
+                        }
+
+                        if workout.hasRoute && mapConfig.showFullRouteToggle {
+                            Button {
+                                showFullRoute.toggle()
+                                if showFullRoute {
+                                    scheduleAutoSwitch()
+                                    scheduleToggleFade()
+                                } else {
+                                    autoSwitchTask?.cancel()
+                                    toggleFadeTask?.cancel()
+                                    withAnimation(.easeIn(duration: 0.15)) { toggleButtonOpacity = 1.0 }
+                                }
+                            } label: {
+                                Image(systemName: showFullRoute ? "scope" : "map")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .frame(width: 36, height: 36)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Circle())
                             }
+                            .buttonStyle(.plain)
+                            .frame(width: 40, height: 40)
+                            .contentShape(Rectangle())
+                            .opacity(toggleButtonOpacity)
+                        }
+                    }
+
+                    // Repeat the upcoming turn alert. Tucked into the top-right
+                    // stack so it stays clear of the rider dot (which the map
+                    // offsets toward bottom-center). Same 40×40 tap-target as
+                    // the toggle so the two buttons align vertically.
+                    if mapConfig.showRepeatAlertButton,
+                       !showFullRoute,
+                       !workout.navigation.isOffRoute,
+                       workout.navigation.nextTurn != nil {
+                        Button {
+                            VoiceNavigator.shared.repeatUpcomingTurnAlert()
                         } label: {
-                            Image(systemName: showFullRoute ? "scope" : "map")
+                            Image(systemName: "waveform")
                                 .font(.system(size: 16, weight: .bold))
                                 .frame(width: 36, height: 36)
                                 .background(.ultraThinMaterial)
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        .frame(width: 48, height: 48)
+                        .frame(width: 40, height: 40)
                         .contentShape(Rectangle())
-                        .opacity(toggleButtonOpacity)
-                    }
-
-                    if mapConfig.showHeading {
-                        Text(cardinalDirection)
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.7))
                     }
                 }
             }
@@ -206,25 +239,6 @@ struct RouteMapView: View {
                     .opacity(effectiveZoomIndex < zoomLevels.count - 1 ? 1 : 0.3)
 
                     Spacer()
-
-                    // Repeat the upcoming turn alert. Only meaningful when
-                    // there's actually an upcoming turn and we're on-route.
-                    if !workout.navigation.isOffRoute, workout.navigation.nextTurn != nil {
-                        Button {
-                            VoiceNavigator.shared.repeatUpcomingTurnAlert()
-                        } label: {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 16, weight: .bold))
-                                .frame(width: 36, height: 36)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(width: 48, height: 48)
-                        .contentShape(Rectangle())
-
-                        Spacer()
-                    }
 
                     Button {
                         let idx = effectiveZoomIndex
