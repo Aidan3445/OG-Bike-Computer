@@ -161,10 +161,11 @@ struct MapCustomizationView: View {
         Section {
             Toggle("Full Route Toggle Button", isOn: config.showFullRouteToggle)
             Toggle("Compass Direction", isOn: config.showHeading)
+            Toggle("Repeat Turn Alert Button", isOn: config.showRepeatAlertButton)
         } header: {
             Label("Display", systemImage: "map")
         } footer: {
-            Text("The full route toggle lets you switch between zoomed breadcrumb and full route views mid-ride. Compass direction shows your heading (N, NE, E, etc.).")
+            Text("The full route toggle lets you switch between zoomed breadcrumb and full route views mid-ride. Compass direction shows your heading (N, NE, E, etc.). The repeat turn alert button (waveform icon) replays the upcoming turn announcement.")
         }
     }
 
@@ -476,13 +477,16 @@ struct MapScreenPreview: View {
             VStack(alignment: .leading, spacing: 0) {
                 Spacer().frame(height: 22)
 
-                if config.showFullRouteToggle {
-                    callout("Route Toggle", color: .secondary, leading: true)
+                if config.showHeading || config.showFullRouteToggle {
+                    callout(config.showHeading && config.showFullRouteToggle
+                            ? "Heading · Toggle"
+                            : (config.showHeading ? "Heading" : "Route Toggle"),
+                            color: .secondary, leading: true)
                     Spacer().frame(height: 10)
                 }
 
-                if config.showHeading {
-                    callout("Heading", color: .secondary, leading: true)
+                if config.showRepeatAlertButton {
+                    callout("Repeat Alert", color: .secondary, leading: true)
                 }
 
                 Spacer()
@@ -612,27 +616,42 @@ struct MapScreenPreview: View {
 
                     Spacer()
 
-                    // Right: toggle + heading
-                    VStack(spacing: 2) {
-                        if config.showFullRouteToggle {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    showFullRoute.toggle()
-                                }
-                            } label: {
-                                Image(systemName: showFullRoute ? "scope" : "map")
-                                    .font(.system(size: 10, weight: .bold))
+                    // Right: heading + toggle (one row), waveform repeat below
+                    VStack(alignment: .trailing, spacing: 2) {
+                        HStack(spacing: 2) {
+                            if config.showHeading {
+                                // Same trick as the live watch: the cardinal
+                                // lives in a 22 × 22 slot matching the
+                                // button visible circle so its x-position
+                                // never shifts when the toggle is hidden.
+                                Text(sampleCardinalDirection)
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.white.opacity(0.7))
                                     .frame(width: 22, height: 22)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(Circle())
                             }
-                            .buttonStyle(.plain)
+
+                            if config.showFullRouteToggle {
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showFullRoute.toggle()
+                                    }
+                                } label: {
+                                    Image(systemName: showFullRoute ? "scope" : "map")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .frame(width: 22, height: 22)
+                                        .background(.ultraThinMaterial)
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
 
-                        if config.showHeading {
-                            Text(sampleCardinalDirection)
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.7))
+                        if config.showRepeatAlertButton, !showFullRoute {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 10, weight: .bold))
+                                .frame(width: 22, height: 22)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
                         }
                     }
                 }
