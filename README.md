@@ -33,7 +33,7 @@ Shared/                      # Cross-platform models, stores, services
 ## Requirements
 
 - Xcode 15+
-- iOS 26 / watchOS 26
+- iOS 18 / watchOS 11
 - Apple Watch paired to iPhone
 
 ## Setup
