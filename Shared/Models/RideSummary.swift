@@ -38,8 +38,12 @@ struct RideSummary: Codable, Identifiable {
     /// Route loaded at the time the ride was held. When the ride is continued
     /// and the route is still on the watch, navigation is restored. nil = free ride.
     var heldRouteID: UUID?
+    /// Watch-only: held ride was discarded by the user. The ride is kept on
+    /// disk for a grace period (see TransferLedger) so the user can undiscard.
+    var wasDiscarded: Bool?
 
     var onHold: Bool { isOnHold == true }
+    var discarded: Bool { wasDiscarded == true }
 
     init(id: UUID, name: String, activityType: ActivityType, date: Date,
          elapsedTime: TimeInterval, movingTime: TimeInterval, distance: Double,
@@ -50,7 +54,7 @@ struct RideSummary: Codable, Identifiable {
          highestElevation: Double? = nil, lowestElevation: Double? = nil,
          uploads: [ServiceUploadRecord]? = nil,
          isOnHold: Bool? = nil, wasAutoFinalized: Bool? = nil,
-         heldRouteID: UUID? = nil) {
+         heldRouteID: UUID? = nil, wasDiscarded: Bool? = nil) {
         self.id = id
         self.name = name
         self.activityType = activityType
@@ -75,6 +79,7 @@ struct RideSummary: Codable, Identifiable {
         self.isOnHold = isOnHold
         self.wasAutoFinalized = wasAutoFinalized
         self.heldRouteID = heldRouteID
+        self.wasDiscarded = wasDiscarded
     }
 
     init(from decoder: Decoder) throws {
@@ -104,5 +109,6 @@ struct RideSummary: Codable, Identifiable {
         isOnHold = try container.decodeIfPresent(Bool.self, forKey: .isOnHold)
         wasAutoFinalized = try container.decodeIfPresent(Bool.self, forKey: .wasAutoFinalized)
         heldRouteID = try container.decodeIfPresent(UUID.self, forKey: .heldRouteID)
+        wasDiscarded = try container.decodeIfPresent(Bool.self, forKey: .wasDiscarded)
     }
 }
