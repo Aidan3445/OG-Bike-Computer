@@ -33,7 +33,15 @@ struct RideDetailView: View {
     @State private var heldRideError: String?
     @State private var isContinuing = false
     @ObservedObject private var connectivity = ConnectivityManager.shared
+    /// Downsampled plain route line, published as soon as the track decodes so
+    /// the map has immediate content while colored segments build in the
+    /// background. Hidden once `coloredSegments` arrives.
+    @State private var simpleRoute: [CLLocationCoordinate2D] = []
     @State private var coloredSegments: [ColoredSegment] = []
+    /// Coarser color/coordinate resolution used when zoomed far out, where
+    /// fine segments are visually indistinguishable but expensive to render.
+    @State private var coarseSegments: [ColoredSegment] = []
+    @State private var useCoarseSegments = false
     /// Pairs of (lastPointBefore, firstPointAfter) for every elapsed-time gap
     /// larger than `pauseJumpGapSeconds` — rendered as dashed grey to visually
     /// distinguish pause/hold jumps from actively-ridden segments.
@@ -56,12 +64,18 @@ struct RideDetailView: View {
     @State private var chartHasHR = false
     @State private var chartHasPower = false
     @State private var panelPage = 0
-    @State private var scrubDistance: Double? = nil
-    @State private var scrubCoordinate: CLLocationCoordinate2D? = nil
-    /// Color of the chart currently being scrubbed (e.g. green for elevation,
-    /// red for HR). Drives the map dot color so the dot matches the chart.
-    @State private var scrubColor: Color = .green
+    /// Held in `@State` (not `@StateObject`) like `cameraState` — only the
+    /// scrub leaf views (chart rule, footer, map dot) observe it, so per-frame
+    /// scrub updates never invalidate this view's body or the Map content.
+    @State private var scrubState = ChartScrubState()
     @State private var allLocations: [CLLocation] = []
+    /// Cumulative along-track distance per point, parallel to `allLocations`.
+    /// Lets scrubbing binary-search instead of re-walking the whole track.
+    @State private var cumulativeDistances: [Double] = []
+    @State private var didStartLoad = false
+    @State private var hasStravaAuth = false
+    @State private var gpxExportURL: URL?
+    @State private var isExportingGPX = false
     /// Unmount the Map while the tab is hidden — see RouteDetailView for the
     /// rationale. SwiftUI keeps tab content alive across switches, and an
     /// alive MKMapView keeps burning CPU/GPU rendering tiles offscreen, which
@@ -79,15 +93,21 @@ struct RideDetailView: View {
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             if isOnScreen {
+            MapReader { mapProxy in
             Map(position: $mapPosition) {
-                // Long rides break into hundreds of colored polyline
-                // segments. Drop the ones whose bounding box doesn't
-                // overlap the visible region (with a 50% pad so small pans
-                // mid-gesture don't drop edge segments). At full ride zoom
-                // every segment passes; zoomed in, only a handful render.
-                ForEach(visibleColoredSegments) { seg in
-                    MapPolyline(coordinates: seg.coords)
-                        .stroke(seg.color, lineWidth: 4)
+                // Plain line until the colored segments finish building, then
+                // colored polylines filtered to the visible region (with a
+                // 50% pad so small pans mid-gesture don't drop edge segments).
+                if coloredSegments.isEmpty {
+                    if !simpleRoute.isEmpty {
+                        MapPolyline(coordinates: simpleRoute)
+                            .stroke(.blue, lineWidth: 4)
+                    }
+                } else {
+                    ForEach(visibleColoredSegments) { seg in
+                        MapPolyline(coordinates: seg.coords)
+                            .stroke(seg.color, lineWidth: 4)
+                    }
                 }
                 // Pause/hold jumps (long elapsed-time gaps) drawn as dashed grey.
                 ForEach(Array(pauseJumps.enumerated()), id: \.offset) { _, pair in
@@ -150,17 +170,6 @@ struct RideDetailView: View {
                     }
                 }
 
-                // Scrub position indicator — outline matches the active chart color
-                if let coord = scrubCoordinate {
-                    Annotation("", coordinate: coord) {
-                        Circle()
-                            .fill(.white)
-                            .frame(width: 12, height: 12)
-                            .overlay(Circle().stroke(scrubColor, lineWidth: 3))
-                            .shadow(radius: 3)
-                    }
-                }
-
                 // Mile markers
                 mileMarkerAnnotations()
             }
@@ -178,6 +187,7 @@ struct RideDetailView: View {
                 cameraState.heading = context.camera.heading
                 if visibleRegion == nil {
                     visibleRegion = context.region
+                    useCoarseSegments = visibleSpanMeters(of: context.region) > Self.coarseSegmentSpanMeters
                     MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
                 }
             }
@@ -185,18 +195,27 @@ struct RideDetailView: View {
                 visibleRegion = context.region
                 MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
 
-                let region = context.region
-                let cosLat = cos(region.center.latitude * .pi / 180)
-                let widthMeters = region.span.longitudeDelta * 111_320 * cosLat
-                let heightMeters = region.span.latitudeDelta * 111_320
-                let visibleMeters = max(widthMeters, heightMeters)
+                let visibleMeters = visibleSpanMeters(of: context.region)
+                useCoarseSegments = visibleMeters > Self.coarseSegmentSpanMeters
                 let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
                 if interval != currentMarkerInterval && !allLocations.isEmpty {
                     currentMarkerInterval = interval
-                    mileMarkers = computeRideMileMarkers(
-                        locations: allLocations, interval: interval)
+                    let locations = allLocations
+                    Task.detached(priority: .userInitiated) {
+                        let markers = computeRideMileMarkers(locations: locations, interval: interval)
+                        await MainActor.run {
+                            if currentMarkerInterval == interval { mileMarkers = markers }
+                        }
+                    }
                 }
             }
+            .overlay {
+                MapScrubDot(
+                    scrub: scrubState,
+                    proxy: mapProxy,
+                    coordinateFor: interpolateCoordinate)
+            }
+            }  // end: MapReader
             } else {
                 Color(.systemBackground)
             }
@@ -280,13 +299,14 @@ struct RideDetailView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
-                        showShareSheet = true
+                        exportGPXForSharing()
                     } label: {
                         Label("Export GPX", systemImage: "square.and.arrow.up")
                     }
+                    .disabled(isExportingGPX)
 
                     let alreadyOnStrava = ride.uploads?.contains(where: { $0.service == .strava && $0.isComplete }) == true
-                    if KeychainHelper.loadTokens(for: .strava) != nil && !alreadyOnStrava {
+                    if hasStravaAuth && !alreadyOnStrava {
                         Button {
                             uploadToStrava()
                         } label: {
@@ -307,7 +327,7 @@ struct RideDetailView: View {
                         }
                     }
                 } label: {
-                    if isUploadingToStrava {
+                    if isUploadingToStrava || isExportingGPX {
                         ProgressView()
                     } else {
                         Image(systemName: "square.and.arrow.up")
@@ -316,7 +336,7 @@ struct RideDetailView: View {
             }
         }
         .sheet(isPresented: $showShareSheet) {
-            if let gpxURL = rideStore.exportGPX(for: ride) {
+            if let gpxURL = gpxExportURL {
                 ShareSheet(activityItems: [gpxURL])
             }
         }
@@ -330,7 +350,11 @@ struct RideDetailView: View {
         }
         .onAppear {
             isOnScreen = true
-            if allLocations.isEmpty { buildRideCache() }
+            hasStravaAuth = KeychainHelper.loadTokens(for: .strava) != nil
+            if !didStartLoad {
+                didStartLoad = true
+                Task { await loadRideData() }
+            }
             // Restore the cached camera (incl. zoom level) from the shared
             // cache so re-opening this ride lands exactly where the user
             // left it.
@@ -374,12 +398,26 @@ struct RideDetailView: View {
             && abs(coord.longitude - r.center.longitude) <= r.span.longitudeDelta
     }
 
+    /// Visible span (~10 km) above which the coarse segment LOD renders —
+    /// zoomed out that far, a 4 pt line covers >100 m of track and the fine
+    /// color resolution is invisible.
+    private static let coarseSegmentSpanMeters: Double = 10_000
+
+    private func visibleSpanMeters(of region: MKCoordinateRegion) -> Double {
+        let cosLat = cos(region.center.latitude * .pi / 180)
+        let widthMeters = region.span.longitudeDelta * 111_320 * cosLat
+        let heightMeters = region.span.latitudeDelta * 111_320
+        return max(widthMeters, heightMeters)
+    }
+
     /// Colored polyline segments whose bounding boxes overlap the current
     /// visible region (with a 50% pad on each side). nil region returns
     /// everything — first frame can't be filtered.
     private var visibleColoredSegments: [ColoredSegment] {
-        guard let r = visibleRegion else { return coloredSegments }
-        return coloredSegments.filter { $0.bbox.overlaps(r) }
+        let segments = useCoarseSegments && !coarseSegments.isEmpty
+            ? coarseSegments : coloredSegments
+        guard let r = visibleRegion else { return segments }
+        return segments.filter { $0.bbox.overlaps(r) }
     }
 
     /// Mile markers filtered to the visible region; `\.offset` keeps stable
@@ -406,9 +444,6 @@ struct RideDetailView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .frame(height: panelState == .expanded ? 280 : 200)
-                // Lock paging while scrub is active so the chart drag doesn't
-                // bleed into a horizontal page swap.
-                .scrollDisabled(scrubDistance != nil)
                 .onChange(of: panelPage) { _, newPage in
                     if newPage == 1 && panelState == .compact {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -551,12 +586,8 @@ struct RideDetailView: View {
                     dataPoints: chartData,
                     hasHeartRate: chartHasHR,
                     hasPower: chartHasPower,
-                    scrubDistance: $scrubDistance,
-                    scrubColor: $scrubColor
+                    scrub: scrubState
                 )
-                .onChange(of: scrubDistance) { _, dist in
-                    scrubCoordinate = dist.map { interpolateCoordinate(at: $0) } ?? nil
-                }
             } else {
                 Text("No chart data")
                     .font(.caption)
@@ -619,6 +650,9 @@ struct RideDetailView: View {
     private func uploadToStrava() {
         isUploadingToStrava = true
         Task {
+            // Let the menu-dismiss animation finish before upload work starts
+            // publishing state changes that re-render the map.
+            try? await Task.sleep(for: .milliseconds(400))
             do {
                 _ = try await uploadManager.manualUploadToStrava(ride)
             } catch {
@@ -674,51 +708,173 @@ struct RideDetailView: View {
         return stats
     }
 
-    // MARK: - Track loading (synchronous, matches RouteDetailView pattern)
+    // MARK: - Track loading
 
-    private func buildRideCache() {
+    /// Two-phase background load. Phase 1 decodes the track and publishes a
+    /// downsampled plain line so the map has content within one frame budget
+    /// of the decode. Phase 2 builds everything expensive — colored segments
+    /// at both LODs, mile markers, elevation extremes, chart data.
+    private func loadRideData() async {
         let url = rideStore.trackURL(for: ride)
-        guard let data = try? Data(contentsOf: url) else { return }
-        let pts = TrackEncoder.decode(data)
-        let locations = TrackEncoder.toLocations(pts)
-        guard locations.count >= 2 else { return }
 
-        allLocations      = locations
-        startCoord        = locations.first?.coordinate
-        endCoord          = locations.last?.coordinate
-        mileMarkers       = computeRideMileMarkers(locations: locations)
-        elevationExtremes = computeElevExtremes(locations: locations)
+        let loaded = await Task.detached(priority: .userInitiated) { () -> ([CLLocation], [TrackPoint5], [CLLocationCoordinate2D])? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            let pts = TrackEncoder.decodeV5Full(data)
+            guard pts.count >= 2 else { return nil }
+            let locations = pts.map { pt in
+                CLLocation(
+                    coordinate: CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lon),
+                    altitude: pt.altitude,
+                    horizontalAccuracy: 0,
+                    verticalAccuracy: 0,
+                    timestamp: Date(timeIntervalSince1970: pt.timestamp))
+            }
+            let simple = downsampleCoordinates(locations.map(\.coordinate), maxPoints: 1000)
+            return (locations, pts, simple)
+        }.value
+        guard let (locations, fullPoints, simple) = loaded else { return }
 
-        // Split into ridden runs at large elapsed-time gaps so the speed-
-        // colored polyline doesn't draw a straight line across a pause/hold
-        // jump. The gaps themselves render as dashed grey.
-        let split = splitAtPauseGaps(locations: locations, gapSeconds: 30)
-        pauseJumps = split.gaps
-        coloredSegments = split.runs.flatMap {
-            buildColoredSegments(locations: $0, segmentCount: max(50, 500 / max(split.runs.count, 1)))
-        }
+        allLocations = locations
+        startCoord   = locations.first?.coordinate
+        endCoord     = locations.last?.coordinate
+        simpleRoute  = simple
 
-        // Build chart data
-        let result = buildRideChartData(from: url)
-        chartData = result.points
-        chartHasHR = result.hasHR
-        chartHasPower = result.hasPower
+        let built = await Task.detached(priority: .userInitiated) { () -> RideMapData in
+            var cumDist = [Double](repeating: 0, count: locations.count)
+            for i in 1..<locations.count {
+                cumDist[i] = cumDist[i - 1] + locations[i].distance(from: locations[i - 1])
+            }
+
+            // Split into ridden runs at large elapsed-time gaps so the speed-
+            // colored polyline doesn't draw a straight line across a pause/
+            // hold jump. The gaps themselves render as dashed grey.
+            let split = splitAtPauseGaps(locations: locations, gapSeconds: 30)
+            let runCount = max(split.runs.count, 1)
+            let fine = split.runs.flatMap {
+                buildColoredSegments(locations: $0, segmentCount: max(50, 500 / runCount))
+            }
+            let coarseRaw = split.runs.flatMap {
+                buildColoredSegments(locations: $0, segmentCount: max(20, 120 / runCount), colorSteps: 6)
+            }
+            let coarse = downsampleSegments(coarseRaw, totalPointBudget: 1500)
+
+            let chart = buildRideChartData(points: fullPoints)
+            return RideMapData(
+                cumulativeDistances: cumDist,
+                pauseJumps: split.gaps,
+                fineSegments: fine,
+                coarseSegments: coarse,
+                mileMarkers: computeRideMileMarkers(locations: locations),
+                elevationExtremes: computeElevExtremes(locations: locations),
+                chartPoints: chart.points,
+                chartHasHR: chart.hasHR,
+                chartHasPower: chart.hasPower)
+        }.value
+
+        cumulativeDistances = built.cumulativeDistances
+        pauseJumps          = built.pauseJumps
+        coloredSegments     = built.fineSegments
+        coarseSegments      = built.coarseSegments
+        // A camera-driven re-bucket may have already produced markers at the
+        // right interval — don't clobber them with the default-interval set.
+        if currentMarkerInterval == 0 { mileMarkers = built.mileMarkers }
+        elevationExtremes   = built.elevationExtremes
+        chartData           = built.chartPoints
+        chartHasHR          = built.chartHasHR
+        chartHasPower       = built.chartHasPower
     }
 
-    private func interpolateCoordinate(at targetDistance: Double) -> CLLocationCoordinate2D? {
-        guard allLocations.count >= 2 else { return nil }
-        var cumDist: Double = 0
-        for i in 1..<allLocations.count {
-            let seg = allLocations[i].distance(from: allLocations[i - 1])
-            if cumDist + seg >= targetDistance {
-                let fraction = seg > 0 ? (targetDistance - cumDist) / seg : 0
-                let lat = allLocations[i - 1].coordinate.latitude + fraction * (allLocations[i].coordinate.latitude - allLocations[i - 1].coordinate.latitude)
-                let lon = allLocations[i - 1].coordinate.longitude + fraction * (allLocations[i].coordinate.longitude - allLocations[i - 1].coordinate.longitude)
-                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    private func exportGPXForSharing() {
+        guard !isExportingGPX else { return }
+        isExportingGPX = true
+        let store = rideStore
+        let ride = ride
+        Task.detached(priority: .userInitiated) {
+            let url = store.exportGPX(for: ride)
+            await MainActor.run {
+                isExportingGPX = false
+                if let url {
+                    gpxExportURL = url
+                    showShareSheet = true
+                }
             }
-            cumDist += seg
         }
-        return allLocations.last?.coordinate
+    }
+
+    /// Binary-search the precomputed cumulative distances, then interpolate
+    /// within the bracketing segment.
+    private func interpolateCoordinate(at targetDistance: Double) -> CLLocationCoordinate2D? {
+        let cumDist = cumulativeDistances
+        guard allLocations.count >= 2, cumDist.count == allLocations.count else { return nil }
+        guard targetDistance < cumDist[cumDist.count - 1] else {
+            return allLocations.last?.coordinate
+        }
+
+        var lo = 0, hi = cumDist.count - 1
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2
+            if cumDist[mid] < targetDistance { lo = mid } else { hi = mid }
+        }
+        let seg = cumDist[hi] - cumDist[lo]
+        let fraction = seg > 0 ? (targetDistance - cumDist[lo]) / seg : 0
+        let a = allLocations[lo].coordinate
+        let b = allLocations[hi].coordinate
+        return CLLocationCoordinate2D(
+            latitude: a.latitude + fraction * (b.latitude - a.latitude),
+            longitude: a.longitude + fraction * (b.longitude - a.longitude))
+    }
+}
+
+/// Everything the background build produces for the ride map, published to
+/// the view in one main-actor hop.
+private struct RideMapData {
+    let cumulativeDistances: [Double]
+    let pauseJumps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)]
+    let fineSegments: [ColoredSegment]
+    let coarseSegments: [ColoredSegment]
+    let mileMarkers: [MileMarker]
+    let elevationExtremes: (high: ElevPoint, low: ElevPoint)?
+    let chartPoints: [ChartDataPoint]
+    let chartHasHR: Bool
+    let chartHasPower: Bool
+}
+
+/// Keep at most `maxPoints` by striding, always preserving the endpoints.
+private func downsampleCoordinates(
+    _ coords: [CLLocationCoordinate2D],
+    maxPoints: Int
+) -> [CLLocationCoordinate2D] {
+    guard coords.count > maxPoints, maxPoints >= 2 else { return coords }
+    let stride = coords.count / maxPoints + 1
+    var result: [CLLocationCoordinate2D] = []
+    result.reserveCapacity(maxPoints + 1)
+    var i = 0
+    while i < coords.count {
+        result.append(coords[i])
+        i += stride
+    }
+    if let last = coords.last,
+       result.last.map({ $0.latitude != last.latitude || $0.longitude != last.longitude }) ?? true {
+        result.append(last)
+    }
+    return result
+}
+
+/// Downsample each segment's coordinates so the whole set stays within
+/// `totalPointBudget` points, proportionally to segment size.
+private func downsampleSegments(
+    _ segments: [ColoredSegment],
+    totalPointBudget: Int
+) -> [ColoredSegment] {
+    let totalPoints = segments.reduce(0) { $0 + $1.coords.count }
+    guard totalPoints > totalPointBudget else { return segments }
+    let keepFraction = Double(totalPointBudget) / Double(totalPoints)
+    return segments.map { seg in
+        let budget = max(2, Int(Double(seg.coords.count) * keepFraction))
+        return ColoredSegment(
+            coords: downsampleCoordinates(seg.coords, maxPoints: budget),
+            color: seg.color,
+            bbox: seg.bbox)
     }
 }
 
