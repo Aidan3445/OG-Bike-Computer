@@ -10,6 +10,7 @@
 #if os(iOS) && !WIDGET_EXTENSION
 import Foundation
 import Combine
+import CoreLocation
 
 class PhoneTelemetryStore: ObservableObject {
     static let shared = PhoneTelemetryStore()
@@ -58,11 +59,27 @@ class PhoneTelemetryStore: ObservableObject {
     @Published var riderLatitude: Double?
     @Published var riderLongitude: Double?
 
+    /// Breadcrumb of rider positions accumulated from telemetry updates during
+    /// the current recording. Sparse when the phone app isn't receiving
+    /// telemetry (backgrounded), but good enough to show where the rider has
+    /// been on the ride map.
+    @Published private(set) var riderPath: [CLLocationCoordinate2D] = []
+
+    /// Minimum spacing between consecutive breadcrumb points, so a long ride
+    /// doesn't accumulate one point per telemetry tick while soft-pedaling.
+    private let riderPathMinSpacing: Double = 5
+
     private init() {}
 
     /// Update all fields from a telemetry payload dictionary.
     func update(from telemetry: [String: String]) {
         DispatchQueue.main.async { [self] in
+            // A large backward jump in elapsed time means a new recording has
+            // started — drop the previous ride's breadcrumb.
+            if let newElapsed = Double(telemetry["elapsedTime"] ?? ""),
+               newElapsed + 30 < elapsedTime {
+                riderPath = []
+            }
             elapsedTime = Double(telemetry["elapsedTime"] ?? "") ?? elapsedTime
             // Backsolve the ride's wall-clock start so the UI can tick live
             // between telemetry messages. We only update if it drifts by more
@@ -109,7 +126,19 @@ class PhoneTelemetryStore: ObservableObject {
 
             riderLatitude = Double(telemetry["lat"] ?? "")
             riderLongitude = Double(telemetry["lon"] ?? "")
+            if let lat = riderLatitude, let lon = riderLongitude {
+                appendToRiderPath(lat: lat, lon: lon)
+            }
         }
+    }
+
+    private func appendToRiderPath(lat: Double, lon: Double) {
+        if let last = riderPath.last {
+            let moved = CLLocation(latitude: last.latitude, longitude: last.longitude)
+                .distance(from: CLLocation(latitude: lat, longitude: lon))
+            guard moved >= riderPathMinSpacing else { return }
+        }
+        riderPath.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
     }
 
     /// Resolve a MetricType into display strings using the latest telemetry.
@@ -177,6 +206,7 @@ class PhoneTelemetryStore: ObservableObject {
         distanceOffRoute = nil
         riderLatitude = nil
         riderLongitude = nil
+        riderPath = []
     }
 }
 #endif
