@@ -34,6 +34,10 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     // its fallback timer before this utterance has finished playing.
     private var pendingStarts: [ObjectIdentifier: (id: UUID, onStart: (UUID) -> Void)] = [:]
 
+    // Per-utterance finish callbacks — fired on didFinish/didCancel so the
+    // watch can pace multi-line readouts on real completion.
+    private var pendingFinishes: [ObjectIdentifier: (id: UUID, onFinish: (UUID) -> Void)] = [:]
+
     // Per-utterance safety timer: if didStart doesn't fire within 1.5s of
     // when the synthesizer should start this utterance, assume it's wedged.
     // Deactivate the session so music returns to full volume, drop the
@@ -93,42 +97,58 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     /// Speak `text` and fire `onStart(id)` when AVSpeechSynthesizer reports
     /// the utterance has actually begun. The onStart callback is the
     /// cancel-fallback signal
-    func speak(_ text: String, id: UUID, onStart: @escaping (UUID) -> Void) {
-        speakInternal(text, id: id, onStart: onStart)
+    func speak(_ text: String, id: UUID, onStart: @escaping (UUID) -> Void, onFinish: ((UUID) -> Void)? = nil) {
+        onMain { self.speakInternal(text, id: id, onStart: onStart, onFinish: onFinish) }
     }
 
     /// Legacy entry point — speaks without an ack callback. Kept for
-    /// callers that don't need cancel-fallback semantics 
+    /// callers that don't need cancel-fallback semantics
     func speak(_ text: String) {
-        speakInternal(text, id: nil, onStart: nil)
+        onMain { self.speakInternal(text, id: nil, onStart: nil, onFinish: nil) }
     }
 
     /// Recreate the synthesizer on a fresh mirrored session arriving (e.g.
     /// HK reconnect after the iPhone app was relaunched). Drops in-flight
     /// state so stale acks from the dead session can't fire.
     func resetSession() {
-        synthesizer.stopSpeaking(at: .immediate)
-        clearPending()
-        synthesizer = AVSpeechSynthesizer()
-        synthesizer.delegate = self
-        logger.notice("[Speech] Session reset — fresh synthesizer")
+        onMain {
+            self.synthesizer.stopSpeaking(at: .immediate)
+            self.clearPending()
+            self.synthesizer = AVSpeechSynthesizer()
+            self.synthesizer.delegate = self
+            logger.notice("[Speech] Session reset — fresh synthesizer")
+        }
     }
 
     /// Workout ended. Stop everything immediately and tear down.
     func stopImmediately() {
-        synthesizer.stopSpeaking(at: .immediate)
-        clearPending()
-        deactivateSession(reason: "stopImmediately")
-        // Leave isSessionConfigured = true — keeping the category alive
-        // means the next utterance after a new workout doesn't pay the
-        // category-change-causes-music-interruption tax described above.
-        synthesizer = AVSpeechSynthesizer()
-        synthesizer.delegate = self
+        onMain {
+            self.synthesizer.stopSpeaking(at: .immediate)
+            self.clearPending()
+            self.deactivateSession(reason: "stopImmediately")
+            // Leave isSessionConfigured = true — keeping the category alive
+            // means the next utterance after a new workout doesn't pay the
+            // category-change-causes-music-interruption tax described above.
+            self.synthesizer = AVSpeechSynthesizer()
+            self.synthesizer.delegate = self
+        }
     }
 
     // MARK: Internals
 
-    private func speakInternal(_ text: String, id: UUID?, onStart: ((UUID) -> Void)?) {
+    /// All mutable state (session flags, utterance queue, pending acks,
+    /// timers) is confined to the main queue. Entry points arrive on
+    /// WCSession's callback queue and delegate callbacks on the
+    /// synthesizer's — funnel everything through here.
+    private func onMain(_ block: @escaping () -> Void) {
+        if Thread.isMainThread {
+            block()
+        } else {
+            DispatchQueue.main.async(execute: block)
+        }
+    }
+
+    private func speakInternal(_ text: String, id: UUID?, onStart: ((UUID) -> Void)?, onFinish: ((UUID) -> Void)?) {
         let logID = id?.uuidString.prefix(8) ?? "no-id"
         logger.notice("[Speech] speak(id=\(logID)) text=\"\(text)\"")
 
@@ -145,6 +165,9 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         let key = ObjectIdentifier(utterance)
         if let id, let onStart {
             pendingStarts[key] = (id, onStart)
+        }
+        if let id, let onFinish {
+            pendingFinishes[key] = (id, onFinish)
         }
 
         // Only arm the safety timer when this utterance will actually start
@@ -203,6 +226,7 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
 
     private func clearPending() {
         pendingStarts.removeAll()
+        pendingFinishes.removeAll()
         safetyTimers.values.forEach { $0.invalidate() }
         safetyTimers.removeAll()
         utteranceQueue.removeAll()
@@ -222,10 +246,7 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         // and drop their pending acks so late didFinish callbacks for the
         // flushed utterances don't try to arm a timer for a gone utterance.
         synthesizer.stopSpeaking(at: .immediate)
-        pendingStarts.removeAll()
-        safetyTimers.values.forEach { $0.invalidate() }
-        safetyTimers.removeAll()
-        utteranceQueue.removeAll()
+        clearPending()
         deactivateSession(reason: "safety timeout")
 
         // Log current route for diagnostics — were we pointing at the right
@@ -263,50 +284,69 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     // MARK: AVSpeechSynthesizerDelegate
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-        let key = ObjectIdentifier(utterance)
-        // Cancel the safety timer first — it can race with this callback on
-        // the same queue, and a late safety fire would wrongly deactivate
-        // the still-playing utterance.
-        safetyTimers.removeValue(forKey: key)?.invalidate()
-        if let entry = pendingStarts.removeValue(forKey: key) {
-            logger.notice("[Speech] didStart id=\(entry.id.uuidString.prefix(8)) — ack")
-            entry.onStart(entry.id)
-        } else {
-            logger.info("[Speech] didStart (no ack registered)")
+        onMain {
+            let key = ObjectIdentifier(utterance)
+            // Cancel the safety timer first — it can race with this callback
+            // on the same queue, and a late safety fire would wrongly
+            // deactivate the still-playing utterance.
+            self.safetyTimers.removeValue(forKey: key)?.invalidate()
+            if let entry = self.pendingStarts.removeValue(forKey: key) {
+                logger.notice("[Speech] didStart id=\(entry.id.uuidString.prefix(8)) — ack")
+                entry.onStart(entry.id)
+            } else {
+                logger.info("[Speech] didStart (no ack registered)")
+            }
+            // One-line route log per utterance so we can confirm AirPods/
+            // wired/built-in speaker routing per alert in the testing matrix
+            // (plan §5).
+            self.logCurrentRoute()
         }
-        // One-line route log per utterance so we can confirm AirPods/wired/
-        // built-in speaker routing per alert in the testing matrix (plan §5).
-        logCurrentRoute()
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        let key = ObjectIdentifier(utterance)
-        // Defensive cleanup — didStart should already have removed both, but
-        // pathological cases (interruption before didStart) hit here.
-        safetyTimers.removeValue(forKey: key)?.invalidate()
-        pendingStarts.removeValue(forKey: key)
-        advanceUtteranceQueue(finishedKey: key)
+        onMain {
+            let key = ObjectIdentifier(utterance)
+            // Defensive cleanup — didStart should already have removed both,
+            // but pathological cases (interruption before didStart) hit here.
+            self.safetyTimers.removeValue(forKey: key)?.invalidate()
+            self.pendingStarts.removeValue(forKey: key)
+            if let entry = self.pendingFinishes.removeValue(forKey: key) {
+                logger.notice("[Speech] didFinish id=\(entry.id.uuidString.prefix(8)) — finish signal")
+                entry.onFinish(entry.id)
+            }
+            self.advanceUtteranceQueue(finishedKey: key)
 
-        // Critical: only deactivate when the queue is *actually* drained.
-        // Chained utterances share one session activation — no inter-
-        // utterance deactivate flicker (which would cause an audible duck-
-        // unduck-duck cycle).
-        guard !synthesizer.isSpeaking else {
-            logger.info("[Speech] didFinish but more utterances queued — staying active")
-            return
+            // Critical: only deactivate when the queue is *actually* drained.
+            // Chained utterances share one session activation — no inter-
+            // utterance deactivate flicker (which would cause an audible
+            // duck-unduck-duck cycle). Checking our own tracked queue (not
+            // synthesizer.isSpeaking) so a speak() serialized behind this
+            // callback can't observe a stale answer.
+            guard self.utteranceQueue.isEmpty else {
+                logger.info("[Speech] didFinish but more utterances queued — staying active")
+                return
+            }
+            logger.notice("[Speech] didFinish — queue drained")
+            self.deactivateSession(reason: "queue drained")
         }
-        logger.notice("[Speech] didFinish — queue drained")
-        deactivateSession(reason: "queue drained")
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        let key = ObjectIdentifier(utterance)
-        safetyTimers.removeValue(forKey: key)?.invalidate()
-        pendingStarts.removeValue(forKey: key)
-        advanceUtteranceQueue(finishedKey: key)
-        guard !synthesizer.isSpeaking else { return }
-        logger.notice("[Speech] didCancel — queue drained")
-        deactivateSession(reason: "cancelled")
+        onMain {
+            let key = ObjectIdentifier(utterance)
+            self.safetyTimers.removeValue(forKey: key)?.invalidate()
+            self.pendingStarts.removeValue(forKey: key)
+            // A cancelled utterance still resolves its finish signal — the
+            // phone is done with it either way, and the watch must not
+            // stall its queue waiting on a line that will never complete.
+            if let entry = self.pendingFinishes.removeValue(forKey: key) {
+                entry.onFinish(entry.id)
+            }
+            self.advanceUtteranceQueue(finishedKey: key)
+            guard self.utteranceQueue.isEmpty else { return }
+            logger.notice("[Speech] didCancel — queue drained")
+            self.deactivateSession(reason: "cancelled")
+        }
     }
 
     /// Drop `finishedKey` from the tracked queue and arm the safety timer

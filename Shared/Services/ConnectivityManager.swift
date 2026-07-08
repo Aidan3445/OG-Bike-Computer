@@ -35,6 +35,10 @@ final class ConnectivityManager: NSObject, ObservableObject {
     /// alert id. The transport uses this to cancel the matching fallback
     /// timer and let VoiceNavigator advance its queue.
     var onAlertAckReceived: ((UUID) -> Void)?
+    /// Watch-side hook: phone finished speaking an alert id (didFinish/
+    /// didCancel). The transport uses this to release the next queued line
+    /// of a paced readout.
+    var onAlertFinishReceived: ((UUID) -> Void)?
     #endif
     #if os(iOS)
     var onRideReceived: ((RideSummary) -> Void)?
@@ -340,10 +344,26 @@ extension ConnectivityManager {
             WCSession.default.transferUserInfo(AlertAck(id: id).toDict())
             return
         }
+        // No-op replyHandler is required: the receiver only implements the
+        // replyHandler variant of didReceiveMessage, so a nil-reply send is
+        // silently dropped.
         WCSession.default.sendMessage(
             AlertAck(id: id).toDict(),
-            replyHandler: nil,
+            replyHandler: { _ in },
             errorHandler: { _ in /* best-effort, watch fallback will speak */ }
+        )
+    }
+
+    /// Phone → watch: finished speaking alert `id`. WCSession fallback for
+    /// when the HK mirror channel is gone; best-effort — the watch's pacing
+    /// timeout advances the queue if this never lands.
+    func sendAlertFinish(id: UUID) {
+        guard WCSession.default.activationState == .activated,
+              WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(
+            AlertFinish(id: id).toDict(),
+            replyHandler: { _ in },
+            errorHandler: { _ in /* best-effort, watch timeout advances */ }
         )
     }
 
@@ -1225,6 +1245,16 @@ extension ConnectivityManager: WCSessionDelegate {
         if let ack = AlertAck.fromDict(message) {
             DispatchQueue.main.async {
                 self.onAlertAckReceived?(ack.id)
+            }
+            replyHandler(["received": true])
+            return
+        }
+
+        // Voice alert finish (phone → watch). Phone finished speaking a
+        // specific utterance id.
+        if let finish = AlertFinish.fromDict(message) {
+            DispatchQueue.main.async {
+                self.onAlertFinishReceived?(finish.id)
             }
             replyHandler(["received": true])
             return

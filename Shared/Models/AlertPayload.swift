@@ -171,3 +171,32 @@ struct AlertAck {
         return AlertAck(id: id)
     }
 }
+
+/// Phone → watch "done speaking" signal, sent when AVSpeechSynthesizer
+/// fires `didFinish` (or `didCancel`) for the matching utterance. The watch
+/// holds its alert queue on this for paced multi-line readouts (splits) —
+/// the next line isn't released until the phone finished the current one,
+/// so a higher-priority alert can interleave between lines without ever
+/// cutting a sentence.
+struct AlertFinish {
+    static let messageType = "voiceAlertFinish"
+
+    let id: UUID
+
+    func toDict() -> [String: Any] {
+        [
+            "type": Self.messageType,
+            "id": id.uuidString,
+            "ts": Date()
+        ]
+    }
+
+    static func fromDict(_ dict: [String: Any]) -> AlertFinish? {
+        guard
+            (dict["type"] as? String) == messageType,
+            let idStr = dict["id"] as? String,
+            let id = UUID(uuidString: idStr)
+        else { return nil }
+        return AlertFinish(id: id)
+    }
+}

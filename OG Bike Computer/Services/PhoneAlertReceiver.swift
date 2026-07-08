@@ -63,9 +63,18 @@ final class PhoneAlertReceiver: @unchecked Sendable {
         // Hand to the speech player. The onStart callback fires when
         // AVSpeechSynthesizer reports the utterance has actually begun —
         // that's when we ack back so the watch cancels its FallbackTimer.
-        PhoneSpeechPlayer.shared.speak(payload.text, id: payload.id) { [weak self] startedID in
-            self?.sendAck(id: startedID, originalCreatedAt: payload.createdAt)
-        }
+        // onFinish fires when the utterance completes; the watch uses it to
+        // release the next line of a paced readout (splits).
+        PhoneSpeechPlayer.shared.speak(
+            payload.text,
+            id: payload.id,
+            onStart: { [weak self] startedID in
+                self?.sendAck(id: startedID, originalCreatedAt: payload.createdAt)
+            },
+            onFinish: { [weak self] finishedID in
+                self?.sendFinish(id: finishedID)
+            }
+        )
 
         // Side-effect: post a turn notification if user has that mode on.
         // Matches the existing behavior of the legacy HK mirror path.
@@ -101,17 +110,35 @@ final class PhoneAlertReceiver: @unchecked Sendable {
             ConnectivityManager.shared.sendAlertAck(id: id)
             return
         }
+        sendMirrorSignal(session: session, type: "alertAck", id: id, logLabel: "ack")
+    }
+
+    /// Phone finished speaking `id`. Same transport rules as the didStart
+    /// ack: HK mirror channel first, WCSession best-effort fallback. If it's
+    /// lost, the watch's pacing timeout advances the queue on its own.
+    private func sendFinish(id: UUID) {
+        let logID = id.uuidString.prefix(8)
+        logger.notice("[AlertRecv] FINISH id=\(logID)")
+        guard let session = RideSessionManager.shared.mirroredSession else {
+            ConnectivityManager.shared.sendAlertFinish(id: id)
+            return
+        }
+        sendMirrorSignal(session: session, type: "alertFinish", id: id, logLabel: "finish")
+    }
+
+    private func sendMirrorSignal(session: HKWorkoutSession, type: String, id: UUID, logLabel: String) {
+        let logID = id.uuidString.prefix(8)
         let payload: [String: String] = [
-            "type": "alertAck",
+            "type": type,
             "id": id.uuidString,
             "ts": String(Date().timeIntervalSince1970)
         ]
         guard let data = try? JSONEncoder().encode(payload) else { return }
         session.sendToRemoteWorkoutSession(data: data) { success, error in
             if let error {
-                logger.error("[AlertRecv] HK mirror ack send error id=\(logID): \(error.localizedDescription)")
+                logger.error("[AlertRecv] HK mirror \(logLabel) send error id=\(logID): \(error.localizedDescription)")
             } else if !success {
-                logger.error("[AlertRecv] HK mirror ack reported failure id=\(logID)")
+                logger.error("[AlertRecv] HK mirror \(logLabel) reported failure id=\(logID)")
             }
         }
     }
