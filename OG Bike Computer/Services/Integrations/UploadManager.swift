@@ -216,6 +216,26 @@ class UploadManager: ObservableObject {
         )
     }
 
+    /// Upload multiple rides as one merged Strava activity (from the
+    /// multi-select share menu). Intentionally not persisted — the merged
+    /// activity is not recorded as an upload on any of the source rides.
+    /// Returns the Strava web URL of the new activity.
+    func uploadMergedToStrava(_ rides: [RideSummary]) async throws -> String {
+        guard let rideStore,
+              let gpxURL = rideStore.exportCombinedGPX(rides: rides),
+              let gpxData = try? Data(contentsOf: gpxURL) else {
+            throw ServiceError.noData
+        }
+
+        let name = "Combined Ride (\(rides.count))"
+        // Fresh external_id — Strava dedups on it, so reusing a ride's UUID
+        // would collide with that ride's individual upload.
+        let (uploadId, _) = try await stravaClient.startUpload(gpxData: gpxData, name: name, externalId: UUID().uuidString)
+        let result = try await stravaClient.pollUpload(uploadID: uploadId)
+        logger.info("[UploadManager] Uploaded merged activity (\(rides.count) rides) to Strava: \(result.activityID)")
+        return result.webURL
+    }
+
     private func appendUploadRecord(_ record: ServiceUploadRecord, to rideID: UUID) {
         guard let rideStore,
               let index = rideStore.rides.firstIndex(where: { $0.id == rideID }) else { return }
