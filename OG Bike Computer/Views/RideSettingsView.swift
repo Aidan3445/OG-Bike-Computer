@@ -84,11 +84,12 @@ struct RideSettingsView: View {
 
             if userSettings.settings.ridePreferences.autoPause.enabled {
                 PauseSpeedPicker(mps: prefs.autoPause.speedThreshold)
+                ResumeProbeIntervalPicker(seconds: prefs.autoPause.resumeProbeInterval)
             }
         } header: {
             Label("Auto-Pause", systemImage: "pause.circle")
         } footer: {
-            Text("Automatically pause the ride when speed drops below the threshold.")
+            Text("Automatically pause the ride when speed drops below the threshold. While paused, the watch briefly wakes GPS at the resume check interval to detect movement — shorter intervals resume faster but use more battery.")
         }
     }
 

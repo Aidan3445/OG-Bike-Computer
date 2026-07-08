@@ -217,13 +217,13 @@ class WorkoutManager: NSObject, ObservableObject {
     private let fastSamplesForResume = 5
     private let minTentativeDuration: TimeInterval = 3.0
 
-    // Silent probe: once the HK session has been paused for ~75s, watchOS
-    // stops feeding HealthKit (and shortly after, CoreLocation) we periodically
-    // wake the system in the background 
+    // Silent probe: while the HK session is paused, watchOS stops feeding
+    // HealthKit (and shortly after, CoreLocation) so we periodically wake the
+    // system in the background. Interval comes from
+    // `ridePreferences.autoPause.resumeProbeInterval`.
     private var pauseProbeTimer: Timer?
     private var isSilentProbe = false
     private var probeStartedAt: Date?
-    private let probeIntervalWhilePaused: TimeInterval = 75.0
     private let probeWindow: TimeInterval = 15.0
 
     // Derive a trusted speed from a rolling window of
@@ -800,11 +800,15 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     /// Schedule the next silent probe. Called whenever the ride settles into
-    /// `.paused`. The probe will fire after `probeIntervalWhilePaused` seconds
-    /// unless something cancels it first (manual resume, real movement, stop).
+    /// `.paused`. The probe will fire after the configured resume-probe
+    /// interval unless something cancels it first (manual resume, real
+    /// movement, stop).
     private func schedulePauseProbe() {
+        let interval = min(max(ridePreferences.autoPause.resumeProbeInterval,
+                               AutoPausePreferences.resumeProbeIntervalRange.lowerBound),
+                           AutoPausePreferences.resumeProbeIntervalRange.upperBound)
         pauseProbeTimer?.invalidate()
-        pauseProbeTimer = Timer.scheduledTimer(withTimeInterval: probeIntervalWhilePaused,
+        pauseProbeTimer = Timer.scheduledTimer(withTimeInterval: interval,
                                                repeats: false) { [weak self] _ in
             self?.beginSilentProbe()
         }
@@ -2405,9 +2409,9 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
         markMirroringFailed()
     }
 
-    /// Receive messages from the phone (ack channel for mirrored speech, etc.).
-    /// Currently the only message type is "speechDone" — fired when the phone
-    /// finishes playing a mirrored utterance so the watch can advance its
+    /// Receive messages from the phone (ack channel for mirrored speech):
+    /// "alertAck" when the phone's synthesizer starts an utterance and
+    /// "alertFinish" when it completes one, so the watch can advance its
     /// alert queue based on real completion instead of a duration estimate.
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didReceiveDataFromRemoteWorkoutSession data: [Data]) {
@@ -2429,6 +2433,11 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
                 DispatchQueue.main.async {
                     ConnectivityManager.shared.onAlertAckReceived?(id)
+                }
+            case "alertFinish":
+                guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
+                DispatchQueue.main.async {
+                    ConnectivityManager.shared.onAlertFinishReceived?(id)
                 }
             default:
                 break

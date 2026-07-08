@@ -124,21 +124,29 @@ enum RidePrivacy: String, Codable, CaseIterable, Hashable {
 struct AutoPausePreferences: Codable, Equatable, Hashable {
     var enabled: Bool
     var speedThreshold: Double // m/s
+    /// Seconds between silent GPS probes while auto-paused. The OS stops
+    /// feeding location updates shortly after a pause, so the watch must
+    /// periodically wake GPS to detect that the rider is moving again.
+    var resumeProbeInterval: TimeInterval
+
+    static let resumeProbeIntervalRange: ClosedRange<TimeInterval> = 5...90
 
     static let `default` = AutoPausePreferences(
         enabled: true,
         speedThreshold: 0.894 // ~2 mph
     )
 
-    init(enabled: Bool = true, speedThreshold: Double = 0.894) {
+    init(enabled: Bool = true, speedThreshold: Double = 0.894, resumeProbeInterval: TimeInterval = 15) {
         self.enabled = enabled
         self.speedThreshold = speedThreshold
+        self.resumeProbeInterval = resumeProbeInterval
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         speedThreshold = try c.decodeIfPresent(Double.self, forKey: .speedThreshold) ?? 0.894
+        resumeProbeInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .resumeProbeInterval) ?? 15
     }
 }
 
