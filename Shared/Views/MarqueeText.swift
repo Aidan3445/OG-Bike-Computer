@@ -14,8 +14,18 @@
 //
 //  Works in both the iOS app and the Live Activity widget (it uses a
 //  `TimelineView(.periodic)` driven off Date so the scroll position is a pure
-//  function of time — no @State needed). Widget renderers tick this at
-//  whatever rate the system allows; on the iPhone foreground it'll be smooth.
+//  function of time — no @State needed).
+//
+//  Two modes:
+//  - Continuous (default): smooth pixel scrolling, for renderers that update
+//    frequently (the in-app ride control screen).
+//  - Paged (`paged: true`): for the widget / Dynamic Island, where refreshes
+//    are infrequent and land at unpredictable times. The text is split into
+//    `ceil(textWidth / containerWidth)` evenly spaced pages — first page
+//    left-aligned, last page right-aligned — and the shown page is a step
+//    function of wall-clock time quantized to `pageDuration`. Any refresh,
+//    whenever it fires, therefore lands exactly on a page boundary instead of
+//    mid-scroll.
 //
 
 import SwiftUI
@@ -27,12 +37,26 @@ struct MarqueeText: View {
     /// Pause (seconds) at each end of the scroll so the rider can read the
     /// start and finish before the text moves.
     var endHold: Double = 1.2
+    var padding: Int8 = 8
+    /// Snap between discrete pages instead of scrolling continuously. Use in
+    /// widgets / the Dynamic Island where refreshes are infrequent.
+    var paged: Bool = false
+    /// How long each page is shown in paged mode.
+    var pageDuration: Double = 3.0
 
     /// The text's natural (unconstrained) width, measured by a hidden probe
     /// placed in `.background`. Background views don't affect parent layout,
     /// so the probe can render at its full natural size without pushing
     /// siblings around.
     @State private var textWidth: CGFloat = 0
+
+    init(text: String, font: Font, padding: Int8, paged: Bool = false) {
+        let paddingSpaces = String(repeating: " ", count: Int(padding))
+        let paddedText = paddingSpaces + #"\#(text)"# + paddingSpaces
+        self.text = paddedText
+        self.font = font
+        self.paged = paged
+    }
 
     var body: some View {
         // The base Text owns the row's layout: with `.lineLimit(1)` it
@@ -47,9 +71,7 @@ struct MarqueeText: View {
                 GeometryReader { geo in
                     let needsScroll = textWidth > geo.size.width + 0.5
                     if needsScroll {
-                        TimelineView(.periodic(from: .now, by: 0.04)) { context in
-                            scrollingContent(at: context.date, containerWidth: geo.size.width)
-                        }
+                        marquee(containerWidth: geo.size.width)
                         .mask(
                             LinearGradient(
                                 stops: [
@@ -94,6 +116,47 @@ struct MarqueeText: View {
                 // measured width is unchanged.
                 if abs(width - textWidth) > 0.5 { textWidth = width }
             }
+    }
+
+    @ViewBuilder
+    private func marquee(containerWidth: CGFloat) -> some View {
+        if paged {
+            // Anchor the timeline on a wall-clock multiple of `pageDuration`
+            // so refresh ticks align with the page-index quantization below.
+            let anchor = Date(
+                timeIntervalSinceReferenceDate:
+                    (Date.now.timeIntervalSinceReferenceDate / pageDuration).rounded(.down) * pageDuration
+            )
+            TimelineView(.periodic(from: anchor, by: pageDuration)) { context in
+                pagedContent(at: context.date, containerWidth: containerWidth)
+            }
+        } else {
+            TimelineView(.periodic(from: .now, by: 0.04)) { context in
+                scrollingContent(at: context.date, containerWidth: containerWidth)
+            }
+        }
+    }
+
+    /// Show one of `ceil(textWidth / containerWidth)` evenly spaced pages —
+    /// page 0 left-aligned, the last page right-aligned — chosen by wall-clock
+    /// time quantized to `pageDuration`, then cycling back to the start. The
+    /// offset is a step function of time, so a renderer that samples the
+    /// timeline late or infrequently still lands exactly on a page boundary.
+    private func pagedContent(at date: Date, containerWidth: CGFloat) -> some View {
+        let travel = max(0, textWidth - containerWidth)
+        // Small slack so float noise doesn't turn exactly-2-screens into 3 pages.
+        let pages = max(2, Int(ceil((textWidth - 0.5) / containerWidth)))
+        let tick = Int((date.timeIntervalSinceReferenceDate / pageDuration).rounded(.down))
+        let page = tick % pages
+        let progress = CGFloat(page) / CGFloat(pages - 1)
+
+        return Text(text)
+            .font(font)
+            .lineLimit(1)
+            .fixedSize()
+            .offset(x: -travel * progress)
+            .frame(width: containerWidth, alignment: .leading)
+            .clipped()
     }
 
     /// Compute an offset that ping-pongs between left-aligned (0) and

@@ -226,7 +226,13 @@ extension AppDelegate: HKWorkoutSessionDelegate {
         let isImperial = unitPrefs.distance == .miles
         let slots = phonePrefs.liveActivitySlots.map(\.metricType.rawValue)
         print("[AppDelegate] Starting Live Activity (imperial=\(isImperial))")
-        LiveActivityManager.shared.startActivity(routeName: nil, isImperial: isImperial, statSlots: slots)
+        LiveActivityManager.shared.startActivity(
+            routeName: nil,
+            isImperial: isImperial,
+            statSlots: slots,
+            showStatsInIsland: phonePrefs.showStatsInDynamicIsland,
+            distanceRemainingFallback: phonePrefs.resolvedRemainingFallback.rawValue
+        )
         #else
         print("[AppDelegate] ActivityKit not available on this build")
         #endif
@@ -242,14 +248,16 @@ extension AppDelegate: HKWorkoutSessionDelegate {
         #if canImport(ActivityKit)
         // Grace window for a `rideTerminalIntent` (held / discarded) from the
         // watch to land via WCSession and latch the LA's terminal banner
-        // BEFORE we tear it down. Without this delay, the HK mirroring
-        // `.ended` callback races the WCSession message and `endActivity()`
-        // ends up defaulting to `.completed` for a hold initiated on the
-        // watch. The intent itself is sent right before `session?.end()` on
-        // watchOS so the typical lag is well under this window. If no intent
-        // arrives, `endActivity()` keeps its existing default of `.completed`.
+        // BEFORE we stamp the final state. Without this delay, the HK
+        // mirroring `.ended` callback races the WCSession message and the
+        // finalize pass ends up defaulting to `.completed` for a hold
+        // initiated on the watch. The intent itself is sent right before
+        // `session?.end()` on watchOS so the typical lag is well under this
+        // window. If no intent arrives, the finalize default of `.completed`
+        // stands. The activity itself stays up after this — it's dismissed by
+        // the next ride start, a later app foreground, or the rider.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            LiveActivityManager.shared.endActivity()
+            LiveActivityManager.shared.finalizeAfterWorkoutEnd()
         }
         #endif
         TurnNotificationManager.shared.clearAll()
@@ -275,6 +283,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
 @main
 struct OG_Bike_ComputerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var routeStore = RouteStore()
     @StateObject private var rideStore = RideStore()
     @StateObject private var metricConfig = MetricConfigStore()
@@ -328,6 +337,16 @@ struct OG_Bike_ComputerApp: App {
                 }
                 .onChange(of: userSettings.settings.phoneAlerts) { _, _ in
                     cachePreferencesForAppDelegate()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    // Terminal Live Activity banners now outlive the workout.
+                    // Opening the app means the rider has seen the result —
+                    // schedule leftover completed/discarded banners away.
+                    #if canImport(ActivityKit)
+                    if phase == .active && !RideSessionManager.shared.isRideActive {
+                        LiveActivityManager.shared.cleanupLeftoverActivities()
+                    }
+                    #endif
                 }
                 .onOpenURL { url in
                     if url.scheme == "ogbikecomputer" && url.host == "ridecontrol" {

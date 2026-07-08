@@ -31,6 +31,14 @@ nonisolated struct RideActivityAttributes: ActivityAttributes {
     /// Which 6 metrics to show in the lock-screen stats grid (MetricType raw values).
     /// Defaults to distance, moving time, avg speed, heart rate, elev gain, speed.
     var statSlots: [String] = ["distance", "movingTime", "averageSpeed", "heartRate", "elevationGain", "speed"]
+    /// Whether the top row of `statSlots` also renders in the expanded
+    /// Dynamic Island. Optional so attributes persisted by an older app
+    /// version still decode; nil means true.
+    var showStatsInIsland: Bool? = true
+    /// Metric raw value shown in place of a distanceRemaining stat slot when
+    /// the ride has no active route. Optional so attributes persisted by an
+    /// older app version still decode; nil means "distance".
+    var distanceRemainingFallback: String? = "distance"
 
     /// Dynamic data updated throughout the ride
     nonisolated struct ContentState: Codable, Hashable {

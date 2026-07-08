@@ -23,6 +23,15 @@ struct LiveActivitySlot: Codable, Equatable, Hashable, Identifiable {
         LiveActivitySlot(id: 4, metricType: .elevationGain),
         LiveActivitySlot(id: 5, metricType: .averageSpeed),
     ]
+
+    /// Automatic no-route fallback for a Remaining slot: the first eligible
+    /// stat that doesn't itself require a route and isn't already in the grid.
+    static func automaticRemainingFallback(for slots: [LiveActivitySlot]) -> MetricType {
+        let used = Set(slots.map(\.metricType))
+        return MetricType.liveActivityStats.first {
+            !$0.requiresRoute && !used.contains($0)
+        } ?? .distance
+    }
 }
 
 // MARK: - Phone Alert Preferences
@@ -40,6 +49,17 @@ struct PhoneAlertPreferences: Codable, Equatable, Hashable {
     var showTurnNotifications: Bool
     /// Which metric slots appear in the Live Activity stats grid.
     var liveActivitySlots: [LiveActivitySlot]
+    /// Stat shown in place of a Remaining slot on rides without a route.
+    /// nil = automatic (first eligible stat not already in the grid).
+    var distanceRemainingFallback: MetricType?
+    /// When true, the top row of `liveActivitySlots` also renders in the
+    /// expanded Dynamic Island on devices that have one.
+    var showStatsInDynamicIsland: Bool
+
+    /// The fallback that will actually be used, resolving automatic mode.
+    var resolvedRemainingFallback: MetricType {
+        distanceRemainingFallback ?? LiveActivitySlot.automaticRemainingFallback(for: liveActivitySlots)
+    }
 
     static let `default` = PhoneAlertPreferences(
         showTurnNotifications: false,
@@ -48,10 +68,14 @@ struct PhoneAlertPreferences: Codable, Equatable, Hashable {
 
     init(
         showTurnNotifications: Bool = false,
-        liveActivitySlots: [LiveActivitySlot] = LiveActivitySlot.defaultSlots
+        liveActivitySlots: [LiveActivitySlot] = LiveActivitySlot.defaultSlots,
+        distanceRemainingFallback: MetricType? = nil,
+        showStatsInDynamicIsland: Bool = true
     ) {
         self.showTurnNotifications = showTurnNotifications
         self.liveActivitySlots = liveActivitySlots
+        self.distanceRemainingFallback = distanceRemainingFallback
+        self.showStatsInDynamicIsland = showStatsInDynamicIsland
     }
 
     // Old wire format: `mode: PhoneAlertMode` (off / liveActivity /
@@ -64,6 +88,8 @@ struct PhoneAlertPreferences: Codable, Equatable, Hashable {
         case showTurnNotifications
         case mode  // legacy
         case liveActivitySlots
+        case distanceRemainingFallback
+        case showStatsInDynamicIsland
     }
 
     init(from decoder: Decoder) throws {
@@ -76,11 +102,15 @@ struct PhoneAlertPreferences: Codable, Equatable, Hashable {
             showTurnNotifications = false
         }
         liveActivitySlots = try c.decodeIfPresent([LiveActivitySlot].self, forKey: .liveActivitySlots) ?? LiveActivitySlot.defaultSlots
+        distanceRemainingFallback = try c.decodeIfPresent(MetricType.self, forKey: .distanceRemainingFallback)
+        showStatsInDynamicIsland = try c.decodeIfPresent(Bool.self, forKey: .showStatsInDynamicIsland) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(showTurnNotifications, forKey: .showTurnNotifications)
         try c.encode(liveActivitySlots, forKey: .liveActivitySlots)
+        try c.encodeIfPresent(distanceRemainingFallback, forKey: .distanceRemainingFallback)
+        try c.encode(showStatsInDynamicIsland, forKey: .showStatsInDynamicIsland)
     }
 }

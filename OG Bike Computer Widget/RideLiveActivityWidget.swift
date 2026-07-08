@@ -113,41 +113,49 @@ struct RideLiveActivity: Widget {
             DynamicIsland {
                 // Expanded
                 DynamicIslandExpandedRegion(.leading) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 5) {
-                            Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                            ZStack {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [Theme.primaryLight, Theme.primary],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 20, height: 20)
+                                    .shadow(color: Theme.primary.opacity(0.6), radius: 3, y: 1)
+                                Image(systemName: "bicycle")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                            }
+                            Text(context.attributes.routeName ?? "Riding")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.95))
+                                .lineLimit(1)
+                        }
+                        HStack(spacing: 5) {
+                            Image(systemName: "timer")
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(Theme.primaryLight)
-                            Text(formatDistance(context.state.totalDistance, imperial: context.attributes.isImperial))
+                            Text(formatDuration(context.state.movingTime, hideSeconds: false))
                                 .font(.body.weight(.semibold))
                                 .monospacedDigit()
                                 .foregroundStyle(.white)
-                        }
-                        HStack(spacing: 5) {
-                            Image(systemName: "speedometer")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Text(formatSpeed(context.state.averageSpeed, imperial: context.attributes.isImperial))
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
                         }
                     }
                     .padding(.leading, 6)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 4) {
-                        HStack(spacing: 5) {
-                            Text(formatDuration(context.state.movingTime, hideSeconds: false))
-                                .font(.body.weight(.semibold))
-                                .monospacedDigit()
-                                .foregroundStyle(.white)
-                            Image(systemName: "timer")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(Theme.primaryLight)
-                        }
+                        StatusPillView(
+                            isPaused: context.state.isPaused,
+                            isAutoPaused: context.state.isAutoPaused,
+                            isStale: context.isStale
+                        )
                         if let hr = context.state.heartRate, hr > 0 {
-                            HStack(spacing: 5) {
+                            HStack(spacing: 4) {
                                 Text("\(Int(hr))")
                                     .font(.subheadline.weight(.medium))
                                     .monospacedDigit()
@@ -155,16 +163,6 @@ struct RideLiveActivity: Widget {
                                 Image(systemName: "heart.fill")
                                     .font(.caption2)
                                     .foregroundStyle(.pink)
-                            }
-                        } else {
-                            HStack(spacing: 5) {
-                                Text(formatSpeed(context.state.currentSpeed, imperial: context.attributes.isImperial))
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .monospacedDigit()
-                                Image(systemName: "gauge.with.dots.needle.bottom.50percent")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -207,16 +205,33 @@ struct RideLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     let status = context.state.status
                     if status == .active {
-                        let cue = context.state.isOffRoute
-                            ? context.state.missedTurnCue
-                            : context.state.nextTurnCue
-                        if let cue, !cue.isEmpty {
-                            MarqueeText(text: cue, font: .footnote)
-                                .foregroundStyle(context.state.isOffRoute ? .orange.opacity(0.85) : .white.opacity(0.7))
-                                .frame(maxWidth: .infinity)
-                                .padding(.horizontal, 12)
-                                .padding(.bottom, 2)
+                        VStack(spacing: 5) {
+                            // Same top-row stats the user picked for the lock
+                            // screen, when enabled in settings.
+                            if context.attributes.showStatsInIsland ?? true {
+                                HStack(spacing: 4) {
+                                    ForEach(Array(context.attributes.statSlots.prefix(3).enumerated()), id: \.offset) { _, slot in
+                                        MetricStatCell(
+                                            slot: slot,
+                                            state: context.state,
+                                            attributes: context.attributes,
+                                            hideSeconds: false
+                                        )
+                                    }
+                                }
+                                .padding(.horizontal, 4)
+                            }
+                            let cue = context.state.isOffRoute
+                                ? context.state.missedTurnCue
+                                : context.state.nextTurnCue
+                            if let cue, !cue.isEmpty {
+                                MarqueeText(text: cue, font: .footnote, padding: 2, paged: true)
+                                    .foregroundStyle(context.state.isOffRoute ? .orange.opacity(0.85) : .white.opacity(0.7))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.horizontal, 12)
+                            }
                         }
+                        .padding(.bottom, 2)
                     } else {
                         let badge = StatusBadge(status: status)
                         HStack(spacing: 8) {
@@ -246,7 +261,11 @@ struct RideLiveActivity: Widget {
                         .monospacedDigit()
                         .foregroundStyle(Theme.primaryLight)
                 } else {
-                    Text(formatDistanceCompact(context.state.totalDistance, imperial: context.attributes.isImperial))
+                    // No nav — show the user's first configured stat.
+                    let slot = context.attributes.statSlots.first ?? "distance"
+                    Text(compactMetricValue(resolveSlot(slot, state: context.state, attributes: context.attributes),
+                                            state: context.state,
+                                            imperial: context.attributes.isImperial))
                         .font(.caption.weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(Theme.primaryLight)
@@ -442,11 +461,131 @@ private struct LockScreenView: View {
         }
     }
 
-    @ViewBuilder
     private var statusPill: some View {
-        if state.isPaused {
+        StatusPillView(
+            isPaused: state.isPaused,
+            isAutoPaused: state.isAutoPaused,
+            isStale: context.isStale
+        )
+    }
+
+    // MARK: - Nav Banner
+
+    @ViewBuilder
+    private var navBanner: some View {
+        HStack(spacing: 10) {
+            if state.isOffRoute {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.orange.opacity(0.25))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(.orange)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(state.missedTurnLabel ?? "Off Route")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    if let cue = state.missedTurnCue, !cue.isEmpty {
+                        MarqueeText(text: cue, font: .caption2, padding: 2, paged: true)
+                            .foregroundStyle(.orange.opacity(0.8))
+                    } else if let dist = state.distanceOffRoute {
+                        Text("+\(formatTurnDistance(dist, imperial: isImperial)) from route")
+                            .font(.caption2)
+                            .foregroundStyle(.orange.opacity(0.8))
+                    }
+                }
+                Spacer()
+                statusPill
+            } else if let dir = state.nextTurnDirection {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Theme.primary.opacity(0.4), Theme.primaryDeep.opacity(0.3)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 28, height: 28)
+                    Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(Theme.primaryLight)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 5) {
+                        Text(dir.capitalized)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                        if let dist = state.distanceToNextTurn {
+                            Text("· \(formatTurnDistance(dist, imperial: isImperial))")
+                                .font(.caption)
+                                .foregroundStyle(Theme.primaryLight)
+                                .monospacedDigit()
+                        }
+                    }
+                    if let cue = state.nextTurnCue, !cue.isEmpty {
+                        MarqueeText(text: cue, font: .caption2, padding: 2, paged: true)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                Spacer()
+                statusPill
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.primary.opacity(0.25), lineWidth: 0.5)
+                )
+        )
+    }
+
+    // MARK: - Configurable Stats Grid
+
+    @ViewBuilder
+    private var statsGrid: some View {
+        let topRow = Array(statSlots.prefix(3))
+        let bottomRow = Array(statSlots.dropFirst(3).prefix(3))
+
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                ForEach(Array(topRow.enumerated()), id: \.offset) { _, slot in
+                    MetricStatCell(slot: slot, state: state, attributes: context.attributes, hideSeconds: isLuminanceReduced)
+                }
+            }
+            if !bottomRow.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(Array(bottomRow.enumerated()), id: \.offset) { _, slot in
+                        MetricStatCell(slot: slot, state: state, attributes: context.attributes, hideSeconds: isLuminanceReduced)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Shared Components
+
+/// Ride state pill shared by the lock screen and the expanded Dynamic Island:
+/// LIVE / PAUSED / AUTO PAUSED, or NO SIGNAL when the content has passed its
+/// stale date (telemetry gap — watch out of range, tunnel, throttling).
+private struct StatusPillView: View {
+    let isPaused: Bool
+    let isAutoPaused: Bool
+    let isStale: Bool
+
+    var body: some View {
+        if isStale {
+            pill(text: "NO SIGNAL", icon: "antenna.radiowaves.left.and.right.slash", color: .gray)
+        } else if isPaused {
             pill(text: "PAUSED", icon: "pause.fill", color: .yellow)
-        } else if state.isAutoPaused {
+        } else if isAutoPaused {
             pill(text: "AUTO PAUSED", icon: "pause.circle.fill", color: .yellow)
         } else {
             HStack(spacing: 5) {
@@ -486,124 +625,31 @@ private struct LockScreenView: View {
                 .overlay(Capsule().stroke(color.opacity(0.4), lineWidth: 0.5))
         )
     }
+}
 
-    // MARK: - Nav Banner
+/// One icon + label + value stat cell, shared by the lock-screen grid and the
+/// expanded Dynamic Island stats row.
+private struct MetricStatCell: View {
+    let slot: String
+    let state: RideActivityAttributes.ContentState
+    let attributes: RideActivityAttributes
+    let hideSeconds: Bool
 
-    @ViewBuilder
-    private var navBanner: some View {
-        HStack(spacing: 10) {
-            if state.isOffRoute {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(Color.orange.opacity(0.25))
-                        .frame(width: 28, height: 28)
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.body.weight(.bold))
-                        .foregroundStyle(.orange)
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(state.missedTurnLabel ?? "Off Route")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.orange)
-                    if let cue = state.missedTurnCue, !cue.isEmpty {
-                        MarqueeText(text: cue, font: .caption2)
-                            .foregroundStyle(.orange.opacity(0.8))
-                    } else if let dist = state.distanceOffRoute {
-                        Text("+\(formatTurnDistance(dist, imperial: isImperial)) from route")
-                            .font(.caption2)
-                            .foregroundStyle(.orange.opacity(0.8))
-                    }
-                }
-                Spacer()
-                statusPill
-            } else if let dir = state.nextTurnDirection {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Theme.primary.opacity(0.4), Theme.primaryDeep.opacity(0.3)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 28, height: 28)
-                    Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
-                        .font(.body.weight(.bold))
-                        .foregroundStyle(Theme.primaryLight)
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 5) {
-                        Text(dir.capitalized)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                        if let dist = state.distanceToNextTurn {
-                            Text("· \(formatTurnDistance(dist, imperial: isImperial))")
-                                .font(.caption)
-                                .foregroundStyle(Theme.primaryLight)
-                                .monospacedDigit()
-                        }
-                    }
-                    if let cue = state.nextTurnCue, !cue.isEmpty {
-                        MarqueeText(text: cue, font: .caption2)
-                            .foregroundStyle(.white.opacity(0.6))
-                    }
-                }
-                Spacer()
-                statusPill
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Theme.primary.opacity(0.25), lineWidth: 0.5)
-                )
-        )
-    }
+    var body: some View {
+        let raw = resolveSlot(slot, state: state, attributes: attributes)
+        let tint = metricTint(raw)
 
-    // MARK: - Configurable Stats Grid
-
-    @ViewBuilder
-    private var statsGrid: some View {
-        let topRow = Array(statSlots.prefix(3))
-        let bottomRow = Array(statSlots.dropFirst(3).prefix(3))
-
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                ForEach(Array(topRow.enumerated()), id: \.offset) { _, slot in
-                    statCell(for: slot)
-                }
-            }
-            if !bottomRow.isEmpty {
-                HStack(spacing: 4) {
-                    ForEach(Array(bottomRow.enumerated()), id: \.offset) { _, slot in
-                        statCell(for: slot)
-                    }
-                }
-            }
-        }
-    }
-
-    private func statCell(for slotRawValue: String) -> some View {
-        let label = metricLabel(slotRawValue)
-        let value = resolveMetricValue(slotRawValue)
-        let icon = metricIcon(slotRawValue)
-        let tint = metricTint(slotRawValue)
-
-        return VStack(spacing: 1) {
+        VStack(spacing: 1) {
             HStack(spacing: 3) {
-                Image(systemName: icon)
+                Image(systemName: metricIcon(raw))
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(tint)
-                Text(label)
+                Text(metricLabel(raw))
                     .font(.system(size: 8, weight: .bold))
                     .tracking(0.4)
                     .foregroundStyle(.white.opacity(0.55))
             }
-            Text(value)
+            Text(resolveMetricValue(raw, state: state, imperial: attributes.isImperial, hideSeconds: hideSeconds))
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
@@ -621,66 +667,124 @@ private struct LockScreenView: View {
                 )
         )
     }
+}
 
-    /// Resolve a metric raw value to its display string from ContentState.
-    private func resolveMetricValue(_ rawValue: String) -> String {
-        let hideSeconds = isLuminanceReduced
+/// Remaining distance only exists on routed rides — on a free ride the slot
+/// shows the configured fallback metric instead.
+private func resolveSlot(
+    _ slot: String,
+    state: RideActivityAttributes.ContentState,
+    attributes: RideActivityAttributes
+) -> String {
+    (slot == "distanceRemaining" && state.routeDistanceRemaining == nil)
+        ? (attributes.distanceRemainingFallback ?? "distance")
+        : slot
+}
 
-        switch rawValue {
-        case "speed":
-            return formatSpeed(state.currentSpeed, imperial: isImperial)
-        case "averageSpeed":
-            return formatSpeed(state.averageSpeed, imperial: isImperial)
-        case "maxSpeed":
-            guard let v = state.maxSpeed, v > 0 else { return "--" }
-            return formatSpeed(v, imperial: isImperial)
-        case "distance":
-            return formatDistance(state.totalDistance, imperial: isImperial)
-        case "distanceRemaining":
-            guard let v = state.routeDistanceRemaining else { return "--" }
-            return formatDistance(v, imperial: isImperial)
-        case "elapsedTime":
-            return formatDuration(state.elapsedTime, hideSeconds: hideSeconds)
-        case "movingTime":
-            return formatDuration(state.movingTime, hideSeconds: hideSeconds)
-        case "heartRate":
-            guard let v = state.heartRate, v > 0 else { return "--" }
-            return "\(Int(v))"
-        case "averageHeartRate":
-            guard let v = state.averageHeartRate, v > 0 else { return "--" }
-            return "\(Int(v))"
-        case "maxHeartRate":
-            guard let v = state.maxHeartRate, v > 0 else { return "--" }
-            return "\(Int(v))"
-        case "calories":
-            guard let v = state.activeCalories, v > 0 else { return "--" }
-            return "\(Int(v))"
-        case "currentElevation":
-            guard let v = state.currentElevation else { return "--" }
-            return formatElevation(v, imperial: isImperial)
-        case "elevationGain":
-            guard let v = state.elevationGain, v > 0 else { return "--" }
-            return formatElevation(v, imperial: isImperial)
-        case "elevationLoss":
-            guard let v = state.elevationLoss, v > 0 else { return "--" }
-            return formatElevation(v, imperial: isImperial)
-        case "highestElevation":
-            guard let v = state.highestElevation else { return "--" }
-            return formatElevation(v, imperial: isImperial)
-        case "grade":
-            guard let v = state.currentGrade, v != 0 else { return "--" }
-            return String(format: "%.1f%%", v)
-        case "powerEstimate":
-            guard let v = state.estimatedPower, v > 0 else { return "--" }
-            return "\(Int(v))W"
-        case "nextTurnDistance":
-            guard let v = state.distanceToNextTurn else { return "--" }
-            return formatTurnDistance(v, imperial: isImperial)
-        case "nextTurnDirection":
-            return state.nextTurnDirection ?? "--"
-        default:
-            return "--"
-        }
+/// Resolve a metric raw value to its display string from ContentState.
+private func resolveMetricValue(
+    _ rawValue: String,
+    state: RideActivityAttributes.ContentState,
+    imperial isImperial: Bool,
+    hideSeconds: Bool
+) -> String {
+    switch rawValue {
+    case "speed":
+        return formatSpeed(state.currentSpeed, imperial: isImperial)
+    case "averageSpeed":
+        return formatSpeed(state.averageSpeed, imperial: isImperial)
+    case "maxSpeed":
+        guard let v = state.maxSpeed, v > 0 else { return "--" }
+        return formatSpeed(v, imperial: isImperial)
+    case "distance":
+        return formatDistance(state.totalDistance, imperial: isImperial)
+    case "distanceRemaining":
+        guard let v = state.routeDistanceRemaining else { return "--" }
+        return formatDistance(v, imperial: isImperial)
+    case "elapsedTime":
+        return formatDuration(state.elapsedTime, hideSeconds: hideSeconds)
+    case "movingTime":
+        return formatDuration(state.movingTime, hideSeconds: hideSeconds)
+    case "heartRate":
+        guard let v = state.heartRate, v > 0 else { return "--" }
+        return "\(Int(v))"
+    case "averageHeartRate":
+        guard let v = state.averageHeartRate, v > 0 else { return "--" }
+        return "\(Int(v))"
+    case "maxHeartRate":
+        guard let v = state.maxHeartRate, v > 0 else { return "--" }
+        return "\(Int(v))"
+    case "calories":
+        guard let v = state.activeCalories, v > 0 else { return "--" }
+        return "\(Int(v))"
+    case "currentElevation":
+        guard let v = state.currentElevation else { return "--" }
+        return formatElevation(v, imperial: isImperial)
+    case "elevationGain":
+        guard let v = state.elevationGain, v > 0 else { return "--" }
+        return formatElevation(v, imperial: isImperial)
+    case "elevationLoss":
+        guard let v = state.elevationLoss, v > 0 else { return "--" }
+        return formatElevation(v, imperial: isImperial)
+    case "highestElevation":
+        guard let v = state.highestElevation else { return "--" }
+        return formatElevation(v, imperial: isImperial)
+    case "grade":
+        guard let v = state.currentGrade, v != 0 else { return "--" }
+        return String(format: "%.1f%%", v)
+    case "powerEstimate":
+        guard let v = state.estimatedPower, v > 0 else { return "--" }
+        return "\(Int(v))W"
+    case "nextTurnDistance":
+        guard let v = state.distanceToNextTurn else { return "--" }
+        return formatTurnDistance(v, imperial: isImperial)
+    case "nextTurnDirection":
+        return state.nextTurnDirection ?? "--"
+    default:
+        return "--"
+    }
+}
+
+/// Short value for the compact Dynamic Island pill — units dropped where the
+/// number alone reads fine in ~5 characters.
+private func compactMetricValue(
+    _ rawValue: String,
+    state: RideActivityAttributes.ContentState,
+    imperial isImperial: Bool
+) -> String {
+    let speedFactor = isImperial ? 2.23694 : 3.6
+    switch rawValue {
+    case "speed":
+        return String(format: "%.1f", state.currentSpeed * speedFactor)
+    case "averageSpeed":
+        return String(format: "%.1f", state.averageSpeed * speedFactor)
+    case "maxSpeed":
+        guard let v = state.maxSpeed, v > 0 else { return "--" }
+        return String(format: "%.1f", v * speedFactor)
+    case "distance":
+        return formatDistanceCompact(state.totalDistance, imperial: isImperial)
+    case "distanceRemaining":
+        guard let v = state.routeDistanceRemaining else { return "--" }
+        return formatDistanceCompact(v, imperial: isImperial)
+    case "elapsedTime":
+        return formatDuration(state.elapsedTime, hideSeconds: state.elapsedTime >= 3600)
+    case "movingTime":
+        return formatDuration(state.movingTime, hideSeconds: state.movingTime >= 3600)
+    case "currentElevation":
+        guard let v = state.currentElevation else { return "--" }
+        return "\(Int(isImperial ? v * 3.28084 : v))"
+    case "elevationGain":
+        guard let v = state.elevationGain, v > 0 else { return "--" }
+        return "\(Int(isImperial ? v * 3.28084 : v))"
+    case "elevationLoss":
+        guard let v = state.elevationLoss, v > 0 else { return "--" }
+        return "\(Int(isImperial ? v * 3.28084 : v))"
+    case "highestElevation":
+        guard let v = state.highestElevation else { return "--" }
+        return "\(Int(isImperial ? v * 3.28084 : v))"
+    default:
+        // HR / calories / grade / power already render compact.
+        return resolveMetricValue(rawValue, state: state, imperial: isImperial, hideSeconds: true)
     }
 }
 
