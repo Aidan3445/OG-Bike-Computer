@@ -35,6 +35,10 @@ final class ConnectivityManager: NSObject, ObservableObject {
     /// alert id. The transport uses this to cancel the matching fallback
     /// timer and let VoiceNavigator advance its queue.
     var onAlertAckReceived: ((UUID) -> Void)?
+    /// Watch-side hook: phone finished speaking an alert id (didFinish/
+    /// didCancel). The transport uses this to release the next queued line
+    /// of a paced readout.
+    var onAlertFinishReceived: ((UUID) -> Void)?
     #endif
     #if os(iOS)
     var onRideReceived: ((RideSummary) -> Void)?
@@ -56,6 +60,27 @@ final class ConnectivityManager: NSObject, ObservableObject {
     #if os(watchOS)
     @Published var routeStore: RouteStore?
     @Published var rideStore: RideStore?
+    /// Ride IDs whose file transfer is currently in flight (queued or running).
+    /// Drives the spinner / "Transferring…" affordance in the watch ride history.
+    @Published var inFlightTransferRideIDs: Set<UUID> = []
+
+    /// Result of asking the phone "do you actually have this ride?"
+    enum PhonePresence {
+        /// We've never checked, or the watch isn't reachable.
+        case unknown
+        /// A verify message is in flight.
+        case checking
+        /// Phone reports the ride is on disk.
+        case present
+        /// Phone reports the ride is NOT on disk (transfer was acked but the
+        /// file is gone — either lost in transit or the user deleted it on
+        /// the phone). The watch shows a red error icon and a retry affordance.
+        case missing
+    }
+    /// Per-ride verification results, cached for the lifetime of the session
+    /// (cleared on app relaunch). Keyed by ride id. SwiftUI views rely on this
+    /// being @Published so individual rows update when their check resolves.
+    @Published var phonePresenceByRide: [UUID: PhonePresence] = [:]
     #endif
 
     #if os(iOS)
@@ -319,10 +344,26 @@ extension ConnectivityManager {
             WCSession.default.transferUserInfo(AlertAck(id: id).toDict())
             return
         }
+        // No-op replyHandler is required: the receiver only implements the
+        // replyHandler variant of didReceiveMessage, so a nil-reply send is
+        // silently dropped.
         WCSession.default.sendMessage(
             AlertAck(id: id).toDict(),
-            replyHandler: nil,
+            replyHandler: { _ in },
             errorHandler: { _ in /* best-effort, watch fallback will speak */ }
+        )
+    }
+
+    /// Phone → watch: finished speaking alert `id`. WCSession fallback for
+    /// when the HK mirror channel is gone; best-effort — the watch's pacing
+    /// timeout advances the queue if this never lands.
+    func sendAlertFinish(id: UUID) {
+        guard WCSession.default.activationState == .activated,
+              WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(
+            AlertFinish(id: id).toDict(),
+            replyHandler: { _ in },
+            errorHandler: { _ in /* best-effort, watch timeout advances */ }
         )
     }
 
@@ -635,6 +676,10 @@ extension ConnectivityManager {
             return
         }
 
+        DispatchQueue.main.async {
+            self.inFlightTransferRideIDs.insert(summary.id)
+        }
+
         // Notify phone that a file transfer is starting so it can show a progress indicator
         let summaryJSON = (try? JSONEncoder().encode(summary)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         WCSession.default.transferUserInfo([
@@ -712,7 +757,112 @@ extension ConnectivityManager {
     /// Handle a transfer acknowledgment from the phone.
     func handleTransferAck(rideID: UUID) {
         TransferLedger.shared.markConfirmed(rideID: rideID)
+        DispatchQueue.main.async {
+            self.inFlightTransferRideIDs.remove(rideID)
+            // Force a publish so views observing the ledger via `transferStatus(for:)`
+            // re-render once the ride flips from .pending to .confirmed.
+            self.objectWillChange.send()
+        }
         print("[Transfer] Confirmed: \(rideID)")
+    }
+
+    /// Ask the phone whether a confirmed ride is actually still on disk. The
+    /// transfer ledger only knows that the watch sent the file and the phone
+    /// acked it — neither guarantees the ride landed in the visible ride list.
+    /// Results are cached in `phonePresenceByRide`; pass `force: true` to bypass
+    /// the cache (e.g. after the user retries a missing ride).
+    ///
+    /// Only confirmed rides need verification — pending/discarded rides already
+    /// have a clear local status. Callers should gate on
+    /// `TransferLedger.status(for:)` being `.confirmed`.
+    func verifyPhonePresence(rideID: UUID, force: Bool = false) {
+        if !force {
+            switch phonePresenceByRide[rideID] {
+            case .checking, .present, .missing:
+                return
+            case .unknown, .none:
+                break
+            }
+        }
+        guard WCSession.default.activationState == .activated,
+              WCSession.default.isReachable else {
+            // Without reachability we can't get a fresh answer — leave the
+            // entry as .unknown so the UI shows the plain "transferred" state
+            // and the check will re-arm next time the row appears.
+            return
+        }
+        DispatchQueue.main.async {
+            self.phonePresenceByRide[rideID] = .checking
+        }
+        let msg: [String: Any] = ["type": "verifyRide", "rideID": rideID.uuidString]
+        WCSession.default.sendMessage(msg, replyHandler: { [weak self] reply in
+            let present = (reply["present"] as? Bool) ?? false
+            DispatchQueue.main.async {
+                self?.phonePresenceByRide[rideID] = present ? .present : .missing
+            }
+        }, errorHandler: { [weak self] error in
+            print("[Verify] sendMessage failed for \(rideID): \(error)")
+            DispatchQueue.main.async {
+                // Roll back to .unknown so a later row appearance can retry.
+                self?.phonePresenceByRide[rideID] = .unknown
+            }
+        })
+    }
+
+    /// Manually retry transferring a ride that's still on the watch. Used by the
+    /// ride history view when the user taps a non-transferred row.
+    func retryTransfer(rideID: UUID) {
+        let dir = Self.ridesDirectory
+        let summaryURL = dir.appendingPathComponent("\(rideID.uuidString).json")
+        guard let data = try? Data(contentsOf: summaryURL),
+              let summary = try? JSONDecoder().decode(RideSummary.self, from: data) else {
+            print("[Transfer] retryTransfer: cannot load summary for \(rideID)")
+            return
+        }
+        guard WCSession.default.activationState == .activated else {
+            print("[Transfer] retryTransfer: WCSession not activated")
+            return
+        }
+        // Reset the ledger so the ride goes back to .pending until the phone
+        // re-acks. This matters both for the "confirmed but missing on phone"
+        // path (status would otherwise stay .confirmed and the retry icon
+        // wouldn't update) and so the deletion countdown reflects the new
+        // 30-day pending clock.
+        TransferLedger.shared.markUndiscarded(rideID: rideID)
+        DispatchQueue.main.async {
+            // Clear cached presence so a fresh verify fires after the retry.
+            self.phonePresenceByRide[rideID] = .unknown
+        }
+        transferRideToPhone(summary: summary)
+    }
+
+    /// Undiscard a previously discarded ride: clear the flag, reset the ledger so
+    /// the 30-day pending clock restarts, and queue a fresh transfer to the phone.
+    func undiscardRide(rideID: UUID) {
+        let dir = Self.ridesDirectory
+        let summaryURL = dir.appendingPathComponent("\(rideID.uuidString).json")
+        guard let data = try? Data(contentsOf: summaryURL),
+              var summary = try? JSONDecoder().decode(RideSummary.self, from: data) else {
+            print("[Transfer] undiscardRide: cannot load summary for \(rideID)")
+            return
+        }
+        summary.wasDiscarded = nil
+        if let json = try? JSONEncoder().encode(summary) {
+            try? json.write(to: summaryURL, options: .atomic)
+        }
+        DispatchQueue.main.async {
+            if let store = self.rideStore {
+                if let idx = store.rides.firstIndex(where: { $0.id == rideID }) {
+                    store.rides[idx] = summary
+                }
+            }
+        }
+        TransferLedger.shared.markUndiscarded(rideID: rideID)
+        guard WCSession.default.activationState == .activated else {
+            print("[Transfer] undiscardRide: WCSession not activated, will retry on activation")
+            return
+        }
+        transferRideToPhone(summary: summary)
     }
 
     /// Clean up old confirmed rides (7 days) and expired unconfirmed rides (30 days).
@@ -721,7 +871,8 @@ extension ConnectivityManager {
         let fm = FileManager.default
 
         // Clean confirmed rides older than 7 days
-        let confirmedToRemove = TransferLedger.shared.confirmedRideIDsOlderThan(days: 7)
+        let confirmedToRemove = TransferLedger.shared.confirmedRideIDsOlderThan(
+            days: TransferLedger.confirmedRetentionDays)
         for rideID in confirmedToRemove {
             deleteLocalRide(rideID: rideID, dir: dir, fm: fm)
             TransferLedger.shared.remove(rideID: rideID)
@@ -729,11 +880,21 @@ extension ConnectivityManager {
         }
 
         // Clean unconfirmed rides older than 30 days (data likely lost, can't keep forever)
-        let expiredToRemove = TransferLedger.shared.pendingRideIDsOlderThan(days: 30)
+        let expiredToRemove = TransferLedger.shared.pendingRideIDsOlderThan(
+            days: TransferLedger.pendingRetentionDays)
         for rideID in expiredToRemove {
             deleteLocalRide(rideID: rideID, dir: dir, fm: fm)
             TransferLedger.shared.remove(rideID: rideID)
             print("[Transfer] Expired unconfirmed ride: \(rideID)")
+        }
+
+        // Clean discarded rides older than 7 days
+        let discardedToRemove = TransferLedger.shared.discardedRideIDsOlderThan(
+            days: TransferLedger.discardedRetentionDays)
+        for rideID in discardedToRemove {
+            deleteLocalRide(rideID: rideID, dir: dir, fm: fm)
+            TransferLedger.shared.remove(rideID: rideID)
+            print("[Transfer] Cleaned up discarded ride: \(rideID)")
         }
     }
 
@@ -840,6 +1001,29 @@ extension ConnectivityManager: WCSessionDelegate {
         }
         #endif
     }
+
+    #if os(watchOS)
+    /// Watch-side: WC reports the file transfer has completed (success or terminal
+    /// failure). Clear the in-flight indicator so the history view stops spinning.
+    /// We do NOT mark the ride confirmed here — confirmation requires the phone's
+    /// `rideAck` round-trip. A successful `didFinish` just means the bytes left
+    /// the watch; the phone might still have failed to decode.
+    func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
+        let meta = fileTransfer.file.metadata
+        guard meta?["type"] as? String == "rideTrack",
+              let summaryJSON = meta?["summaryJSON"] as? String,
+              let data = summaryJSON.data(using: .utf8),
+              let summary = try? JSONDecoder().decode(RideSummary.self, from: data) else {
+            return
+        }
+        if let error = error {
+            print("[Transfer] didFinish error for \(summary.id): \(error)")
+        }
+        DispatchQueue.main.async {
+            self.inFlightTransferRideIDs.remove(summary.id)
+        }
+    }
+    #endif
 
     #if os(iOS)
     /// Clean up staged route files once the OS reports the transfer is done
@@ -1065,6 +1249,16 @@ extension ConnectivityManager: WCSessionDelegate {
             replyHandler(["received": true])
             return
         }
+
+        // Voice alert finish (phone → watch). Phone finished speaking a
+        // specific utterance id.
+        if let finish = AlertFinish.fromDict(message) {
+            DispatchQueue.main.async {
+                self.onAlertFinishReceived?(finish.id)
+            }
+            replyHandler(["received": true])
+            return
+        }
         #endif
 
         // Handle metric config on both platforms
@@ -1195,6 +1389,20 @@ extension ConnectivityManager: WCSessionDelegate {
         #endif
 
         #if os(iOS) && !WIDGET_EXTENSION
+        // Watch is asking whether a previously-confirmed ride is actually on the phone.
+        // The check is just "summary JSON exists in the rides directory" — that's the
+        // source of truth for the ride list. We reply on the WC delegate queue
+        // immediately; no main-thread hop needed.
+        if let type = message["type"] as? String,
+           type == "verifyRide",
+           let idStr = message["rideID"] as? String,
+           let rideID = UUID(uuidString: idStr) {
+            let summaryURL = Self.ridesDirectory
+                .appendingPathComponent("\(rideID.uuidString).json")
+            let present = FileManager.default.fileExists(atPath: summaryURL.path)
+            replyHandler(["present": present])
+            return
+        }
         print("Received message: \(message.keys), \(message["type"] as? String ?? "no type")")
         if let type = message["type"] as? String,
            type == "speech",

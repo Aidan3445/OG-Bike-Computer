@@ -132,11 +132,7 @@ class WorkoutManager: NSObject, ObservableObject {
     var navigationAlerts: NavigationAlertPreferences = .default {
         didSet {
             // When split distance changes mid-ride, re-anchor to the nearest split
-            // boundary at-or-below current distance — NOT to the current position.
-            // Anchoring to current position offsets every future split by however
-            // many miles were already ridden when the change landed (e.g. phone
-            // settings sync arrives at mile 3 → first 10mi split fires at 13, then
-            // 23, 33, …).
+            // boundary at-or-below current distance
             guard isActive,
                   navigationAlerts.splitAlerts.splitDistance != oldValue.splitAlerts.splitDistance else { return }
             let splitDist = navigationAlerts.splitAlerts.splitDistance
@@ -189,9 +185,7 @@ class WorkoutManager: NSObject, ObservableObject {
     private var builder: HKLiveWorkoutBuilder?
     private var routeBuilder: HKWorkoutRouteBuilder?
     // Tracks every in-flight insertRouteData call so finishRoute(with:) only
-    // runs after they've all completed. Without this, periodic flushes can
-    // still be in-flight when finishRoute fires, producing a HK workout with
-    // a missing or partial route in the Fitness app.
+    // runs after they've all completed. 
     private let routeInsertGroup = DispatchGroup()
 
     private let locationManager = CLLocationManager()
@@ -200,8 +194,8 @@ class WorkoutManager: NSObject, ObservableObject {
     private var timerAccumulated: TimeInterval = 0
     private var displayTimer: Timer?
     private var workoutStartDate: Date?
-    /// Set once at the very beginning of a ride (or restored from summary.date on continuation).
-    /// Never reset mid-ride — elapsed time is always relative to this.
+    /// Set once at the very beginning of a ride 
+    /// Elapsed time is always relative to this.
     private var initialRideStartDate: Date?
 
     let navigation = NavigationTracker()
@@ -223,35 +217,22 @@ class WorkoutManager: NSObject, ObservableObject {
     private let fastSamplesForResume = 5
     private let minTentativeDuration: TimeInterval = 3.0
 
-    // Silent probe: once the HK session has been paused for ~75s, watchOS
-    // stops feeding HealthKit (and shortly after, CoreLocation) data — the
-    // state machine then has no signal to detect the rider moving again, so
-    // the ride is stuck paused forever. To work around this we periodically
-    // wake the system in the background: HK is silently resumed, GPS is
-    // sampled into the tentative buffer for a short window, then if no real
-    // movement is detected we re-pause silently and discard the probe data.
-    // Genuine movement during the probe promotes to a real resume via the
-    // existing tentativeResume → moving commit path.
+    // Silent probe: while the HK session is paused, watchOS stops feeding
+    // HealthKit (and shortly after, CoreLocation) so we periodically wake the
+    // system in the background. Interval comes from
+    // `ridePreferences.autoPause.resumeProbeInterval`.
     private var pauseProbeTimer: Timer?
     private var isSilentProbe = false
     private var probeStartedAt: Date?
-    private let probeIntervalWhilePaused: TimeInterval = 75.0
     private let probeWindow: TimeInterval = 15.0
 
-    // Position-based fallback for stuck CLLocation.speed readings. CL sometimes
-    // freezes speed at the last pre-stop value (e.g. 9 mph) when stationary,
-    // which both prevents auto-pause from firing and lets a fake "high speed"
-    // false-trigger resume. We derive a trusted speed from a rolling window of
+    // Derive a trusted speed from a rolling window of
     // actual positions, and force-pause when displacement is near zero.
     private var positionBuffer: [(loc: CLLocation, t: Date)] = []
     private let positionBufferWindow: TimeInterval = 8.0
     private let stationaryDistanceThreshold: Double = 6.0  // meters over window → paused
     private let resumeDistanceThreshold: Double = 15.0     // meters of tentative buffer travel to confirm resume
 
-    // Wall-clock of the last GPS update we processed. The 1Hz displayTimer
-    // uses this to force an auto-pause re-check when CoreLocation throttles
-    // updates while the rider is standing still (otherwise updateAutoPause
-    // would never get called and the ride stays in .moving forever).
     private var lastLocationUpdateAt: Date?
     /// Seconds of GPS silence before the displayTimer fallback treats the
     /// rider as stationary and trips auto-pause directly.
@@ -276,9 +257,6 @@ class WorkoutManager: NSObject, ObservableObject {
     weak var rideStore: RideStore?
 
     // Mirroring: set true after delay post-mirroring, false on error/disconnect.
-    // Re-arms via DispatchWorkItem after 10s to detect phone reconnection.
-    // Read-public so VoiceNavigator can route audio based on whether the
-    // phone is reachable; writes stay internal to WorkoutManager.
     private(set) var isMirroringReady = false
     private var mirroringRetryWorkItem: DispatchWorkItem?
 
@@ -822,11 +800,15 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     /// Schedule the next silent probe. Called whenever the ride settles into
-    /// `.paused`. The probe will fire after `probeIntervalWhilePaused` seconds
-    /// unless something cancels it first (manual resume, real movement, stop).
+    /// `.paused`. The probe will fire after the configured resume-probe
+    /// interval unless something cancels it first (manual resume, real
+    /// movement, stop).
     private func schedulePauseProbe() {
+        let interval = min(max(ridePreferences.autoPause.resumeProbeInterval,
+                               AutoPausePreferences.resumeProbeIntervalRange.lowerBound),
+                           AutoPausePreferences.resumeProbeIntervalRange.upperBound)
         pauseProbeTimer?.invalidate()
-        pauseProbeTimer = Timer.scheduledTimer(withTimeInterval: probeIntervalWhilePaused,
+        pauseProbeTimer = Timer.scheduledTimer(withTimeInterval: interval,
                                                repeats: false) { [weak self] _ in
             self?.beginSilentProbe()
         }
@@ -975,16 +957,12 @@ class WorkoutManager: NSObject, ObservableObject {
                     .map { Date().timeIntervalSince($0) } ?? 0
 
                 // Require sustained fast samples, minimum duration, *and*
-                // enough real displacement in the tentative buffer. The
-                // distance gate is what makes a stuck CL reading unable to
-                // false-confirm: no real movement → no tentativeDistance.
+                // enough real displacement in the tentative buffer. 
                 if fastSampleCount >= fastSamplesForResume,
                    elapsed >= minTentativeDuration,
                    tentativeDistance >= resumeDistanceThreshold {
                     cancelPauseProbe()
                     commitTentativeBuffer()
-                    // If we were in a silent probe, HK is already running —
-                    // session?.resume() inside resumeSession() is a no-op then.
                     resumeSession()
                     autoPauseState = .moving
                     if navigationAlerts.autoPauseAlerts.enabled {
@@ -993,11 +971,8 @@ class WorkoutManager: NSObject, ObservableObject {
                 }
             } else if !isSilentProbe {
                 // Normal (non-silent) tentative resume that fell back below
-                // threshold — regress to paused immediately. During a silent
-                // probe we instead wait for the probe window to elapse so a
-                // slow-to-arrive GPS stream doesn't trip us back into paused
-                // before we've had a chance to detect real motion. The
-                // probe-window timeout is handled in tickAutoPauseFallback().
+                // threshold — regress to paused immediately. 
+                // The probe-window timeout is handled in tickAutoPauseFallback().
                 discardTentativeBuffer()
                 autoPauseState = .paused
                 schedulePauseProbe()
@@ -1259,15 +1234,12 @@ class WorkoutManager: NSObject, ObservableObject {
     /// Runs every second from the displayTimer. Catches the case where the
     /// rider has stopped moving and CoreLocation has throttled GPS updates
     /// to the point that updateAutoPause() stops being called from
-    /// processLocation(). Without this, auto-pause never triggers — the
-    /// state machine is otherwise purely event-driven on GPS updates.
+    /// processLocation(). 
     private func tickAutoPauseFallback() {
         guard isActive, ridePreferences.autoPause.enabled else { return }
 
         // Silent probe timeout: if the probe window has elapsed without
-        // confirming movement (e.g. CL never delivered usable updates or
-        // the rider remained stationary), discard the staged buffer and
-        // silently re-pause. The probe scheduler queues the next attempt.
+        // confirming movement 
         if isSilentProbe,
            autoPauseState == .tentativeResume,
            let probeStart = probeStartedAt,
@@ -1930,8 +1902,7 @@ class WorkoutManager: NSObject, ObservableObject {
 
     /// Attempt to hold the current ride. If another held ride already exists,
     /// surface a confirmation alert (via `pendingHoldConflict`) instead of
-    /// silently discarding it — only one held ride is allowed at a time.
-    /// Resolves through `resolveHoldConflict(_:)`.
+    /// silently discarding it
     func attemptHold() {
         guard isActive, !isSimulating else { return }
         if let existing = rideStore?.heldRide, existing.id != currentRideID {
@@ -2031,18 +2002,12 @@ class WorkoutManager: NSObject, ObservableObject {
 
         // Persist the held ride to disk + RideStore SYNCHRONOUSLY before any of the
         // teardown / async HK work. RideStore.update writes the summary JSON to the
-        // same `rides/` directory ConnectivityManager uses. If anything below fails
-        // or the app crashes, the held ride is already durable on the watch and
-        // `retryPendingTransfers` (fired on reachability change) will re-send it to
-        // the phone — TransferLedger keeps the entry pending until acked.
+        // same `rides/` directory ConnectivityManager uses. 
         rideStore?.update(summary)
         TransferLedger.shared.recordTransfer(rideID: summary.id)
 
         // Surface a held-ride summary screen so the user sees feedback after the
-        // countdown — without this, holdRide silently tears down and the view
-        // jumps back to the route list with no acknowledgment that anything happened.
-        // The cleanup() check `if completedRideSummary == nil` keeps `isActive` true
-        // while a summary is showing, so ContentView routes to RideSummaryView.
+        // countdown. 
         completedRideSummary = WatchRideSummary(
             distance: totalDistance,
             movingTime: movingTime,
@@ -2074,18 +2039,10 @@ class WorkoutManager: NSObject, ObservableObject {
         stopDisplayTimer()
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
-        // Checkpoint files are only deleted AFTER the held ride is fully durable on
-        // disk AND we've kicked off the transfer to the phone. If we deleted them
-        // up-front and then crashed mid-async, both the checkpoint *and* the in-
-        // flight summary would be gone.
+        // Checkpoint files are only deleted after the held ride is fully durable on
+        // disk and we've kicked off the transfer to the phone.
 
-        // Tell the phone NOW (before HK tears down) that this end is a hold,
-        // not a normal completion. The HK mirroring `.ended` callback on
-        // iPhone will fire moments after `session?.end()` below; if it beats
-        // this WCSession message, the iPhone defaults the Live Activity to
-        // "Ride Complete" (purple) instead of the orange "On Hold" banner.
-        // iPhone's `stopPhoneAlerts` has a matching grace window to let this
-        // intent land before it tears the LA down.
+        // Tell the phone before HK tears down 
         ConnectivityManager.shared.sendRideTerminalIntent("held")
 
         // Finish the HK session for this segment so it saves to Fitness
@@ -2194,8 +2151,7 @@ class WorkoutManager: NSObject, ObservableObject {
         lastCheckpointLocationCount = recordedLocations.count
 
         // Drop the held flag locally and on the phone so neither side shows a
-        // stale "On Hold" row while the resumed ride is active. The eventual
-        // hold/end will re-save the ride with the proper flag.
+        // stale "On Hold" row while the resumed ride is active.
         var resumed = summary
         resumed.isOnHold = nil
         rideStore?.update(resumed)
@@ -2220,12 +2176,17 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func discardHeldRide(summary: RideSummary) {
-        rideStore?.delete(summary)
-        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
-        try? FileManager.default.removeItem(at: trackURL)
-        // Notify phone to remove it as well
+        // Soft-discard: keep the ride on the watch with wasDiscarded=true so the
+        // user can undiscard from the ride history view. TransferLedger drives the
+        // 7-day retention clock; cleanupOldRides() performs the eventual delete.
+        var discarded = summary
+        discarded.isOnHold = nil
+        discarded.wasDiscarded = true
+        rideStore?.update(discarded)
+        TransferLedger.shared.markDiscarded(rideID: summary.id)
+        // Phone drops
         ConnectivityManager.shared.sendDiscardRide(rideID: summary.id)
-        print("[Hold] Discarded held ride: \(summary.name)")
+        print("[Hold] Soft-discarded held ride: \(summary.name)")
     }
 
     private func sendTelemetry() {
@@ -2293,8 +2254,7 @@ class WorkoutManager: NSObject, ObservableObject {
                 }
             }
 
-            // Suppress upcoming-turn payload when off-route — the rider isn't
-            // actually heading to that turn anymore. The off-route / missed-turn
+            // Suppress upcoming-turn when off-route. The off-route / missed-turn
             // fields above take over the navigation slot on the live activity.
             if !navigation.isOffRoute, let turn = navigation.nextTurn {
                 payload["turnDir"] = turn.direction.label
@@ -2449,9 +2409,9 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
         markMirroringFailed()
     }
 
-    /// Receive messages from the phone (ack channel for mirrored speech, etc.).
-    /// Currently the only message type is "speechDone" — fired when the phone
-    /// finishes playing a mirrored utterance so the watch can advance its
+    /// Receive messages from the phone (ack channel for mirrored speech):
+    /// "alertAck" when the phone's synthesizer starts an utterance and
+    /// "alertFinish" when it completes one, so the watch can advance its
     /// alert queue based on real completion instead of a duration estimate.
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didReceiveDataFromRemoteWorkoutSession data: [Data]) {
@@ -2468,19 +2428,16 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 if now - ts > 10 { continue }
             }
 
-            // Speech itself flows watch→phone via WCSession (plan §1).
-            // But the phone→watch ACK comes back through the HK mirror
-            // channel: real-world telemetry showed WCSession sendMessage
-            // hitting WCErrorCodeDeliveryFailed on phone→watch even
-            // mid-mirrored-workout. The HK mirror channel is reliable
-            // bidirectionally for the duration of the workout, so we use
-            // it for the small ack hop and let VoiceAlertTransport
-            // dispatch via the same hook either path would have used.
             switch type {
             case "alertAck":
                 guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
                 DispatchQueue.main.async {
                     ConnectivityManager.shared.onAlertAckReceived?(id)
+                }
+            case "alertFinish":
+                guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
+                DispatchQueue.main.async {
+                    ConnectivityManager.shared.onAlertFinishReceived?(id)
                 }
             default:
                 break

@@ -7,8 +7,68 @@
 
 import SwiftUI
 import Charts
+import Combine
 import CoreLocation
+import MapKit
 import UIKit
+
+// MARK: - Scrub State
+
+/// Scrub position shared between a chart and its map. Written per drag frame
+/// by the chart's gesture, observed only by the small leaf views that render
+/// scrub UI (rule line, footer readout, map dot) — the chart body and the
+/// map content never subscribe, so scrubbing can't trigger chart rebuilds or
+/// map re-renders.
+final class ChartScrubState: ObservableObject {
+    /// Meters from start; nil when not scrubbing.
+    @Published var distance: Double? = nil
+    /// Color of the active chart metric, mirrored by the map dot.
+    @Published var color: Color = .green
+}
+
+/// Dashed vertical scrub line drawn in the chart's overlay (not as a chart
+/// RuleMark) so per-frame scrub updates re-render only this path.
+struct ChartScrubRule: View {
+    @ObservedObject var scrub: ChartScrubState
+    let proxy: ChartProxy
+    let plotFrame: CGRect
+    let metersPerUnit: Double
+
+    var body: some View {
+        if let dist = scrub.distance,
+           let x = proxy.position(forX: dist / metersPerUnit) {
+            Path { p in
+                p.move(to: CGPoint(x: plotFrame.minX + x, y: plotFrame.minY))
+                p.addLine(to: CGPoint(x: plotFrame.minX + x, y: plotFrame.maxY))
+            }
+            .stroke(scrub.color.opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+/// Screen-space scrub dot layered over the map (not a map Annotation) so
+/// moving it never touches the map's content. `coordinateFor` maps the scrub
+/// distance to a track coordinate.
+struct MapScrubDot: View {
+    @ObservedObject var scrub: ChartScrubState
+    let proxy: MapProxy
+    let coordinateFor: (Double) -> CLLocationCoordinate2D?
+
+    var body: some View {
+        if let dist = scrub.distance,
+           let coord = coordinateFor(dist),
+           let point = proxy.convert(coord, to: .local) {
+            Circle()
+                .fill(.white)
+                .frame(width: 12, height: 12)
+                .overlay(Circle().stroke(scrub.color, lineWidth: 3))
+                .shadow(radius: 3)
+                .position(point)
+                .allowsHitTesting(false)
+        }
+    }
+}
 
 // MARK: - Long-Press-To-Scrub Recognizer
 //
@@ -190,12 +250,9 @@ struct RideChartsView: View {
     let dataPoints: [ChartDataPoint]
     let hasHeartRate: Bool
     let hasPower: Bool
-    /// Scrub position in meters from start; nil when not scrubbing.
-    @Binding var scrubDistance: Double?
-    /// Optional binding that surfaces the currently-selected chart's color
-    /// so a parent (e.g. the map view's scrub dot) can match it. The chart
-    /// itself doesn't need this — it's purely for cross-view styling.
-    var scrubColor: Binding<Color>? = nil
+    /// Deliberately NOT @ObservedObject — this view only writes to it from
+    /// the gesture; the scrub-rendering leaf views observe it.
+    let scrub: ChartScrubState
 
     @State private var selected: RideChartMetric = .elevation
     @State private var scrubActive = false
@@ -211,100 +268,55 @@ struct RideChartsView: View {
         VStack(spacing: 8) {
             chart
                 .frame(height: 140)
-                .onAppear { scrubColor?.wrappedValue = selected.color }
+                .onAppear { scrub.color = selected.color }
                 .onChange(of: selected) { _, newValue in
-                    scrubColor?.wrappedValue = newValue.color
+                    scrub.color = newValue.color
                 }
                 .chartOverlay { proxy in
                     GeometryReader { geo in
+                        let plotFrame = geo[proxy.plotFrame!]
+                        let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
                         let updateScrub: (CGPoint) -> Void = { loc in
-                            let plotOrigin = geo[proxy.plotFrame!].origin
-                            let x = loc.x - plotOrigin.x
-                            let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+                            let x = loc.x - plotFrame.origin.x
                             if let distInUnits: Double = proxy.value(atX: x) {
                                 let dist = distInUnits * metersPerUnit
                                 let maxDist = dataPoints.last?.distance ?? 0
-                                scrubDistance = max(0, min(dist, maxDist))
+                                scrub.distance = max(0, min(dist, maxDist))
                             }
                         }
-                        LongPressScrubOverlay(
-                            onBegan: { loc in
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    scrubActive = true
+                        ZStack(alignment: .topLeading) {
+                            ChartScrubRule(
+                                scrub: scrub,
+                                proxy: proxy,
+                                plotFrame: plotFrame,
+                                metersPerUnit: metersPerUnit)
+                            LongPressScrubOverlay(
+                                onBegan: { loc in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        scrubActive = true
+                                    }
+                                    updateScrub(loc)
+                                },
+                                onChanged: updateScrub,
+                                onEnded: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        scrubActive = false
+                                    }
+                                    scrub.distance = nil
                                 }
-                                updateScrub(loc)
-                            },
-                            onChanged: updateScrub,
-                            onEnded: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    scrubActive = false
-                                }
-                                scrubDistance = nil
-                            }
-                        )
+                            )
+                        }
                     }
                 }
 
             toggleBar
 
-            scrubFooter
+            RideScrubFooter(
+                scrub: scrub,
+                active: scrubActive,
+                selected: selected,
+                dataPoints: dataPoints)
         }
-    }
-
-    @ViewBuilder
-    private var scrubFooter: some View {
-        ZStack {
-            // Hint — visible when not actively scrubbing.
-            Text("Tap and hold to scrub")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .opacity(scrubActive ? 0 : 1)
-
-            // Readout — visible while scrubbing with a position.
-            if let scrub = scrubDistance, let pt = closestPoint(to: scrub) {
-                scrubReadout(pt)
-                    .opacity(scrubActive ? 1 : 0)
-            }
-        }
-        .frame(height: 22)
-        .animation(.easeInOut(duration: 0.2), value: scrubActive)
-        .animation(.easeInOut(duration: 0.2), value: scrubDistance == nil)
-    }
-
-    private func closestPoint(to distance: Double) -> ChartDataPoint? {
-        dataPoints.min(by: { abs($0.distance - distance) < abs($1.distance - distance) })
-    }
-
-    @ViewBuilder
-    private func scrubReadout(_ pt: ChartDataPoint) -> some View {
-        let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
-        HStack(spacing: 16) {
-            let distLabel = String(format: "%.1f %@", pt.distance / metersPerUnit, currentUnits.distance.label)
-            Text(distLabel)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-            switch selected {
-            case .elevation:
-                Text(formatElevation(pt.elevation))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(selected.color)
-            case .speed:
-                Text(formatSpeed(pt.speed))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(selected.color)
-            case .heartRate:
-                Text("\(Int(pt.heartRate)) bpm")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(selected.color)
-            case .power:
-                Text("\(Int(pt.power)) W")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(selected.color)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 2)
-        .background(selected.color.opacity(0.1), in: Capsule())
     }
 
     @ViewBuilder
@@ -393,13 +405,6 @@ struct RideChartsView: View {
                     .interpolationMethod(.catmullRom)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
                 }
-            }
-            // Scrub rule line
-            if let scrub = scrubDistance {
-                let scrubInUnits = scrub / metersPerUnit
-                RuleMark(x: .value("Scrub", scrubInUnits))
-                    .foregroundStyle(selected.color.opacity(0.8))
-                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
             }
         }
         .chartXScale(domain: 0...maxDist)
@@ -499,11 +504,76 @@ struct RideChartsView: View {
     }
 }
 
+/// Hint / readout row below the ride charts. Isolated so per-frame scrub
+/// updates re-render only this row.
+private struct RideScrubFooter: View {
+    @ObservedObject var scrub: ChartScrubState
+    let active: Bool
+    let selected: RideChartMetric
+    let dataPoints: [ChartDataPoint]
+
+    var body: some View {
+        ZStack {
+            // Hint — visible when not actively scrubbing.
+            Text("Tap and hold to scrub")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .opacity(active ? 0 : 1)
+
+            // Readout — visible while scrubbing with a position.
+            if let dist = scrub.distance, let pt = closestPoint(to: dist) {
+                scrubReadout(pt)
+                    .opacity(active ? 1 : 0)
+            }
+        }
+        .frame(height: 22)
+        .animation(.easeInOut(duration: 0.2), value: active)
+        .animation(.easeInOut(duration: 0.2), value: scrub.distance == nil)
+    }
+
+    private func closestPoint(to distance: Double) -> ChartDataPoint? {
+        dataPoints.min(by: { abs($0.distance - distance) < abs($1.distance - distance) })
+    }
+
+    @ViewBuilder
+    private func scrubReadout(_ pt: ChartDataPoint) -> some View {
+        let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+        HStack(spacing: 16) {
+            let distLabel = String(format: "%.1f %@", pt.distance / metersPerUnit, currentUnits.distance.label)
+            Text(distLabel)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            switch selected {
+            case .elevation:
+                Text(formatElevation(pt.elevation))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .speed:
+                Text(formatSpeed(pt.speed))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .heartRate:
+                Text("\(Int(pt.heartRate)) bpm")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            case .power:
+                Text("\(Int(pt.power)) W")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(selected.color)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 2)
+        .background(selected.color.opacity(0.1), in: Capsule())
+    }
+}
+
 // MARK: - Route Elevation Chart
 
 struct RouteElevationChartView: View {
     let points: [ProcessedPoint]
-    @Binding var scrubDistance: Double?
+    /// Written from the gesture only — observed by the scrub leaf views.
+    let scrub: ChartScrubState
     @State private var scrubActive = false
 
     var body: some View {
@@ -553,12 +623,6 @@ struct RouteElevationChartView: View {
                     }
             }
 
-            // Scrub rule line
-            if let scrub = scrubDistance {
-                RuleMark(x: .value("Scrub", scrub / metersPerUnit))
-                    .foregroundStyle(Color.green.opacity(0.8))
-                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-            }
         }
         .chartXScale(domain: 0...maxDist)
         .chartXAxis {
@@ -591,66 +655,41 @@ struct RouteElevationChartView: View {
         .frame(height: 140)
         .chartOverlay { proxy in
             GeometryReader { geo in
+                let plotFrame = geo[proxy.plotFrame!]
                 let updateScrub: (CGPoint) -> Void = { loc in
-                    let plotOrigin = geo[proxy.plotFrame!].origin
-                    let x = loc.x - plotOrigin.x
+                    let x = loc.x - plotFrame.origin.x
                     if let distInUnits: Double = proxy.value(atX: x) {
                         let dist = distInUnits * metersPerUnit
                         let maxDistMeters = points.last?.distanceFromStart ?? 0
-                        scrubDistance = max(0, min(dist, maxDistMeters))
+                        scrub.distance = max(0, min(dist, maxDistMeters))
                     }
                 }
-                LongPressScrubOverlay(
-                    onBegan: { loc in
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            scrubActive = true
+                ZStack(alignment: .topLeading) {
+                    ChartScrubRule(
+                        scrub: scrub,
+                        proxy: proxy,
+                        plotFrame: plotFrame,
+                        metersPerUnit: metersPerUnit)
+                    LongPressScrubOverlay(
+                        onBegan: { loc in
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                scrubActive = true
+                            }
+                            updateScrub(loc)
+                        },
+                        onChanged: updateScrub,
+                        onEnded: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                scrubActive = false
+                            }
+                            scrub.distance = nil
                         }
-                        updateScrub(loc)
-                    },
-                    onChanged: updateScrub,
-                    onEnded: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            scrubActive = false
-                        }
-                        scrubDistance = nil
-                    }
-                )
+                    )
+                }
             }
         }
 
-        ZStack {
-            Text("Tap and hold to scrub")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .opacity(scrubActive ? 0 : 1)
-
-            if let scrub = scrubDistance, let elev = elevationAtDistance(scrub) {
-                HStack(spacing: 16) {
-                    Text(String(format: "%.1f %@", scrub / metersPerUnit, currentUnits.distance.label))
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Text(formatElevation(elev))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.green)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(Color.green.opacity(0.1), in: Capsule())
-                .opacity(scrubActive ? 1 : 0)
-            }
-        }
-        .frame(height: 26)
-        .animation(.easeInOut(duration: 0.2), value: scrubActive)
-        .animation(.easeInOut(duration: 0.2), value: scrubDistance == nil)
-    }
-
-    private func elevationAtDistance(_ targetDist: Double) -> Double? {
-        guard !points.isEmpty else { return nil }
-        let sorted = points.filter { $0.elevation != nil }
-        if let exact = sorted.min(by: { abs($0.distanceFromStart - targetDist) < abs($1.distanceFromStart - targetDist) }) {
-            return exact.elevation
-        }
-        return nil
+        RouteScrubFooter(scrub: scrub, active: scrubActive, points: points)
     }
 
     private func elevationValue(_ meters: Double) -> Double {
@@ -670,11 +709,57 @@ struct RouteElevationChartView: View {
     }
 }
 
+/// Hint / readout row below the route elevation chart. Isolated so per-frame
+/// scrub updates re-render only this row.
+private struct RouteScrubFooter: View {
+    @ObservedObject var scrub: ChartScrubState
+    let active: Bool
+    let points: [ProcessedPoint]
+
+    var body: some View {
+        let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
+        ZStack {
+            Text("Tap and hold to scrub")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .opacity(active ? 0 : 1)
+
+            if let dist = scrub.distance, let elev = elevationAtDistance(dist) {
+                HStack(spacing: 16) {
+                    Text(String(format: "%.1f %@", dist / metersPerUnit, currentUnits.distance.label))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(formatElevation(elev))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color.green.opacity(0.1), in: Capsule())
+                .opacity(active ? 1 : 0)
+            }
+        }
+        .frame(height: 26)
+        .animation(.easeInOut(duration: 0.2), value: active)
+        .animation(.easeInOut(duration: 0.2), value: scrub.distance == nil)
+    }
+
+    private func elevationAtDistance(_ targetDist: Double) -> Double? {
+        points
+            .filter { $0.elevation != nil }
+            .min(by: { abs($0.distanceFromStart - targetDist) < abs($1.distanceFromStart - targetDist) })?
+            .elevation
+    }
+}
+
 // MARK: - Data Building
 
 func buildRideChartData(from trackURL: URL, segmentCount: Int = 200) -> (points: [ChartDataPoint], hasHR: Bool, hasPower: Bool) {
     guard let data = try? Data(contentsOf: trackURL) else { return ([], false, false) }
-    let fullPoints = TrackEncoder.decodeV5Full(data)
+    return buildRideChartData(points: TrackEncoder.decodeV5Full(data), segmentCount: segmentCount)
+}
+
+func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 200) -> (points: [ChartDataPoint], hasHR: Bool, hasPower: Bool) {
     guard fullPoints.count >= 2 else { return ([], false, false) }
 
     let chunkSize = max(1, fullPoints.count / segmentCount)
@@ -752,7 +837,7 @@ func buildRideChartData(from trackURL: URL, segmentCount: Int = 200) -> (points:
             .frame(width: 36, height: 4)
             .padding(.top, 8)
 
-        RideChartsView(dataPoints: mockData, hasHeartRate: true, hasPower: true, scrubDistance: .constant(nil))
+        RideChartsView(dataPoints: mockData, hasHeartRate: true, hasPower: true, scrub: ChartScrubState())
 
         HStack(spacing: 6) {
             Circle().fill(Color.primary).frame(width: 6, height: 6)

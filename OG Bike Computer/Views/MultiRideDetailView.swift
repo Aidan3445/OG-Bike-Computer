@@ -24,18 +24,26 @@ struct MultiRideDetailView: View {
     @State private var panelState: PanelState = .collapsed
     @State private var panelPage = 0
     @State private var showShareSheet = false
+    @State private var gpxExportURL: URL?
+    @State private var isExportingGPX = false
+    @State private var hasStravaAuth = false
+    @State private var isUploadingToStrava = false
+    @State private var uploadError: String?
+    @State private var uploadedWebURL: String?
 
     @State private var renders: [RideRender] = []
     @State private var connectors: [Connector] = []
     @State private var combinedChart: [ChartDataPoint] = []
     @State private var chartHasHR = false
     @State private var chartHasPower = false
-    @State private var scrubDistance: Double? = nil
-    @State private var scrubColor: Color = .green
+    /// Held in `@State` (not `@StateObject`) so per-frame scrub updates only
+    /// re-render the chart's scrub leaf views, never this body or the Map.
+    @State private var scrubState = ChartScrubState()
     /// Unmount the Map while the tab is hidden — see RouteDetailView for the
     /// rationale. Avoids the frozen-tab feeling caused by an offscreen
     /// MKMapView still burning CPU/GPU.
     @State private var isOnScreen: Bool = false
+    @State private var didStartLoad = false
     /// Cache key for MapCameraCache. The set of selected rides is the
     /// natural identity here — the same multi-ride selection across opens
     /// should land on the same camera. Order-independent so the user can
@@ -126,21 +134,62 @@ struct MultiRideDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showShareSheet = true
+                Menu {
+                    Button {
+                        exportCombinedGPXForSharing()
+                    } label: {
+                        Label("Export GPX", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(isExportingGPX)
+
+                    if hasStravaAuth {
+                        Button {
+                            uploadMergedToStrava()
+                        } label: {
+                            Label("Upload Merged to Strava", systemImage: "figure.outdoor.cycle")
+                        }
+                        .disabled(isUploadingToStrava)
+                    }
                 } label: {
-                    Image(systemName: "square.and.arrow.up")
+                    if isExportingGPX || isUploadingToStrava {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                    }
                 }
             }
         }
         .sheet(isPresented: $showShareSheet) {
-            if let url = rideStore.exportCombinedGPX(rides: rides) {
+            if let url = gpxExportURL {
                 ShareSheet(activityItems: [url])
             }
         }
+        .alert("Upload Error", isPresented: .init(
+            get: { uploadError != nil },
+            set: { if !$0 { uploadError = nil } }
+        )) {
+            Button("OK") { uploadError = nil }
+        } message: {
+            Text(uploadError ?? "")
+        }
+        .alert("Uploaded to Strava", isPresented: .init(
+            get: { uploadedWebURL != nil },
+            set: { if !$0 { uploadedWebURL = nil } }
+        )) {
+            if let urlString = uploadedWebURL, let url = URL(string: urlString) {
+                Link("View on Strava", destination: url)
+            }
+            Button("OK") { uploadedWebURL = nil }
+        } message: {
+            Text("The selected rides were merged into one activity.")
+        }
         .onAppear {
             isOnScreen = true
-            if renders.isEmpty { buildCache() }
+            hasStravaAuth = KeychainHelper.loadTokens(for: .strava) != nil
+            if !didStartLoad {
+                didStartLoad = true
+                Task { await loadRides() }
+            }
             // Restore the cached camera (incl. zoom) from the shared cache
             // so re-opening the same multi-ride selection picks up where
             // the user left it.
@@ -166,7 +215,6 @@ struct MultiRideDetailView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .frame(height: panelState == .expanded ? 280 : 200)
-                .scrollDisabled(scrubDistance != nil)
 
                 panelPageDots()
             } else {
@@ -360,8 +408,7 @@ struct MultiRideDetailView: View {
                     dataPoints: combinedChart,
                     hasHeartRate: chartHasHR,
                     hasPower: chartHasPower,
-                    scrubDistance: $scrubDistance,
-                    scrubColor: $scrubColor
+                    scrub: scrubState
                 )
             } else {
                 Text("No chart data")
@@ -450,22 +497,26 @@ struct MultiRideDetailView: View {
 
     // MARK: - Cache build
 
-    private func buildCache() {
-        var built: [RideRender] = []
-        var conns: [Connector] = []
-        var chart: [ChartDataPoint] = []
+    /// Background load — each ride's track publishes as soon as it decodes,
+    /// so lines appear progressively instead of blocking the push animation
+    /// on decoding every selected ride.
+    private func loadRides() async {
+        let hadCachedCamera = MapCameraCache.shared.camera(for: cameraCacheKey) != nil
         var distOffset: Double = 0
-        var anyHR = false, anyPower = false
 
         for (idx, ride) in rides.enumerated() {
             let color = Self.segmentColors[idx % Self.segmentColors.count]
             let url = rideStore.trackURL(for: ride)
-            guard let data = try? Data(contentsOf: url) else { continue }
-            let pts = TrackEncoder.decode(data)
-            let locations = TrackEncoder.toLocations(pts)
-            guard locations.count >= 2 else { continue }
 
-            let coords = locations.map(\.coordinate)
+            let loaded = await Task.detached(priority: .userInitiated) { () -> ([CLLocationCoordinate2D], (points: [ChartDataPoint], hasHR: Bool, hasPower: Bool))? in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                let pts = TrackEncoder.decodeV5Full(data)
+                guard pts.count >= 2 else { return nil }
+                let coords = pts.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+                return (coords, buildRideChartData(points: pts))
+            }.value
+            guard let (coords, chart) = loaded else { continue }
+
             let stat = SegmentStat(
                 name: ride.name,
                 distance: ride.distance,
@@ -477,45 +528,77 @@ struct MultiRideDetailView: View {
             )
 
             // Connector from previous render's end to this start
-            if let prev = built.last,
+            if let prev = renders.last,
                let prevEnd = prev.coords.last,
                let thisStart = coords.first {
                 let gap = CLLocation(latitude: prevEnd.latitude, longitude: prevEnd.longitude)
                     .distance(from: CLLocation(latitude: thisStart.latitude, longitude: thisStart.longitude))
                 if gap < Self.closeConnectorMeters {
                     // Extend the previous ride's color directly over to the next start.
-                    conns.append(Connector(from: prevEnd, to: thisStart, color: prev.color, dashed: false))
+                    connectors.append(Connector(from: prevEnd, to: thisStart, color: prev.color, dashed: false))
                 } else {
-                    conns.append(Connector(from: prevEnd, to: thisStart, color: .gray, dashed: true))
+                    connectors.append(Connector(from: prevEnd, to: thisStart, color: .gray, dashed: true))
                 }
             }
 
-            built.append(RideRender(id: ride.id, coords: coords, color: color, stat: stat))
+            renders.append(RideRender(id: ride.id, coords: coords, color: color, stat: stat))
 
             // Combined chart — append with running offset
-            let (segPoints, hasHR, hasPower) = buildRideChartData(from: url)
-            if hasHR { anyHR = true }
-            if hasPower { anyPower = true }
-            for pt in segPoints {
-                chart.append(ChartDataPoint(
+            if chart.hasHR { chartHasHR = true }
+            if chart.hasPower { chartHasPower = true }
+            for pt in chart.points {
+                combinedChart.append(ChartDataPoint(
                     distance: pt.distance + distOffset,
                     elevation: pt.elevation,
                     speed: pt.speed,
                     heartRate: pt.heartRate,
                     power: pt.power))
             }
-            if let last = segPoints.last { distOffset += last.distance }
+            if let last = chart.points.last { distOffset += last.distance }
         }
 
-        renders = built
-        connectors = conns
-        combinedChart = chart
-        chartHasHR = anyHR
-        chartHasPower = anyPower
-
-        // Fit camera to union of all coordinates
-        if let region = fittingRegion(for: built.flatMap(\.coords)) {
+        // Fit camera to the union of all coordinates — unless the user
+        // already has a remembered camera for this selection.
+        if !hadCachedCamera,
+           let region = fittingRegion(for: renders.flatMap(\.coords)) {
             mapPosition = .region(region)
+        }
+    }
+
+    private func exportCombinedGPXForSharing() {
+        guard !isExportingGPX else { return }
+        isExportingGPX = true
+        let store = rideStore
+        let rides = rides
+        Task.detached(priority: .userInitiated) {
+            let url = store.exportCombinedGPX(rides: rides)
+            await MainActor.run {
+                isExportingGPX = false
+                if let url {
+                    gpxExportURL = url
+                    showShareSheet = true
+                }
+            }
+        }
+    }
+
+    private func uploadMergedToStrava() {
+        guard !isUploadingToStrava else { return }
+        isUploadingToStrava = true
+        let rides = rides
+        Task {
+            do {
+                let webURL = try await UploadManager.shared.uploadMergedToStrava(rides)
+                await MainActor.run {
+                    isUploadingToStrava = false
+                    uploadedWebURL = webURL
+                }
+            } catch {
+                await MainActor.run {
+                    isUploadingToStrava = false
+                    uploadError = error.localizedDescription
+                }
+            }
         }
     }
 

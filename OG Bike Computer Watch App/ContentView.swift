@@ -36,11 +36,19 @@ struct ContentView: View {
                     }
                 }
             } else {
-                #if DEBUG
-                RouteList(store: store, rideStore: rideStore, workout: workout, simulator: simulator)
-                #else
-                RouteList(store: store, rideStore: rideStore, workout: workout)
-                #endif
+                // Vertical paging so the Digital Crown switches between Routes and
+                // History. Horizontal page swiping would fight with the List
+                // swipe-to-delete gesture on individual route rows.
+                TabView {
+                    #if DEBUG
+                    RouteList(store: store, rideStore: rideStore, workout: workout, simulator: simulator)
+                    #else
+                    RouteList(store: store, rideStore: rideStore, workout: workout)
+                    #endif
+
+                    WatchRideHistoryView(rideStore: rideStore, connectivity: connectivity)
+                }
+                .tabViewStyle(.verticalPage)
             }
         }
         .onAppear {

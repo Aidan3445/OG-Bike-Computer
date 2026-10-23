@@ -16,14 +16,48 @@ struct LiveActivityCustomizationView: View {
     }
 
     /// All metric types eligible for Live Activity display.
-    /// Excludes navigation-only types that are shown in the turn bar instead.
-    private var availableMetrics: [MetricType] {
-        MetricType.allCases.filter { type in
-            switch type {
-            case .nextTurnDistance, .nextTurnDirection, .heading, .distanceRemaining:
-                return false  // shown in navigation bar, not stat slots
-            default:
-                return true
+    private var availableMetrics: [MetricType] { MetricType.liveActivityStats }
+
+    private var phoneAlerts: PhoneAlertPreferences {
+        userSettings.settings.phoneAlerts
+    }
+
+    private var usesDistanceRemaining: Bool {
+        phoneAlerts.liveActivitySlots.contains { $0.metricType == .distanceRemaining }
+    }
+
+    private var automaticFallback: MetricType {
+        LiveActivitySlot.automaticRemainingFallback(for: phoneAlerts.liveActivitySlots)
+    }
+
+    /// Metrics selectable as the no-route stand-in for REMAINING.
+    private var fallbackCandidates: [MetricType] {
+        MetricType.liveActivityStats.filter { !$0.requiresRoute }
+    }
+
+    /// One slot row: icon + metric picker, with a fallback note when the
+    /// selected metric only applies to routed rides.
+    private func slotRow(_ index: Int) -> some View {
+        let slotBinding = slots[index]
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Image(systemName: slotBinding.metricType.wrappedValue.icon)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                Picker("", selection: slotBinding.metricType) {
+                    ForEach(availableMetrics) { metric in
+                        Text(metric.label).tag(metric)
+                    }
+                }
+            }
+            if slotBinding.metricType.wrappedValue == .distanceRemaining {
+                Label(
+                    "Shows \(phoneAlerts.resolvedRemainingFallback.label) on rides without a route",
+                    systemImage: "arrow.uturn.down"
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 32)
             }
         }
     }
@@ -42,35 +76,18 @@ struct LiveActivityCustomizationView: View {
 
             Section {
                 ForEach(0..<3, id: \.self) { index in
-                    let slotBinding = slots[index]
-                    HStack {
-                        Image(systemName: slotBinding.metricType.wrappedValue.icon)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 24)
-                        Picker("", selection: slotBinding.metricType) {
-                            ForEach(availableMetrics) { metric in
-                                Text(metric.label).tag(metric)
-                            }
-                        }
-                    }
+                    slotRow(index)
                 }
+                Toggle("Show in Dynamic Island", isOn: $userSettings.settings.phoneAlerts.showStatsInDynamicIsland)
             } header: {
                 Text("Top Row")
+            } footer: {
+                Text("On devices with a Dynamic Island, the top row also appears in the expanded island view. Takes effect at the next ride.")
             }
-            
+
             Section {
                 ForEach(3..<6, id: \.self) { index in
-                    let slotBinding = slots[index]
-                    HStack {
-                        Image(systemName: slotBinding.metricType.wrappedValue.icon)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 24)
-                        Picker("", selection: slotBinding.metricType) {
-                            ForEach(availableMetrics) { metric in
-                                Text(metric.label).tag(metric)
-                            }
-                        }
-                    }
+                    slotRow(index)
                 }
             } header: {
                 Text("Bottom Row")
@@ -78,15 +95,35 @@ struct LiveActivityCustomizationView: View {
                 Text("Choose which metric appears in each row (from left to right).")
             }
 
-            if userSettings.settings.phoneAlerts.liveActivitySlots != LiveActivitySlot.defaultSlots {
+            if usesDistanceRemaining {
+                Section {
+                    Picker("Fallback Stat", selection: $userSettings.settings.phoneAlerts.distanceRemainingFallback) {
+                        Text("Automatic — \(automaticFallback.label)").tag(MetricType?.none)
+                        ForEach(fallbackCandidates) { metric in
+                            Text(metric.label).tag(MetricType?.some(metric))
+                        }
+                    }
+                } header: {
+                    Text("No-Route Fallback")
+                } footer: {
+                    Text("Remaining distance is only available when following a route. On rides without a route, the fallback stat is shown in its place. Automatic uses the first stat that isn't already in the grid.")
+                }
+            }
+
+            if phoneAlerts.liveActivitySlots != LiveActivitySlot.defaultSlots
+                || phoneAlerts.distanceRemainingFallback != nil
+                || !phoneAlerts.showStatsInDynamicIsland {
                 Section {
                     Button("Reset to Defaults", role: .destructive) {
                         userSettings.settings.phoneAlerts.liveActivitySlots = LiveActivitySlot.defaultSlots
+                        userSettings.settings.phoneAlerts.distanceRemainingFallback = nil
+                        userSettings.settings.phoneAlerts.showStatsInDynamicIsland = true
                     }
                 }
             }
         }
         .settingsPageTitle("Live Activity Stats", profile: userSettings.activeProfileName)
+        .animation(.default, value: usesDistanceRemaining)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

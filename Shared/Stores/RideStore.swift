@@ -147,6 +147,112 @@ class RideStore: ObservableObject {
         }
     }
 
+    /// Bundles many rides into a single .zip containing one GPX per ride,
+    /// suitable for AirDropping a batch. Returns the zip URL in the temp
+    /// directory, or `nil` if no rides could be encoded.
+    ///
+    /// Synchronous and disk-bound — call off the main thread for large batches.
+    func exportZipGPX(rides: [RideSummary]) -> URL? {
+        guard !rides.isEmpty else { return nil }
+
+        let fm = FileManager.default
+        let stamp = Int(Date().timeIntervalSince1970)
+        let folderName = "OG_Bike_Rides_\(stamp)"
+        let stagingDir = fm.temporaryDirectory.appendingPathComponent(folderName, isDirectory: true)
+
+        try? fm.removeItem(at: stagingDir)
+        do {
+            try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        } catch {
+            logger.log("[RideStore] zip staging dir error: \(error.localizedDescription)")
+            return nil
+        }
+
+        var usedNames: Set<String> = []
+        var wrote = 0
+        let dateFmt = DateFormatter()
+        dateFmt.dateFormat = "yyyyMMdd"
+
+        for ride in rides {
+            let trackURL = directory.appendingPathComponent(ride.trackFilename)
+            guard let data = try? Data(contentsOf: trackURL) else { continue }
+            let v5Points = TrackEncoder.decodeV5Full(data)
+            guard !v5Points.isEmpty else { continue }
+
+            let locations = v5Points.map { pt in
+                CLLocation(
+                    coordinate: CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lon),
+                    altitude: pt.altitude,
+                    horizontalAccuracy: 0,
+                    verticalAccuracy: 0,
+                    timestamp: Date(timeIntervalSince1970: pt.timestamp))
+            }
+            let extras = v5Points.map { pt in
+                GPXExporter.PointExtras(
+                    power: pt.power > 0 ? pt.power : nil,
+                    heartRate: pt.heartRate > 0 ? pt.heartRate : nil)
+            }
+            let gpx = GPXExporter.export(
+                name: ride.name,
+                locations: locations,
+                activityType: ride.activityType.rawValue,
+                pointExtras: extras)
+            guard let gpxData = gpx.data(using: .utf8) else { continue }
+
+            let sanitized = ride.name
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: ":", with: "-")
+                .replacingOccurrences(of: " ", with: "_")
+            let datePrefix = dateFmt.string(from: ride.date)
+            var fileName = "\(datePrefix)_\(sanitized).gpx"
+            var dedupe = 2
+            while usedNames.contains(fileName) {
+                fileName = "\(datePrefix)_\(sanitized)_\(dedupe).gpx"
+                dedupe += 1
+            }
+            usedNames.insert(fileName)
+
+            do {
+                try gpxData.write(to: stagingDir.appendingPathComponent(fileName))
+                wrote += 1
+            } catch {
+                logger.log("[RideStore] zip write error for \(ride.name): \(error.localizedDescription)")
+            }
+        }
+
+        guard wrote > 0 else {
+            try? fm.removeItem(at: stagingDir)
+            return nil
+        }
+
+        // NSFileCoordinator with .forUploading zips the directory into a
+        // temp file that's only valid inside the closure — copy it to a
+        // stable temp location with our preferred filename before returning.
+        let finalURL = fm.temporaryDirectory.appendingPathComponent("\(folderName).zip")
+        try? fm.removeItem(at: finalURL)
+
+        let coordinator = NSFileCoordinator()
+        var coordError: NSError?
+        var didCopy = false
+        coordinator.coordinate(readingItemAt: stagingDir, options: [.forUploading], error: &coordError) { tempZipURL in
+            do {
+                try fm.copyItem(at: tempZipURL, to: finalURL)
+                didCopy = true
+            } catch {
+                logger.log("[RideStore] zip copy error: \(error.localizedDescription)")
+            }
+        }
+        try? fm.removeItem(at: stagingDir)
+
+        if let err = coordError {
+            logger.log("[RideStore] zip coordinator error: \(err)")
+            return nil
+        }
+        guard didCopy else { return nil }
+        logger.log("[RideStore] exported zip with \(wrote) rides → \(finalURL.lastPathComponent)")
+        return finalURL
+    }
+
     /// Combined GPX of multiple rides — one `<trkseg>` per ride, preserving
     /// each ride's real timestamps so the gaps between rides are visible to
     /// downstream tools.

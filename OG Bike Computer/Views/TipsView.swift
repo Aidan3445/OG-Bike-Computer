@@ -109,6 +109,22 @@ struct TipsView: View {
             }
 
             NavigationLink {
+                RideHistoryTipView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Watch Ride History")
+                        Text("Recover untransferred or discarded rides within their grace period.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(.teal)
+                }
+            }
+
+            NavigationLink {
                 SiriShortcutsTipView()
             } label: {
                 Label {

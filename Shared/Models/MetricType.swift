@@ -46,6 +46,19 @@ enum MetricType: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Metrics eligible for the Live Activity stats grid, in picker order.
+    /// Excludes turn-by-turn types that are shown in the navigation bar instead.
+    static var liveActivityStats: [MetricType] {
+        allCases.filter { type in
+            switch type {
+            case .nextTurnDistance, .nextTurnDirection, .heading:
+                return false
+            default:
+                return true
+            }
+        }
+    }
+
     var label: String {
         switch self {
         case .speed: return "SPEED"

@@ -23,11 +23,33 @@ class LiveActivityManager {
     /// activity starts.
     private var terminalStateLatched = false
 
+    /// Coalescing buffer for telemetry-driven updates. ActivityKit budgets
+    /// local updates — firing an unserialized `activity.update` Task for
+    /// every 1–3s telemetry tick both races out-of-order and burns through
+    /// that budget until the system throttles the activity into permanent
+    /// staleness on long rides. Only one update is in flight at a time;
+    /// ticks that land mid-flight overwrite `pendingState` and the newest
+    /// one is pushed when the in-flight update returns.
+    private var pendingState: RideActivityAttributes.ContentState?
+    private var lastPushedState: RideActivityAttributes.ContentState?
+    private var isPushing = false
+
+    /// How long a pushed state stays fresh before the widget switches to its
+    /// "no signal" treatment. Long enough to ride out watch↔phone hiccups,
+    /// short enough that a genuinely dead link is visible to the rider.
+    private static let staleInterval: TimeInterval = 60
+
     private init() {}
 
     // MARK: - Lifecycle
 
-    func startActivity(routeName: String?, isImperial: Bool, statSlots: [String] = LiveActivitySlot.defaultSlots.map(\.metricType.rawValue)) {
+    func startActivity(
+        routeName: String?,
+        isImperial: Bool,
+        statSlots: [String] = LiveActivitySlot.defaultSlots.map(\.metricType.rawValue),
+        showStatsInIsland: Bool = true,
+        distanceRemainingFallback: String = MetricType.distance.rawValue
+    ) {
         let authInfo = ActivityAuthorizationInfo()
         print("[LiveActivity] Authorization check: areActivitiesEnabled=\(authInfo.areActivitiesEnabled), frequentPushesEnabled=\(authInfo.frequentPushesEnabled)")
         guard authInfo.areActivitiesEnabled else {
@@ -38,23 +60,22 @@ class LiveActivityManager {
         // Fresh activity — clear the terminal latch from any prior ride so
         // telemetry can flow again.
         terminalStateLatched = false
+        pendingState = nil
+        lastPushedState = nil
 
-        // Check for existing activities — adopt one if found, end extras
-        let existing = Activity<RideActivityAttributes>.activities
-        if !existing.isEmpty {
-            print("[LiveActivity] Found \(existing.count) existing activity(ies) — adopting first, ending extras")
-            currentActivity = existing.first
-            for activity in existing.dropFirst() {
-                Task { await activity.end(nil, dismissalPolicy: .immediate) }
-            }
-            return
-        }
+        // Leftovers from a previous ride (terminal banner still on screen, or
+        // an orphan from a crash) carry stale attributes — replace, don't
+        // adopt. They're ended after the new request succeeds so the rider
+        // never briefly has zero surfaces.
+        let leftovers = Activity<RideActivityAttributes>.activities
 
         let attributes = RideActivityAttributes(
             routeName: routeName,
             startTime: Date(),
             isImperial: isImperial,
-            statSlots: statSlots
+            statSlots: statSlots,
+            showStatsInIsland: showStatsInIsland,
+            distanceRemainingFallback: distanceRemainingFallback
         )
 
         let initialState = RideActivityAttributes.ContentState(
@@ -90,7 +111,7 @@ class LiveActivityManager {
             rideStatus: .active
         )
 
-        let content = ActivityContent(state: initialState, staleDate: nil)
+        let content = ActivityContent(state: initialState, staleDate: Date().addingTimeInterval(Self.staleInterval))
 
         do {
             currentActivity = try Activity.request(
@@ -98,9 +119,27 @@ class LiveActivityManager {
                 content: content,
                 pushType: nil
             )
-            print("[LiveActivity] Started: \(currentActivity?.id ?? "nil")")
+            print("[LiveActivity] Started: \(currentActivity?.id ?? "nil") — ending \(leftovers.count) leftover(s)")
+            for activity in leftovers {
+                Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            }
         } catch {
+            // Requesting can fail when HealthKit relaunches us in the
+            // background on a mirroring reconnect. Fall back to adopting a
+            // leftover so the rider keeps a live surface, and reset its state
+            // to active so a stale terminal banner doesn't linger until the
+            // first telemetry tick.
             print("[LiveActivity] Failed to start: \(error)")
+            guard let adopted = leftovers.first else { return }
+            print("[LiveActivity] Adopting leftover activity \(adopted.id) instead")
+            currentActivity = adopted
+            for activity in leftovers.dropFirst() {
+                Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            }
+            let reset = clearedState(from: adopted.content.state, override: .active)
+            Task {
+                await adopted.update(ActivityContent(state: reset, staleDate: Date().addingTimeInterval(Self.staleInterval)))
+            }
         }
     }
 
@@ -147,15 +186,28 @@ class LiveActivityManager {
             rideStatus: .active
         )
 
-        let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(10))
+        pendingState = state
+        pushPendingUpdate()
+    }
 
+    /// Drain the coalescing buffer: push the newest pending state if no
+    /// update is already in flight, then re-check when it returns.
+    private func pushPendingUpdate() {
+        guard !isPushing, let state = pendingState else { return }
+        pendingState = nil
+        guard state != lastPushedState, let activity = currentActivity else { return }
+        isPushing = true
+        lastPushedState = state
+        let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleInterval))
         Task {
             await activity.update(content)
+            isPushing = false
+            pushPendingUpdate()
         }
     }
 
-    /// How long the live activity should remain visible after the watch ends
-    /// the underlying workout, so the rider has time to see the final state.
+    /// How long a terminal banner stays visible after the app is foregrounded
+    /// with no ride running, before `cleanupLeftoverActivities` dismisses it.
     static let postEndDismissalDelay: TimeInterval = 60
     /// Time the caller should wait after stamping a terminal status before
     /// tearing the workout session down. The rider is almost always paused
@@ -190,21 +242,26 @@ class LiveActivityManager {
         await applyTerminalStatus(.discarded)
     }
 
-    func endActivity() {
-        // End ALL activities of this type — catches orphans from crashes or
-        // double-starts. Stamp a terminal status first so any lingering UI
-        // shows the finish/hold message instead of stale pause/resume
-        // controls, then schedule auto-dismissal. If `markHeld()` already
-        // stamped the activity, preserve that — the rider intends to resume.
+    /// Stamp a terminal banner on every running activity when the workout
+    /// tears down — WITHOUT ending them. The activity outlives the workout
+    /// session: calling `end()` here raced app suspension (the update/end
+    /// Tasks often never ran once the HK session died), so the final state
+    /// frequently never displayed. Leftovers are cleared when the next ride
+    /// starts (`startActivity` replaces them), when the app is next
+    /// foregrounded with no ride running (`cleanupLeftoverActivities`), or
+    /// by the rider swiping the banner away.
+    func finalizeAfterWorkoutEnd() {
         let allActivities = Activity<RideActivityAttributes>.activities
+        currentActivity = nil
+        pendingState = nil
         guard !allActivities.isEmpty else {
-            print("[LiveActivity] No activities to end")
-            currentActivity = nil
+            print("[LiveActivity] No activities to finalize")
             terminalStateLatched = false
             return
         }
-        print("[LiveActivity] Ending \(allActivities.count) activity(ies)")
-        let dismissAt = Date().addingTimeInterval(Self.postEndDismissalDelay)
+        // Latch so any straggler telemetry can't repaint the banner active.
+        terminalStateLatched = true
+        print("[LiveActivity] Finalizing \(allActivities.count) activity(ies)")
         for activity in allActivities {
             // Preserve any non-active terminal stamp that markHeld /
             // markDiscarded / markCompleted already applied. Only default to
@@ -217,13 +274,26 @@ class LiveActivityManager {
             let finalState = clearedState(from: activity.content.state, override: override)
             Task {
                 await activity.update(ActivityContent(state: finalState, staleDate: nil))
-                await activity.end(
-                    ActivityContent(state: finalState, staleDate: nil),
-                    dismissalPolicy: .after(dismissAt)
-                )
             }
         }
-        currentActivity = nil
+    }
+
+    /// Dismiss terminal banners the rider has implicitly seen. Called when
+    /// the app is foregrounded with no ride running. Only completed /
+    /// discarded banners are ended — held rides keep their banner up as the
+    /// resume affordance, and anything still stamped `.active` is left alone
+    /// in case a mirroring reconnect is about to adopt it.
+    func cleanupLeftoverActivities() {
+        let dismissAt = Date().addingTimeInterval(Self.postEndDismissalDelay)
+        for activity in Activity<RideActivityAttributes>.activities {
+            let status = activity.content.state.status
+            guard status == .completed || status == .discarded else { continue }
+            print("[LiveActivity] Cleaning up leftover \(status.rawValue) activity \(activity.id)")
+            let content = ActivityContent(state: activity.content.state, staleDate: nil)
+            Task {
+                await activity.end(content, dismissalPolicy: .after(dismissAt))
+            }
+        }
     }
 
     // MARK: - Helpers
@@ -238,7 +308,10 @@ class LiveActivityManager {
         // Latch BEFORE awaiting so any telemetry tick racing in during the
         // ActivityKit round-trip sees the latch and bails. If we set it
         // after, the in-flight update would lose to the next telemetry write.
+        // Drop any buffered tick too — the coalescer would otherwise push it
+        // after the terminal update returns.
         terminalStateLatched = true
+        pendingState = nil
         await withTaskGroup(of: Void.self) { group in
             for activity in allActivities {
                 let finalState = clearedState(from: activity.content.state, override: status)

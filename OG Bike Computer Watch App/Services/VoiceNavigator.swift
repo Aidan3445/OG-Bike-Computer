@@ -137,14 +137,30 @@ class VoiceNavigator: NSObject, ObservableObject {
     }
 
     func configureAudioSession() {
-        let session = AVAudioSession.sharedInstance()
+        applySessionCategory(allowBluetooth: watchBluetoothAllowed)
+        // Must come AFTER reset()
+        isStopped = false
+    }
+
+    /// Tracks whether the current category includes the Bluetooth output
+    /// options, so `speakLocally` only pays a `setCategory` when the desired
+    /// routing actually changes.
+    private var sessionAllowsBluetooth = false
+
+    private func applySessionCategory(allowBluetooth: Bool) {
+        // Bluetooth options are for headphones paired to the *watch*. When a
+        // fallback fires while the rider's headphones are on the phone,
+        // activating with these options can auto-switch (steal) them from the
+        // phone, which hard-pauses phone audio instead of ducking it.
+        let options: AVAudioSession.CategoryOptions = allowBluetooth
+            ? [.duckOthers, .allowBluetoothHFP, .allowBluetoothA2DP]
+            : [.duckOthers]
         do {
-            try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .allowBluetoothHFP, .allowBluetoothA2DP])
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .voicePrompt, options: options)
+            sessionAllowsBluetooth = allowBluetooth
         } catch {
             print("VoiceNavigator audio session config error: \(error)")
         }
-        // Must come AFTER reset()
-        isStopped = false
     }
 
     func update(nav: NavigationTracker, speed: Double, heading: Double = 0, isActivelyMoving: Bool = true) {
@@ -1060,8 +1076,27 @@ class VoiceNavigator: NSObject, ObservableObject {
     private func resolveAudioRoute() -> AudioRoute {
         let override = preferences.audioOutput.source
         if override == .watch { return .watchLocal }
-        if override == .auto, isWatchUsingExternalAudioOutput() { return .watchLocal }
+        // Auto only keeps audio on the watch when the Bluetooth route is
+        // safely claimable (see watchBluetoothAllowed) — a BT device merely
+        // *visible* to the watch is usually the phone's headphones.
+        if override == .auto, isWatchUsingExternalAudioOutput(), watchBluetoothAllowed { return .watchLocal }
         return .phoneMirror
+    }
+
+    /// Central policy for whether watch-local speech may claim a Bluetooth
+    /// output. iCloud auto-switching headphones (AirPods) can show up in the
+    /// watch's route while they're actively serving the phone's music —
+    /// activating our session against them steals the route and hard-pauses
+    /// the music instead of ducking it. Only claim BT when it's clearly the
+    /// rider's watch-audio device:
+    ///   • output pinned to .watch — explicit intent, their watch headphones;
+    ///   • phone path dead for this ride — no phone in the picture to rob;
+    ///   • the watch itself is already playing audio — the BT route is in
+    ///     use by *this* device, so ducking is local and safe.
+    private var watchBluetoothAllowed: Bool {
+        if preferences.audioOutput.source == .watch { return true }
+        if !VoiceAlertTransport.shared.isPhonePathAvailable { return true }
+        return AVAudioSession.sharedInstance().isOtherAudioPlaying
     }
 
     /// True when the watch's current audio route includes BT or wired
@@ -1093,6 +1128,13 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     private func speakLocally(_ text: String) {
         guard !isStopped else { return }
+
+        // Re-evaluate per utterance — every local speak, fallback or
+        // primary, goes through the same watchBluetoothAllowed policy.
+        let allowBluetooth = watchBluetoothAllowed
+        if sessionAllowsBluetooth != allowBluetooth {
+            applySessionCategory(allowBluetooth: allowBluetooth)
+        }
 
         do {
             try AVAudioSession.sharedInstance().setActive(true)

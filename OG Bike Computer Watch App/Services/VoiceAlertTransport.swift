@@ -15,9 +15,13 @@
 //    3. Timer fires first → speak locally on the watch.
 //
 //  For .soon alerts (split readouts, halfway, queued non-urgent):
-//    Use transferUserInfo. Guaranteed eventual delivery, no fallback —
-//    these are best-effort phone delivery; if phone is unreachable they
-//    just don't get spoken on the watch.
+//    Reachable → sendMessage, and the completion is held until the phone
+//    reports didFinish for the line. That paces multi-line readouts one
+//    line at a time so the watch p-queue can interleave higher-priority
+//    alerts between lines, and lines can't expire sitting in the
+//    transferUserInfo queue. Unreachable → transferUserInfo (guaranteed
+//    eventual, receiver enforces expiry, queue advances immediately).
+//    Never spoken on the watch.
 //
 //  Per-ride force-disable:
 //    If isCompanionAppInstalled is false at ride start, or
@@ -37,6 +41,11 @@ final class VoiceAlertTransport {
     /// companion app isn't installed, mirroring failed at start, or other
     /// terminal conditions. Resets on each `start()`.
     private var phonePathDisabled = false
+
+    /// True while the phone path is live for this ride. VoiceNavigator uses
+    /// this to decide whether Bluetooth outputs visible to the watch can be
+    /// claimed for local speech.
+    var isPhonePathAvailable: Bool { !phonePathDisabled }
 
     /// Final outcome reported back to the caller exactly once per
     /// `deliver(_:completion:)` call.
@@ -60,6 +69,18 @@ final class VoiceAlertTransport {
     }
     private var inFlight: [UUID: InFlight] = [:]
 
+    /// `.soon` alerts sent over the live sendMessage path, waiting for the
+    /// phone's didFinish signal before the completion releases the watch
+    /// queue. Separate from `inFlight` because these must resolve on
+    /// *finish*, not the didStart ack (which also arrives for these ids).
+    private struct AwaitingFinish {
+        let payload: AlertPayload
+        let timeoutTimer: DispatchWorkItem
+        let completion: (Outcome) -> Void
+        let sentAt: Date
+    }
+    private var awaitingFinish: [UUID: AwaitingFinish] = [:]
+
     /// Fallback deadline for .immediate alerts.
     ///
     /// 1.5s was too tight: phone's `didStart` typically fires at ~880ms, but
@@ -70,6 +91,14 @@ final class VoiceAlertTransport {
     /// 2.5s gives the ack comfortable headroom while only penalizing the
     /// rare genuine-phone-failure case by an extra second.
     private static let immediateFallbackSeconds: TimeInterval = 2.5
+
+    /// Once the phone confirms *receipt* (sendMessage replyHandler), the
+    /// deadline restarts with this window. Receipt means the phone is alive
+    /// and its own 1.5s didStart safety timeout is armed — the remaining
+    /// unknowns are TTS spin-up (slow on Bluetooth routes) plus the ack trip
+    /// back over the HK mirror channel, which together can blow past the
+    /// original 2.5s and false-fire a phone+watch double-speak.
+    private static let postReceiptFallbackSeconds: TimeInterval = 3.0
 
     private init() {}
 
@@ -93,7 +122,14 @@ final class VoiceAlertTransport {
         // Wire the ack callback. Singleton listener; assignment replaces
         // any previous one (which would have been from a prior ride).
         ConnectivityManager.shared.onAlertAckReceived = { [weak self] id in
-            self?.handleAck(id: id)
+            DispatchQueue.main.async {
+                self?.handleAck(id: id)
+            }
+        }
+        ConnectivityManager.shared.onAlertFinishReceived = { [weak self] id in
+            DispatchQueue.main.async {
+                self?.handleFinish(id: id)
+            }
         }
     }
 
@@ -103,6 +139,7 @@ final class VoiceAlertTransport {
     func stop() {
         cancelAllInFlight(reason: "ride ending")
         ConnectivityManager.shared.onAlertAckReceived = nil
+        ConnectivityManager.shared.onAlertFinishReceived = nil
     }
 
     /// Force the phone path off for the remainder of this ride. Called by
@@ -171,17 +208,40 @@ final class VoiceAlertTransport {
         // to cancel the fallback. This is the critical anti-double-speak
         // detail from plan §3.5.
         ConnectivityManager.shared.sendImmediateAlert(payload) { [weak self] success, error in
-            guard let self else { return }
-            if !success {
-                // Send failed synchronously — no point waiting for an ack
-                // that won't come. Fire the fallback now.
-                let reason = error.map { "\($0)" } ?? "no reachability"
-                logger.warning("[Transport] id=\(logID) send failed: \(reason) — firing fallback now")
-                self.handleFallback(id: payload.id, reason: "sendFailed:\(reason)")
-            } else {
-                logger.info("[Transport] id=\(logID) sendMessage replyHandler returned (received). Waiting for didStart ack…")
+            // Hop to main: fallback timers fire there, and inFlight must not
+            // be mutated concurrently from WCSession's callback queue.
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if !success {
+                    // Send failed synchronously — no point waiting for an ack
+                    // that won't come. Fire the fallback now.
+                    let reason = error.map { "\($0)" } ?? "no reachability"
+                    logger.warning("[Transport] id=\(logID) send failed: \(reason) — firing fallback now")
+                    self.handleFallback(id: payload.id, reason: "sendFailed:\(reason)")
+                } else {
+                    logger.info("[Transport] id=\(logID) sendMessage replyHandler returned (received). Extending fallback, waiting for didStart ack…")
+                    self.extendFallback(id: payload.id)
+                }
             }
         }
+    }
+
+    /// Phone confirmed receipt — replace the in-flight fallback timer with a
+    /// fresh `postReceiptFallbackSeconds` window. No-op if the alert already
+    /// resolved (acked or fallback-fired).
+    private func extendFallback(id: UUID) {
+        guard let context = inFlight[id] else { return }
+        context.fallbackTimer.cancel()
+        let timer = DispatchWorkItem { [weak self] in
+            self?.handleFallback(id: id, reason: "timeoutAfterReceipt")
+        }
+        inFlight[id] = InFlight(
+            payload: context.payload,
+            fallbackTimer: timer,
+            completion: context.completion,
+            sentAt: context.sentAt
+        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.postReceiptFallbackSeconds, execute: timer)
     }
 
     // MARK: Soon path
@@ -195,16 +255,66 @@ final class VoiceAlertTransport {
             return
         }
 
-        // transferUserInfo doesn't require reachability — it queues and
-        // delivers when possible. The receiver enforces expiry. The watch
-        // doesn't wait for ack on these because they're not time-sensitive.
-        ConnectivityManager.shared.sendQueuedAlert(payload)
-        logger.notice("[Transport] id=\(logID) (.soon) queued via transferUserInfo")
-        recordOutcome(payload, outcome: "queuedForPhone", latency: 0)
-        // From the caller's perspective this is "phone is handling it" —
-        // return a synthetic phoneSpoke so the watch's local queue advances
-        // and we don't double-speak on the watch.
-        completion(.phoneSpoke(latency: 0))
+        // Reachable phone: send over the live channel and hold the watch
+        // queue until the phone reports the line *finished* speaking. This
+        // keeps the watch p-queue as the single arbiter for multi-line
+        // readouts — a higher-priority alert enqueued mid-readout gets the
+        // next dequeue slot between lines instead of piling up behind the
+        // whole batch in the phone's synthesizer queue. It also means each
+        // line ships when it's about to be spoken, so transferUserInfo's
+        // wake-up latency can't expire the head of the batch.
+        let snapshot = WCSessionSnapshot.now()
+        guard snapshot.isReachable else {
+            // Unreachable — transferUserInfo queues and delivers when
+            // possible, receiver enforces expiry, and the watch advances
+            // immediately (best-effort, not time-sensitive).
+            ConnectivityManager.shared.sendQueuedAlert(payload)
+            logger.notice("[Transport] id=\(logID) (.soon) queued via transferUserInfo (unreachable)")
+            recordOutcome(payload, outcome: "queuedForPhone", latency: 0)
+            completion(.phoneSpoke(latency: 0))
+            return
+        }
+
+        // Pacing timeout: estimated speech time plus transport headroom. If
+        // the finish signal is lost, advance the queue anyway — a stat line
+        // is never re-spoken locally, and stalling the readout is worse
+        // than slightly early pacing.
+        let timer = DispatchWorkItem { [weak self] in
+            self?.handleFinishTimeout(id: payload.id)
+        }
+        awaitingFinish[payload.id] = AwaitingFinish(
+            payload: payload,
+            timeoutTimer: timer,
+            completion: completion,
+            sentAt: Date()
+        )
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.estimatedSpeechSeconds(payload.text),
+            execute: timer
+        )
+
+        ConnectivityManager.shared.sendImmediateAlert(payload) { [weak self] success, error in
+            DispatchQueue.main.async {
+                guard let self, !success else { return }
+                // Live send failed — requeue on the guaranteed-eventual path
+                // and release the watch queue now (old .soon behavior).
+                let reason = error.map { "\($0)" } ?? "no reachability"
+                logger.warning("[Transport] id=\(logID) (.soon) sendMessage failed: \(reason) — requeueing via transferUserInfo")
+                guard let context = self.awaitingFinish.removeValue(forKey: payload.id) else { return }
+                context.timeoutTimer.cancel()
+                ConnectivityManager.shared.sendQueuedAlert(payload)
+                self.recordOutcome(payload, outcome: "queuedForPhone-sendFailed", latency: 0)
+                context.completion(.phoneSpoke(latency: 0))
+            }
+        }
+        logger.notice("[Transport] id=\(logID) (.soon) sent live — holding queue for didFinish")
+    }
+
+    /// Rough duration the phone will need to speak `text`, padded for the
+    /// send + finish-signal roundtrips. Only used as the give-up deadline
+    /// when the real didFinish signal goes missing.
+    private static func estimatedSpeechSeconds(_ text: String) -> TimeInterval {
+        min(15, 4.0 + Double(text.count) * 0.1)
     }
 
     // MARK: Ack / fallback handling
@@ -235,14 +345,41 @@ final class VoiceAlertTransport {
         context.completion(.localFallback(text: context.payload.text, reason: reason))
     }
 
+    /// Phone finished speaking a `.soon` line — release the watch queue so
+    /// the next alert (possibly a higher-priority one) dequeues.
+    private func handleFinish(id: UUID) {
+        guard let context = awaitingFinish.removeValue(forKey: id) else {
+            // Timeout already advanced the queue, or a finish for an
+            // .immediate alert (those don't pace on finish).
+            return
+        }
+        context.timeoutTimer.cancel()
+        let latency = Date().timeIntervalSince(context.sentAt)
+        logger.notice("[Transport] FINISH id=\(id.uuidString.prefix(8)) — line done (\(String(format: "%.0f", latency * 1000))ms)")
+        recordOutcome(context.payload, outcome: "phoneSpokeFinished", latency: latency)
+        context.completion(.phoneSpoke(latency: latency))
+    }
+
+    private func handleFinishTimeout(id: UUID) {
+        guard let context = awaitingFinish.removeValue(forKey: id) else { return }
+        let latency = Date().timeIntervalSince(context.sentAt)
+        logger.warning("[Transport] FINISH TIMEOUT id=\(id.uuidString.prefix(8)) after \(String(format: "%.0f", latency * 1000))ms — advancing queue")
+        recordOutcome(context.payload, outcome: "phoneSpoke-finishTimeout", latency: latency)
+        context.completion(.phoneSpoke(latency: latency))
+    }
+
     private func cancelAllInFlight(reason: String) {
         for (_, context) in inFlight {
             context.fallbackTimer.cancel()
         }
-        if !inFlight.isEmpty {
-            logger.notice("[Transport] cancelled \(self.inFlight.count) in-flight (\(reason))")
+        for (_, context) in awaitingFinish {
+            context.timeoutTimer.cancel()
+        }
+        if !inFlight.isEmpty || !awaitingFinish.isEmpty {
+            logger.notice("[Transport] cancelled \(self.inFlight.count) in-flight + \(self.awaitingFinish.count) awaiting-finish (\(reason))")
         }
         inFlight.removeAll()
+        awaitingFinish.removeAll()
     }
 
     // MARK: Telemetry

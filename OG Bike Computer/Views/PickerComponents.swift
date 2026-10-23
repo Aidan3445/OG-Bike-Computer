@@ -344,3 +344,32 @@ struct PauseSpeedPicker: View {
         }
     }
 }
+
+// MARK: - Auto-Pause Resume Probe Interval Picker
+
+struct ResumeProbeIntervalPicker: View {
+    @Binding var seconds: TimeInterval
+
+    private let options: [TimeInterval] = [5, 10, 15, 20, 30, 45, 60, 75, 90]
+
+    var body: some View {
+        let binding = Binding<Int>(
+            get: {
+                var best = 0
+                var bestDiff = Double.greatestFiniteMagnitude
+                for (i, opt) in options.enumerated() where abs(opt - seconds) < bestDiff {
+                    bestDiff = abs(opt - seconds)
+                    best = i
+                }
+                return best
+            },
+            set: { seconds = options[$0] }
+        )
+
+        Picker("Resume Check", selection: binding) {
+            ForEach(0..<options.count, id: \.self) { i in
+                Text("Every \(Int(options[i]))s").tag(i)
+            }
+        }
+    }
+}

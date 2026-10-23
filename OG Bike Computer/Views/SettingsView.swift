@@ -39,6 +39,9 @@ struct SettingsView: View {
     @State private var showSupportSafari = false
     @State private var showClearRides = false
     @State private var showClearRoutes = false
+    @State private var isExportingAllRides = false
+    @State private var exportAllZipURL: URL?
+    @State private var showExportAllShareSheet = false
     @StateObject private var connectivity = ConnectivityManager.shared
 
     private var navigationAlertsSummary: String {
@@ -271,7 +274,7 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(routeStore.routes.isEmpty && connectivity.routeIDsOnWatch.isEmpty)
-                
+
                 Button(role: .destructive) {
                     showClearRides = true
                 } label: {
@@ -288,6 +291,28 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(rideStore.rides.isEmpty)
+                
+                Button {
+                    exportAllRidesAsZip()
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text("Export All Rides")
+                                if isExportingAllRides {
+                                    ProgressView().controlSize(.mini)
+                                }
+                            }
+                            Text("Bundle every ride into a .zip of GPX files for AirDrop or sharing.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "square.and.arrow.up.on.square")
+                            .foregroundStyle(.green)
+                    }
+                }
+                .disabled(rideStore.rides.isEmpty || isExportingAllRides)
             } header: {
                 Text("Data Management")
             } footer: {
@@ -363,6 +388,11 @@ struct SettingsView: View {
             )
             .presentationDetents([.height(280)])
         }
+        .sheet(isPresented: $showExportAllShareSheet) {
+            if let url = exportAllZipURL {
+                ShareSheet(activityItems: [url])
+            }
+        }
         .settingsPageTitle("Settings", profile: userSettings.activeProfileName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -375,6 +405,22 @@ struct SettingsView: View {
         }
     }
 
+    private func exportAllRidesAsZip() {
+        let rides = rideStore.completedRides
+        guard !rides.isEmpty else { return }
+        isExportingAllRides = true
+        let store = rideStore
+        DispatchQueue.global(qos: .userInitiated).async {
+            let url = store.exportZipGPX(rides: rides)
+            DispatchQueue.main.async {
+                isExportingAllRides = false
+                if let url {
+                    exportAllZipURL = url
+                    showExportAllShareSheet = true
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Rider Profile

@@ -10,6 +10,8 @@
 
 #if os(iOS)
 import SwiftUI
+import MapKit
+import CoreLocation
 
 struct RideControlView: View {
     @ObservedObject private var telemetry = PhoneTelemetryStore.shared
@@ -165,7 +167,7 @@ struct RideControlView: View {
                         }
                     }
                     if let cue = telemetry.nextTurnCue, !cue.isEmpty {
-                        MarqueeText(text: cue, font: .subheadline)
+                        MarqueeText(text: cue, font: .subheadline, padding: 2)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -258,7 +260,8 @@ struct RideControlView: View {
                             canSendToWatch: connectivity.isPaired && connectivity.isWatchAppInstalled,
                             onSend: {
                                 ConnectivityManager.shared.sendRoute(route) { _ in }
-                            }
+                            },
+                            recordingPath: telemetry.riderPath
                         )
                         .toolbar {
                             ToolbarItem(placement: .topBarTrailing) {
@@ -266,33 +269,33 @@ struct RideControlView: View {
                             }
                         }
                     }
+                } else {
+                    FreeRideMapSheet()
                 }
             }
 
-            // Quick-link pill: jump to the active route's detail screen
-            // without leaving the ride control flow.
-            if activeRoute != nil {
-                Button {
-                    showRouteDetail = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "map.fill")
-                            .font(.caption)
-                        Text("View Route Details")
-                            .font(.caption.weight(.semibold))
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color(.secondarySystemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            // Quick-link pill: jump to the ride map (route + live recording
+            // breadcrumb) without leaving the ride control flow.
+            Button {
+                showRouteDetail = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "map.fill")
+                        .font(.caption)
+                    Text("View Map")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.blue)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(.blue)
 
             // Remaining distance / ETA / auto-pause row
             if telemetry.routeDistanceRemaining != nil || telemetry.isAutoPaused {
@@ -564,6 +567,51 @@ struct RideControlView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Free Ride Map Sheet
+
+/// Map for free rides — no planned route, just the live recording breadcrumb
+/// and the rider's current position.
+private struct FreeRideMapSheet: View {
+    @ObservedObject private var telemetry = PhoneTelemetryStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var mapPosition: MapCameraPosition = .userLocation(fallback: .automatic)
+
+    var body: some View {
+        NavigationStack {
+            Map(position: $mapPosition) {
+                if telemetry.riderPath.count >= 2 {
+                    MapPolyline(coordinates: telemetry.riderPath)
+                        .stroke(.purple.opacity(0.8), lineWidth: 4)
+                }
+
+                if let first = telemetry.riderPath.first {
+                    Annotation("Start", coordinate: first) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 14, height: 14)
+                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                    }
+                }
+
+                UserAnnotation()
+            }
+            .mapStyle(.standard(elevation: .realistic))
+            .mapControls {
+                MapUserLocationButton()
+                MapCompass()
+                MapScaleView()
+            }
+            .navigationTitle("Free Ride")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 

@@ -19,6 +19,13 @@ struct RideHistoryView: View {
     @State private var selectedIDs: [UUID] = []
     @State private var showDeleteConfirm = false
     @State private var navigateToMulti = false
+    @State private var isExportingZip = false
+    @State private var exportZipURL: URL?
+    @State private var showExportShareSheet = false
+    @State private var hasStravaAuth = false
+    @State private var isUploadingMerged = false
+    @State private var mergedUploadError: String?
+    @State private var mergedUploadWebURL: String?
 
     private var heldRides: [RideSummary] {
         guard connectivity.isReachable else { return [] }
@@ -129,6 +136,50 @@ struct RideHistoryView: View {
         .navigationDestination(isPresented: $navigateToMulti) {
             MultiRideDetailView(rides: selectedRides, rideStore: rideStore)
         }
+        .sheet(isPresented: $showExportShareSheet) {
+            if let url = exportZipURL {
+                ShareSheet(activityItems: [url])
+            }
+        }
+        .overlay {
+            if isExportingZip || isUploadingMerged {
+                ZStack {
+                    Color.black.opacity(0.25).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text(isUploadingMerged
+                             ? "Uploading \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides") to Strava…"
+                             : "Zipping \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides")…")
+                            .font(.footnote)
+                    }
+                    .padding(20)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                }
+                .transition(.opacity)
+            }
+        }
+        .alert("Upload Error", isPresented: .init(
+            get: { mergedUploadError != nil },
+            set: { if !$0 { mergedUploadError = nil } }
+        )) {
+            Button("OK") { mergedUploadError = nil }
+        } message: {
+            Text(mergedUploadError ?? "")
+        }
+        .alert("Uploaded to Strava", isPresented: .init(
+            get: { mergedUploadWebURL != nil },
+            set: { if !$0 { mergedUploadWebURL = nil } }
+        )) {
+            if let urlString = mergedUploadWebURL, let url = URL(string: urlString) {
+                Link("View on Strava", destination: url)
+            }
+            Button("OK") { mergedUploadWebURL = nil }
+        } message: {
+            Text("The selected rides were merged into one activity.")
+        }
+        .onAppear {
+            hasStravaAuth = KeychainHelper.loadTokens(for: .strava) != nil
+        }
         .confirmationDialog(
             "Delete \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides")?",
             isPresented: $showDeleteConfirm,
@@ -184,21 +235,45 @@ struct RideHistoryView: View {
 
     @ViewBuilder
     private func selectionActionBar() -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Button {
                 navigateToMulti = true
             } label: {
                 Label("View", systemImage: "arrow.triangle.merge")
+                    .labelStyle(.iconOnly)
                     .frame(maxWidth: .infinity, minHeight: 36)
             }
             .buttonStyle(.borderedProminent)
             .tint(.blue)
             .disabled(selectedIDs.isEmpty)
 
+            Menu {
+                Button {
+                    exportSelectedAsZip()
+                } label: {
+                    Label("Export GPX ZIP", systemImage: "doc.zipper")
+                }
+
+                if hasStravaAuth {
+                    Button {
+                        uploadMergedToStrava()
+                    } label: {
+                        Label("Upload Merged to Strava", systemImage: "figure.outdoor.cycle")
+                    }
+                }
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+                    .frame(maxWidth: .infinity, minHeight: 36)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+            .disabled(selectedIDs.isEmpty || isExportingZip || isUploadingMerged)
+
             Button(role: .destructive) {
                 showDeleteConfirm = true
             } label: {
                 Label("Delete", systemImage: "trash")
+                    .labelStyle(.iconOnly)
                     .frame(maxWidth: .infinity, minHeight: 36)
             }
             .buttonStyle(.borderedProminent)
@@ -208,6 +283,43 @@ struct RideHistoryView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.regularMaterial)
+    }
+
+    private func exportSelectedAsZip() {
+        let rides = selectedRides
+        guard !rides.isEmpty else { return }
+        isExportingZip = true
+        let store = rideStore
+        DispatchQueue.global(qos: .userInitiated).async {
+            let url = store.exportZipGPX(rides: rides)
+            DispatchQueue.main.async {
+                isExportingZip = false
+                if let url {
+                    exportZipURL = url
+                    showExportShareSheet = true
+                }
+            }
+        }
+    }
+
+    private func uploadMergedToStrava() {
+        let rides = selectedRides
+        guard !rides.isEmpty else { return }
+        isUploadingMerged = true
+        Task {
+            do {
+                let webURL = try await UploadManager.shared.uploadMergedToStrava(rides)
+                await MainActor.run {
+                    isUploadingMerged = false
+                    mergedUploadWebURL = webURL
+                }
+            } catch {
+                await MainActor.run {
+                    isUploadingMerged = false
+                    mergedUploadError = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func toggleSelection(_ ride: RideSummary) {

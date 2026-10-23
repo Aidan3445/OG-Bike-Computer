@@ -21,6 +21,10 @@ struct RouteDetailView: View {
     /// Optional — when provided, enables the Cue Editor. (Callers that don't
     /// need editing can pass nil.)
     var routeStore: RouteStore? = nil
+    /// Breadcrumb of the in-progress recording, drawn semi-transparent above
+    /// the route polyline so the rider can compare where they've been against
+    /// the planned route. Empty outside of an active ride.
+    var recordingPath: [CLLocationCoordinate2D] = []
     @ObservedObject private var unitState = UnitState.shared
 
     enum PanelState {
@@ -38,9 +42,12 @@ struct RouteDetailView: View {
     @State private var currentMarkerInterval: Double = 0
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
     @State private var cachedElevationData: [ProcessedPoint] = []
+    @State private var didStartLoad = false
     @State private var panelPage = 0
-    @State private var scrubDistance: Double? = nil
-    @State private var scrubCoordinate: CLLocationCoordinate2D? = nil
+    /// Held in `@State` (not `@StateObject`) so per-frame scrub updates only
+    /// re-render the scrub leaf views (chart rule, footer, map dot), never
+    /// this body or the Map content.
+    @State private var scrubState = ChartScrubState()
 
     // Cue Editor state
     @State private var isEditingCues: Bool = false
@@ -84,6 +91,12 @@ struct RouteDetailView: View {
                 // Route polyline
                 MapPolyline(coordinates: cachedCoordinates)
                     .stroke(.blue, lineWidth: 4)
+
+                // In-progress recording breadcrumb, above the route
+                if recordingPath.count >= 2 {
+                    MapPolyline(coordinates: recordingPath)
+                        .stroke(.purple.opacity(0.65), lineWidth: 4)
+                }
 
                 // Start marker
                 if let first = cachedCoordinates.first {
@@ -202,17 +215,6 @@ struct RouteDetailView: View {
                     }
                 }
 
-                // Scrub position indicator
-                if let coord = scrubCoordinate {
-                    Annotation("", coordinate: coord) {
-                        Circle()
-                            .fill(.white)
-                            .frame(width: 12, height: 12)
-                            .overlay(Circle().stroke(Color.green, lineWidth: 3))
-                            .shadow(radius: 3)
-                    }
-                }
-
                 // Current location
                 UserAnnotation()
             }
@@ -252,6 +254,12 @@ struct RouteDetailView: View {
                     }
                 }
             )
+            .overlay {
+                MapScrubDot(
+                    scrub: scrubState,
+                    proxy: mapProxy,
+                    coordinateFor: interpolateRouteCoordinate)
+            }
             }  // end: MapReader
             } else {
                 // Map is unmounted while the tab is hidden — keep the same
@@ -327,10 +335,7 @@ struct RouteDetailView: View {
                             // Page 1: Elevation Chart
                             if !cachedElevationData.isEmpty {
                                 VStack {
-                                    RouteElevationChartView(points: cachedElevationData, scrubDistance: $scrubDistance)
-                                        .onChange(of: scrubDistance) { _, dist in
-                                            scrubCoordinate = dist.map { interpolateRouteCoordinate(at: $0) } ?? nil
-                                        }
+                                    RouteElevationChartView(points: cachedElevationData, scrub: scrubState)
                                     Spacer(minLength: 0)
                                 }
                                 .tag(1)
@@ -338,9 +343,6 @@ struct RouteDetailView: View {
                         }
                         .tabViewStyle(.page(indexDisplayMode: .never))
                         .frame(height: panelState == .expanded ? 170 : (route.elevationGain > 0 ? 70 : 60))
-                        // Lock paging while scrub is active so the chart drag doesn't
-                        // bleed into a horizontal page swap.
-                        .scrollDisabled(scrubDistance != nil)
                         .onChange(of: panelPage) { _, newPage in
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                 panelState = newPage == 1 ? .expanded : .compact
@@ -456,7 +458,10 @@ struct RouteDetailView: View {
         }
         .onAppear {
             isOnScreen = true
-            if cachedCoordinates.isEmpty { buildRouteCache() }
+            if !didStartLoad {
+                didStartLoad = true
+                Task { await loadRouteData() }
+            }
             // Restore the user's last camera — including zoom (MapCamera
             // carries `distance`) — from the shared cache so re-opening the
             // route detail from anywhere (tab switch, RideControl sheet,
@@ -531,8 +536,13 @@ struct RouteDetailView: View {
         let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
         if interval != currentMarkerInterval && !cachedProcessedPoints.isEmpty {
             currentMarkerInterval = interval
-            cachedMileMarkers = computeMileMarkers(
-                points: cachedProcessedPoints, interval: interval)
+            let points = cachedProcessedPoints
+            Task.detached(priority: .userInitiated) {
+                let markers = computeMileMarkers(points: points, interval: interval)
+                await MainActor.run {
+                    if currentMarkerInterval == interval { cachedMileMarkers = markers }
+                }
+            }
         }
     }
 
@@ -973,62 +983,98 @@ struct RouteDetailView: View {
 
     private let minElevDiff: Double = 50 // meters — minimum difference to show markers
 
-    private func buildRouteCache() {
-        cachedCoordinates = route.points.map {
-            CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
-        }
+    /// Two-phase background load: publish the plain route line as soon as
+    /// the coordinates are mapped, then the derived data (processed points,
+    /// mile markers, elevation extremes, chart) when it finishes building.
+    private func loadRouteData() async {
+        let route = route
+        let minElevDiff = minElevDiff
 
-        let pts = route.points
-        if pts.count >= 2 {
-            var cumDist: Double = 0
+        let coords = await Task.detached(priority: .userInitiated) {
+            route.points.map {
+                CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+            }
+        }.value
+        cachedCoordinates = coords
+
+        let built = await Task.detached(priority: .userInitiated) { () -> RouteDetailCache in
+            let pts = route.points
             var processed: [ProcessedPoint] = []
-            for i in 0..<pts.count {
-                if i > 0 {
-                    let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
-                    let cur  = CLLocation(latitude: pts[i].lat,     longitude: pts[i].lon)
-                    cumDist += cur.distance(from: prev)
+            var markers: [MileMarker] = []
+            if pts.count >= 2 {
+                var cumDist: Double = 0
+                processed.reserveCapacity(pts.count)
+                for i in 0..<pts.count {
+                    if i > 0 {
+                        let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
+                        let cur  = CLLocation(latitude: pts[i].lat,     longitude: pts[i].lon)
+                        cumDist += cur.distance(from: prev)
+                    }
+                    processed.append(ProcessedPoint(
+                        coordinate: coords[i],
+                        elevation: pts[i].elevation,
+                        distanceFromStart: cumDist,
+                        bearingToNext: 0))
                 }
-                processed.append(ProcessedPoint(
-                    coordinate: CLLocationCoordinate2D(latitude: pts[i].lat, longitude: pts[i].lon),
-                    elevation: pts[i].elevation,
-                    distanceFromStart: cumDist,
-                    bearingToNext: 0))
+                markers = computeMileMarkers(points: processed)
             }
-            cachedProcessedPoints = processed
-            cachedMileMarkers = computeMileMarkers(points: processed)
-        }
 
-        let withElev = pts.filter { $0.elevation != nil }
-        if let highest = withElev.max(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-           let lowest  = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-           let highElev = highest.elevation,
-           let lowElev  = lowest.elevation,
-           highElev - lowElev >= minElevDiff {
-            cachedElevationExtremes = (highest, lowest)
-        }
+            var extremes: (high: TrackPoint, low: TrackPoint)? = nil
+            let withElev = pts.filter { $0.elevation != nil }
+            if let highest = withElev.max(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
+               let lowest  = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
+               let highElev = highest.elevation,
+               let lowElev  = lowest.elevation,
+               highElev - lowElev >= minElevDiff {
+                extremes = (highest, lowest)
+            }
 
-        // Build chart data
-        cachedElevationData = buildRouteElevationData(from: route)
+            return RouteDetailCache(
+                processedPoints: processed,
+                mileMarkers: markers,
+                elevationExtremes: extremes,
+                elevationData: buildRouteElevationData(from: route))
+        }.value
+
+        cachedProcessedPoints = built.processedPoints
+        // A camera-driven re-bucket may have already produced markers at the
+        // right interval — don't clobber them with the default-interval set.
+        if currentMarkerInterval == 0 { cachedMileMarkers = built.mileMarkers }
+        cachedElevationExtremes = built.elevationExtremes
+        cachedElevationData = built.elevationData
     }
 
+    /// Binary-search the processed points' cumulative distances, then
+    /// interpolate within the bracketing segment.
     private func interpolateRouteCoordinate(at targetDist: Double) -> CLLocationCoordinate2D? {
-        guard cachedCoordinates.count >= 2 else { return nil }
-        let pts = route.points
-        var cumDist: Double = 0
-        for i in 1..<pts.count {
-            let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
-            let cur  = CLLocation(latitude: pts[i].lat, longitude: pts[i].lon)
-            let seg  = cur.distance(from: prev)
-            if cumDist + seg >= targetDist {
-                let fraction = seg > 0 ? (targetDist - cumDist) / seg : 0
-                let lat = pts[i - 1].lat + fraction * (pts[i].lat - pts[i - 1].lat)
-                let lon = pts[i - 1].lon + fraction * (pts[i].lon - pts[i - 1].lon)
-                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-            }
-            cumDist += seg
+        let pts = cachedProcessedPoints
+        guard pts.count >= 2 else { return nil }
+        guard targetDist < pts[pts.count - 1].distanceFromStart else {
+            return pts.last?.coordinate
         }
-        return cachedCoordinates.last
+
+        var lo = 0, hi = pts.count - 1
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2
+            if pts[mid].distanceFromStart < targetDist { lo = mid } else { hi = mid }
+        }
+        let seg = pts[hi].distanceFromStart - pts[lo].distanceFromStart
+        let fraction = seg > 0 ? (targetDist - pts[lo].distanceFromStart) / seg : 0
+        let a = pts[lo].coordinate
+        let b = pts[hi].coordinate
+        return CLLocationCoordinate2D(
+            latitude: a.latitude + fraction * (b.latitude - a.latitude),
+            longitude: a.longitude + fraction * (b.longitude - a.longitude))
     }
+}
+
+/// Everything the background build produces for the route map, published to
+/// the view in one main-actor hop.
+private struct RouteDetailCache {
+    let processedPoints: [ProcessedPoint]
+    let mileMarkers: [MileMarker]
+    let elevationExtremes: (high: TrackPoint, low: TrackPoint)?
+    let elevationData: [ProcessedPoint]
 }
 
 /// Minimal POI shape for the default route-detail map. We keep our own struct
