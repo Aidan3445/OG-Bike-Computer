@@ -26,6 +26,10 @@ struct MultiRideDetailView: View {
     @State private var showShareSheet = false
     @State private var gpxExportURL: URL?
     @State private var isExportingGPX = false
+    @State private var hasStravaAuth = false
+    @State private var isUploadingToStrava = false
+    @State private var uploadError: String?
+    @State private var uploadedWebURL: String?
 
     @State private var renders: [RideRender] = []
     @State private var connectors: [Connector] = []
@@ -130,16 +134,29 @@ struct MultiRideDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    exportCombinedGPXForSharing()
+                Menu {
+                    Button {
+                        exportCombinedGPXForSharing()
+                    } label: {
+                        Label("Export GPX", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(isExportingGPX)
+
+                    if hasStravaAuth {
+                        Button {
+                            uploadMergedToStrava()
+                        } label: {
+                            Label("Upload Merged to Strava", systemImage: "figure.outdoor.cycle")
+                        }
+                        .disabled(isUploadingToStrava)
+                    }
                 } label: {
-                    if isExportingGPX {
+                    if isExportingGPX || isUploadingToStrava {
                         ProgressView()
                     } else {
                         Image(systemName: "square.and.arrow.up")
                     }
                 }
-                .disabled(isExportingGPX)
             }
         }
         .sheet(isPresented: $showShareSheet) {
@@ -147,8 +164,28 @@ struct MultiRideDetailView: View {
                 ShareSheet(activityItems: [url])
             }
         }
+        .alert("Upload Error", isPresented: .init(
+            get: { uploadError != nil },
+            set: { if !$0 { uploadError = nil } }
+        )) {
+            Button("OK") { uploadError = nil }
+        } message: {
+            Text(uploadError ?? "")
+        }
+        .alert("Uploaded to Strava", isPresented: .init(
+            get: { uploadedWebURL != nil },
+            set: { if !$0 { uploadedWebURL = nil } }
+        )) {
+            if let urlString = uploadedWebURL, let url = URL(string: urlString) {
+                Link("View on Strava", destination: url)
+            }
+            Button("OK") { uploadedWebURL = nil }
+        } message: {
+            Text("The selected rides were merged into one activity.")
+        }
         .onAppear {
             isOnScreen = true
+            hasStravaAuth = KeychainHelper.loadTokens(for: .strava) != nil
             if !didStartLoad {
                 didStartLoad = true
                 Task { await loadRides() }
@@ -540,6 +577,26 @@ struct MultiRideDetailView: View {
                 if let url {
                     gpxExportURL = url
                     showShareSheet = true
+                }
+            }
+        }
+    }
+
+    private func uploadMergedToStrava() {
+        guard !isUploadingToStrava else { return }
+        isUploadingToStrava = true
+        let rides = rides
+        Task {
+            do {
+                let webURL = try await UploadManager.shared.uploadMergedToStrava(rides)
+                await MainActor.run {
+                    isUploadingToStrava = false
+                    uploadedWebURL = webURL
+                }
+            } catch {
+                await MainActor.run {
+                    isUploadingToStrava = false
+                    uploadError = error.localizedDescription
                 }
             }
         }

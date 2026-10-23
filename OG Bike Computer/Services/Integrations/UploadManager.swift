@@ -8,6 +8,7 @@
 import Foundation
 import os
 import Combine
+import CryptoKit
 
 private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "UploadManager")
 
@@ -228,9 +229,13 @@ class UploadManager: ObservableObject {
         }
 
         let name = "Combined Ride (\(rides.count))"
-        // Fresh external_id — Strava dedups on it, so reusing a ride's UUID
-        // would collide with that ride's individual upload.
-        let (uploadId, _) = try await stravaClient.startUpload(gpxData: gpxData, name: name, externalId: UUID().uuidString)
+        // Deterministic external_id from the set of ride IDs (order-independent)
+        // so Strava dedups re-uploads of the same merge, while still differing
+        // from any constituent ride's individual upload (which uses its UUID).
+        let sortedIDs = rides.map(\.id.uuidString).sorted().joined(separator: ",")
+        let digest = SHA256.hash(data: Data(sortedIDs.utf8))
+        let externalId = "merged-" + digest.map { String(format: "%02x", $0) }.joined()
+        let (uploadId, _) = try await stravaClient.startUpload(gpxData: gpxData, name: name, externalId: externalId)
         let result = try await stravaClient.pollUpload(uploadID: uploadId)
         logger.info("[UploadManager] Uploaded merged activity (\(rides.count) rides) to Strava: \(result.activityID)")
         return result.webURL
