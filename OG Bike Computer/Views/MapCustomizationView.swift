@@ -11,6 +11,22 @@ struct MapCustomizationView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject private var unitState = UnitState.shared
     @State private var showProfileImport = false
+    @State private var showResetConfirm = false
+
+    private var hasNonDefaultRouteScreenSettings: Bool {
+        let ride = userSettings.settings.ridePreferences
+        return ride.mapScreen != .default
+            || ride.elevationScreen != .default
+            || ride.mapRotation != RidePreferences.default.mapRotation
+            || ride.elevationSmoothing != RidePreferences.default.elevationSmoothing
+    }
+
+    private func resetRouteScreens() {
+        userSettings.settings.ridePreferences.mapScreen = .default
+        userSettings.settings.ridePreferences.elevationScreen = .default
+        userSettings.settings.ridePreferences.mapRotation = RidePreferences.default.mapRotation
+        userSettings.settings.ridePreferences.elevationSmoothing = RidePreferences.default.elevationSmoothing
+    }
     
     @Environment(\.colorScheme) var colorScheme
 
@@ -69,6 +85,18 @@ struct MapCustomizationView: View {
                     userSettings.settings.ridePreferences.mapScreen = imported
                 }
             )
+        }
+        .confirmationDialog(
+            "Reset Route Screens to Defaults?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) {
+                resetRouteScreens()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Map, elevation, rotation, and smoothing settings will be restored to their defaults.")
         }
     }
 
@@ -206,29 +234,53 @@ struct MapCustomizationView: View {
         return "\(Int(meters))m"
     }
 
+    /// Imperial-native closest-zoom options (meters): 300 / 500 / 650 / 1000 / 1300 ft.
+    private var closestZoomImperialOptions: [Double] {
+        [300.0 / 3.28084, 500.0 / 3.28084, 650.0 / 3.28084, 1000.0 / 3.28084, 1300.0 / 3.28084]
+    }
+    /// Imperial-native farthest-zoom options (meters): 0.5 / 0.75 / 1 / 1.5 / 2 mi.
+    private var farthestZoomImperialOptions: [Double] {
+        [0.5 * 1609.34, 0.75 * 1609.34, 1 * 1609.34, 1.5 * 1609.34, 2 * 1609.34]
+    }
+    private var closestZoomMetricOptions: [Double] { [100, 150, 200, 300, 400] }
+    private var farthestZoomMetricOptions: [Double] { [800, 1200, 1600, 2400, 3200] }
+
+    /// Snap a stored meter value to the closest option in the active option set.
+    private func snapToClosest(_ value: Double, in options: [Double]) -> Double {
+        options.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
+    }
+
     @ViewBuilder
     private var zoomSection: some View {
+        let closestOptions = isImperial ? closestZoomImperialOptions : closestZoomMetricOptions
+        let farthestOptions = isImperial ? farthestZoomImperialOptions : farthestZoomMetricOptions
+
+        let closestBinding = Binding<Double>(
+            get: { snapToClosest(userSettings.settings.ridePreferences.mapScreen.zoomMin, in: closestOptions) },
+            set: { userSettings.settings.ridePreferences.mapScreen.zoomMin = $0 }
+        )
+        let farthestBinding = Binding<Double>(
+            get: { snapToClosest(userSettings.settings.ridePreferences.mapScreen.zoomMax, in: farthestOptions) },
+            set: { userSettings.settings.ridePreferences.mapScreen.zoomMax = $0 }
+        )
+
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Closest Zoom")
-                Picker("Closest Zoom", selection: config.zoomMin) {
-                    Text(zoomLabel(100)).tag(100.0)
-                    Text(zoomLabel(150)).tag(150.0)
-                    Text(zoomLabel(200)).tag(200.0)
-                    Text(zoomLabel(300)).tag(300.0)
-                    Text(zoomLabel(400)).tag(400.0)
+                Picker("Closest Zoom", selection: closestBinding) {
+                    ForEach(closestOptions, id: \.self) { meters in
+                        Text(zoomLabel(meters)).tag(meters)
+                    }
                 }
                 .pickerStyle(.segmented)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Farthest Zoom")
-                Picker("Farthest Zoom", selection: config.zoomMax) {
-                    Text(zoomLabel(800)).tag(800.0)
-                    Text(zoomLabel(1200)).tag(1200.0)
-                    Text(zoomLabel(1600)).tag(1600.0)
-                    Text(zoomLabel(2400)).tag(2400.0)
-                    Text(zoomLabel(3200)).tag(3200.0)
+                Picker("Farthest Zoom", selection: farthestBinding) {
+                    ForEach(farthestOptions, id: \.self) { meters in
+                        Text(zoomLabel(meters)).tag(meters)
+                    }
                 }
                 .pickerStyle(.segmented)
             }
@@ -401,10 +453,10 @@ struct MapCustomizationView: View {
 
     @ViewBuilder
     private var resetSection: some View {
-        if userSettings.settings.ridePreferences.mapScreen != .default {
+        if hasNonDefaultRouteScreenSettings {
             Section {
                 Button("Reset Route Screens to Defaults", role: .destructive) {
-                    userSettings.settings.ridePreferences.mapScreen = .default
+                    showResetConfirm = true
                 }
             }
         }
