@@ -142,7 +142,7 @@ struct SettingsView: View {
 
                 // MARK: - Alerts
                 NavigationLink {
-                    NavigationAlertSettingsView(userSettings: userSettings)
+                    NavigationAlertSettingsView(userSettings: userSettings, metricConfig: metricConfig)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
@@ -388,8 +388,21 @@ struct RiderProfileView: View {
     @State private var newBikeWeight = ""
     @State private var weightText = ""
     @State private var heightText = ""
+    @State private var heightFeet: Int = 5
+    @State private var heightInches: Int = 9
     @State private var bikeWeightText = ""
     @FocusState private var isFieldFocused: Bool
+
+    private func syncHeightFromModel() {
+        let totalInches = userSettings.settings.riderHeight / 2.54
+        heightFeet = Swift.max(0, Swift.min(8, Int(totalInches) / 12))
+        heightInches = Swift.max(0, Swift.min(11, Int(totalInches.rounded()) % 12))
+    }
+
+    private func writeImperialHeight() {
+        let totalInches = Double(heightFeet * 12 + heightInches)
+        userSettings.settings.riderHeight = totalInches * 2.54
+    }
 
     private var isImperial: Bool { currentUnits.distance == .miles }
 
@@ -449,21 +462,45 @@ struct RiderProfileView: View {
                     Text(weightUnit)
                         .foregroundStyle(.secondary)
                 }
-                HStack {
-                    Label("Height", systemImage: "ruler")
-                    Spacer()
-                    TextField(heightUnit, text: $heightText)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                        .focused($isFieldFocused)
-                        .onChange(of: heightText) { _, newValue in
-                            if let val = Double(newValue) {
-                                userSettings.settings.riderHeight = displayToCm(val)
+                if isImperial {
+                    HStack {
+                        Label("Height", systemImage: "ruler")
+                        Spacer()
+                        Picker("Feet", selection: $heightFeet) {
+                            ForEach(0...8, id: \.self) { ft in
+                                Text("\(ft) ft").tag(ft)
                             }
                         }
-                    Text(heightUnit)
-                        .foregroundStyle(.secondary)
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .onChange(of: heightFeet) { _, _ in writeImperialHeight() }
+
+                        Picker("Inches", selection: $heightInches) {
+                            ForEach(0...11, id: \.self) { inch in
+                                Text("\(inch) in").tag(inch)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .onChange(of: heightInches) { _, _ in writeImperialHeight() }
+                    }
+                } else {
+                    HStack {
+                        Label("Height", systemImage: "ruler")
+                        Spacer()
+                        TextField(heightUnit, text: $heightText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                            .focused($isFieldFocused)
+                            .onChange(of: heightText) { _, newValue in
+                                if let val = Double(newValue) {
+                                    userSettings.settings.riderHeight = displayToCm(val)
+                                }
+                            }
+                        Text(heightUnit)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } header: {
                 Text("Rider")
@@ -475,6 +512,7 @@ struct RiderProfileView: View {
             .onAppear {
                 weightText = kgToDisplay(userSettings.settings.riderWeight)
                 heightText = cmToDisplay(userSettings.settings.riderHeight)
+                syncHeightFromModel()
             }
 
             // MARK: Bikes
@@ -514,6 +552,10 @@ struct RiderProfileView: View {
                             }
                         }
                     }
+                    // Block deleting the final bike. Power estimation needs a
+                    // bike's weight, and the inline editor hides when there
+                    // are none.
+                    .deleteDisabled(userSettings.settings.bikes.count <= 1)
                 }
                 .onDelete { indices in
                     let wasActive = indices.contains(where: {
