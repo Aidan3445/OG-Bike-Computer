@@ -24,7 +24,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "exclamationmark.applewatch")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(.mint)
                 }
             }
 
@@ -40,7 +40,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "slider.horizontal.3")
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(.orange)
                 }
             }
 
@@ -56,7 +56,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "arrow.down.doc")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(.brown)
                 }
             }
 
@@ -72,7 +72,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "location.north.line")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.cyan)
                 }
             }
 
@@ -88,7 +88,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "arrow.triangle.turn.up.right.diamond")
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(.pink)
                 }
             }
 
@@ -104,7 +104,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "square.stack.3d.up")
-                        .foregroundStyle(.indigo)
+                        .foregroundStyle(.purple)
                 }
             }
 
@@ -120,7 +120,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "clock.arrow.circlepath")
-                        .foregroundStyle(.teal)
+                        .foregroundStyle(.yellow)
                 }
             }
 
@@ -136,7 +136,7 @@ struct TipsView: View {
                     }
                 } icon: {
                     Image(systemName: "waveform")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.indigo)
                 }
             }
         }
