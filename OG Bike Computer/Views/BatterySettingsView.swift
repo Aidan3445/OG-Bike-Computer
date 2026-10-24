@@ -21,7 +21,7 @@ struct BatterySettingsView: View {
                         .gpsAccuracyFloor.label,
                     impact: userSettings.settings.ridePreferences
                         .gpsAccuracyFloor.batteryImpact,
-                    instruction: "Change in Ride Settings."
+                    instruction: "Change below in Efficiency Settings."
                 )
                 batteryTipRow(
                     title: "Live Activity Updates",
@@ -56,6 +56,13 @@ struct BatterySettingsView: View {
 
             // MARK: - Efficiency Settings
             Section {
+                Picker("GPS Accuracy", selection: $userSettings.settings.ridePreferences.gpsAccuracyFloor) {
+                    ForEach(GPSAccuracyFloor.allCases, id: \.self) { floor in
+                        Text(floor.label).tag(floor)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 Toggle(isOn: $userSettings.settings.ridePreferences.dynamicGPSOptimization) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Dynamic GPS Optimization")
@@ -72,7 +79,7 @@ struct BatterySettingsView: View {
                 }
 
                 Stepper(
-                    "Off-Route Grace: \(userSettings.settings.ridePreferences.offRouteGraceSamples)s",
+                    "Off-Route Grace: \(userSettings.settings.ridePreferences.offRouteGraceSamples) samples",
                     value: $userSettings.settings.ridePreferences.offRouteGraceSamples,
                     in: 1...10
                 )
@@ -80,7 +87,7 @@ struct BatterySettingsView: View {
                 Text("Efficiency Settings")
             } footer: {
                 Text(
-                    "These features improve reliability for everyday riding. Disable them to maximize battery life on long touring days."
+                    "Trade a little responsiveness for battery on long days: lower GPS Accuracy, keep Dynamic GPS on, slow the Live Activity rate, and raise the Off-Route Grace to avoid GPS-noise alerts."
                 )
             }
 
@@ -98,22 +105,6 @@ struct BatterySettingsView: View {
                         }
                     } icon: {
                         Image(systemName: "map")
-                            .foregroundStyle(.blue)
-                    }
-                }
-
-                NavigationLink {
-                    RideSettingsView(userSettings: userSettings, metricConfig: metricConfig)
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("GPS & Sensors")
-                            Text("GPS accuracy, elevation smoothing, auto-pause")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "location.circle")
                             .foregroundStyle(.blue)
                     }
                 }

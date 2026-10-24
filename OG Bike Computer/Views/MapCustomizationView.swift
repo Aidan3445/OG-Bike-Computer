@@ -32,6 +32,7 @@ struct MapCustomizationView: View {
         Form {
             previewSection
             mapDetailSection
+            mapRotationSection
             statsSection
             displaySection
             zoomSection
@@ -154,7 +155,23 @@ struct MapCustomizationView: View {
         }
     }
 
-    // MARK: - Display
+    // MARK: - Map Rotation
+
+    @ViewBuilder
+    private var mapRotationSection: some View {
+        Section {
+            Picker("Map Rotation", selection: $userSettings.settings.ridePreferences.mapRotation) {
+                ForEach(MapRotation.allCases, id: \.self) { rotation in
+                    Text(rotation.label).tag(rotation)
+                }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Label("Map Rotation", systemImage: "location.north.line")
+        }
+    }
+
+    // MARK: - Map Buttons
 
     @ViewBuilder
     private var displaySection: some View {
@@ -362,12 +379,18 @@ struct MapCustomizationView: View {
 
                 Toggle("Show Total Gain Readout", isOn: elevationConfig.showGainLossReadout)
                 Toggle("Show Grade Overlay", isOn: elevationConfig.showGrade)
+
+                Picker("Elevation Smoothing", selection: $userSettings.settings.ridePreferences.elevationSmoothing) {
+                    ForEach(ElevationSmoothing.allCases, id: \.self) { level in
+                        Text(level.label).tag(level)
+                    }
+                }
             }
         } header: {
             Label("Elevation Screen", systemImage: "mountain.2")
         } footer: {
             if userSettings.settings.ridePreferences.elevationScreen.enabled {
-                Text("Adds an elevation profile tab to the watch when riding a route with elevation data. \"Ahead\" mode shows the next stretch of route only.")
+                Text("Adds an elevation profile tab to the watch when riding a route with elevation data. \"Ahead\" mode shows the next stretch of route only. Smoothing filters elevation noise and affects the chart, the total gain readout, and the grade overlay.")
             } else {
                 Text("Elevation screen is hidden from the watch.")
             }

@@ -28,6 +28,7 @@ struct NavigationAlertSettingsView: View {
             autoPauseAlertsSection
             audioOutputSection
             hapticsSection
+            watchDisplaySection
 
             if userSettings.settings.navigationAlerts != .default {
                 Section {
@@ -317,7 +318,20 @@ struct NavigationAlertSettingsView: View {
         } header: {
             Label("Audio Source", systemImage: "speaker.wave.2")
         } footer: {
-            Text("Auto plays through headphones if connected to the watch, otherwise the phone, otherwise the watch speaker. For nicer voices, install a Premium voice via Settings → Accessibility → Spoken Content → Voices → English.")
+            Text("Auto plays through watch headphones when connected, otherwise your iPhone, falling back to the watch speaker.")
+        }
+    }
+
+    // MARK: - Watch Display
+
+    @ViewBuilder
+    private var watchDisplaySection: some View {
+        Section {
+            Toggle("Wake Screen on Alert", isOn: $userSettings.settings.ridePreferences.wakeOnAlert)
+        } header: {
+            Label("Watch Display", systemImage: "applewatch")
+        } footer: {
+            Text("Sends a time-sensitive notification to light up the watch display when a navigation alert fires.")
         }
     }
 }

@@ -35,7 +35,9 @@ struct ContentView: View {
     @State private var navigationPath = NavigationPath()
     
     @AppStorage("hasSeenSettingsRec") private var hasSeenSettingsRec = false
-    
+
+    @AppStorage("autoSendRoutesToWatch") private var autoSendRoutesToWatch: Bool = false
+
     /// Whether the watch is paired and has the app installed
     private var canSendToWatch: Bool {
         connectivity.isPaired && connectivity.isWatchAppInstalled
@@ -106,35 +108,31 @@ struct ContentView: View {
                         )
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        if integrationSettings.settings.importRouteServices.isEmpty {
+                        Menu {
                             Button {
                                 showFilePicker = true
                             } label: {
-                                Label("Import GPX", systemImage: "plus")
+                                Label("From Files", systemImage: "folder")
                             }
-                        } else {
-                            Menu {
+                            ForEach(integrationSettings.settings.importRouteServices) { service in
                                 Button {
-                                    showFilePicker = true
+                                    serviceRoutePickerService = service
                                 } label: {
-                                    Label("From Files", systemImage: "folder")
-                                }
-                                ForEach(integrationSettings.settings.importRouteServices) { service in
-                                    Button {
-                                        serviceRoutePickerService = service
-                                    } label: {
-                                        Label {
-                                            Text("From \(service.displayName)")
-                                        } icon: {
-                                            Image(service.iconAsset)
-                                                .resizable()
-                                                .scaledToFit()
-                                        }
+                                    Label {
+                                        Text("From \(service.displayName)")
+                                    } icon: {
+                                        Image(service.iconAsset)
+                                            .resizable()
+                                            .scaledToFit()
                                     }
                                 }
-                            } label: {
-                                Label("Import", systemImage: "plus")
                             }
+
+                            Divider()
+
+                            Toggle("Auto-Send to Watch", isOn: $autoSendRoutesToWatch)
+                        } label: {
+                            Label("Import", systemImage: "plus")
                         }
                     }
                 }

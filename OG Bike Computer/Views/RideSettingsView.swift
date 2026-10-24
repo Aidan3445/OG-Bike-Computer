@@ -12,11 +12,6 @@ struct RideSettingsView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
 
-    /// Phone-only — doesn't ride along to the watch, so we keep it in
-    /// `@AppStorage` rather than `RidePreferences`. Read by
-    /// `RouteImportCoordinator.handle(_:)` via the same defaults key.
-    @AppStorage("autoSendRoutesToWatch") private var autoSendRoutesToWatch: Bool = false
-
     private var prefs: Binding<RidePreferences> {
         $userSettings.settings.ridePreferences
     }
@@ -25,10 +20,6 @@ struct RideSettingsView: View {
         Form {
             tabOrderSection
             autoPauseSection
-            gpsSensorsSection
-            displaySection
-            routeSharingSection
-            alertsSection
             checkpointSection
             phoneAlertsSection
 
@@ -89,72 +80,6 @@ struct RideSettingsView: View {
             Label("Auto-Pause", systemImage: "pause.circle")
         } footer: {
             Text("Automatically pause the ride when speed drops below the threshold. While paused, the watch briefly wakes GPS at the resume check interval to detect movement — shorter intervals resume faster but use more battery.")
-        }
-    }
-
-    // MARK: - GPS & Sensors
-
-    @ViewBuilder
-    private var gpsSensorsSection: some View {
-        Section {
-            Picker("GPS Accuracy", selection: prefs.gpsAccuracyFloor) {
-                ForEach(GPSAccuracyFloor.allCases, id: \.self) { floor in
-                    Text(floor.label).tag(floor)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Picker("Elevation Smoothing", selection: prefs.elevationSmoothing) {
-                ForEach(ElevationSmoothing.allCases, id: \.self) { level in
-                    Text(level.label).tag(level)
-                }
-            }
-        } header: {
-            Label("GPS & Sensors", systemImage: "location.circle")
-        } footer: {
-            Text("GPS accuracy sets the minimum quality floor. The app still dynamically reduces GPS near turns to save battery. Higher elevation smoothing filters noise but may miss small hills.")
-        }
-    }
-
-    // MARK: - Display
-
-    @ViewBuilder
-    private var displaySection: some View {
-        Section {
-            Picker("Map Rotation", selection: prefs.mapRotation) {
-                ForEach(MapRotation.allCases, id: \.self) { rotation in
-                    Text(rotation.label).tag(rotation)
-                }
-            }
-            .pickerStyle(.segmented)
-        } header: {
-            Label("Display", systemImage: "map")
-        }
-    }
-
-    // MARK: - Route Sharing
-
-    @ViewBuilder
-    private var routeSharingSection: some View {
-        Section {
-            Toggle("Auto-Send to Watch", isOn: $autoSendRoutesToWatch)
-        } header: {
-            Label("Route Sharing", systemImage: "applewatch.and.arrow.forward")
-        } footer: {
-            Text("When on, every newly imported route is automatically queued for transfer to the watch.")
-        }
-    }
-
-    // MARK: - Alerts
-
-    @ViewBuilder
-    private var alertsSection: some View {
-        Section {
-            Toggle("Wake Screen on Alert", isOn: prefs.wakeOnAlert)
-        } header: {
-            Label("Alerts", systemImage: "bell.badge")
-        } footer: {
-            Text("Sends a time-sensitive notification to light up the watch display when a navigation alert fires.")
         }
     }
 
