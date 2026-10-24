@@ -40,11 +40,7 @@ struct NavigationAlertSettingsView: View {
             }
         }
         .settingsPageTitle("Alerts", preset: userSettings.activePresetName)
-        .confirmationDialog(
-            "Reset Alerts to Defaults?",
-            isPresented: $showResetConfirm,
-            titleVisibility: .visible
-        ) {
+        .alert("Reset Alerts to Defaults?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {
                 userSettings.settings.navigationAlerts = .default
             }
@@ -334,8 +330,6 @@ struct NavigationAlertSettingsView: View {
                 .foregroundStyle(.secondary)
         } header: {
             Label("Audio Source", systemImage: "speaker.wave.2")
-        } footer: {
-            Text("Auto plays through watch headphones when connected, otherwise your iPhone, falling back to the watch speaker.")
         }
     }
 
@@ -388,6 +382,12 @@ private struct MaxOffRouteRangeField: View {
                 }
                 .onChange(of: focused) { _, isFocused in
                     if !isFocused { commit() }
+                }
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { focused = false }
+                    }
                 }
             Text(unitLabel)
                 .foregroundStyle(.secondary)

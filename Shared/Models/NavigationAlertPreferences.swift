@@ -392,9 +392,9 @@ enum AlertAudioSource: String, Codable, CaseIterable, Hashable {
 
     var detail: String {
         switch self {
-        case .auto:  return "Watch headphones, otherwise iPhone audio"
-        case .watch: return "Always play on the watch"
-        case .phone: return "Always play on the iPhone"
+        case .auto:  return "Prefer headphones"
+        case .watch: return "Only built-in speakers"
+        case .phone: return "Built-in or headphones"
         }
     }
 }
