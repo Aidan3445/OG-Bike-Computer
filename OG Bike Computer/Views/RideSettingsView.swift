@@ -29,7 +29,6 @@ struct RideSettingsView: View {
             displaySection
             routeSharingSection
             alertsSection
-            privacySection
             checkpointSection
             phoneAlertsSection
 
@@ -156,23 +155,6 @@ struct RideSettingsView: View {
             Label("Alerts", systemImage: "bell.badge")
         } footer: {
             Text("Sends a time-sensitive notification to light up the watch display when a navigation alert fires.")
-        }
-    }
-
-    // MARK: - Privacy
-
-    @ViewBuilder
-    private var privacySection: some View {
-        Section {
-            Picker("Ride Privacy", selection: prefs.ridePrivacy) {
-                ForEach(RidePrivacy.allCases, id: \.self) { privacy in
-                    Text(privacy.label).tag(privacy)
-                }
-            }
-        } header: {
-            Label("Privacy", systemImage: "eye.slash")
-        } footer: {
-            Text("Removes approximately 200m from the start and end of your recorded track to hide your home location.")
         }
     }
 

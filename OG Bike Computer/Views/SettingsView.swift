@@ -5,7 +5,6 @@
 //  Created by Aidan Weinberg on 3/22/26.
 //
 
-import SafariServices
 import SwiftUI
 
 // MARK: - Unit-Aware Formatting Helpers
@@ -36,7 +35,6 @@ struct SettingsView: View {
     @ObservedObject var integrationSettings: IntegrationSettingsStore
     @ObservedObject var rideStore: RideStore
     @ObservedObject var routeStore: RouteStore
-    @State private var showSupportSafari = false
     @State private var showClearRides = false
     @State private var showClearRoutes = false
     @State private var isExportingAllRides = false
@@ -327,43 +325,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             }
 
-//            // MARK: - Support the Developer
-//            Section {
-//                Button {
-//                    showSupportSafari = true
-//                } label: {
-//                    VStack(alignment: .leading, spacing: 8) {
-//                        HStack(spacing: 8) {
-//                            Image(systemName: "heart")
-//                                .foregroundStyle(.pink)
-//                            Text("Support the Developer")
-//                                .font(.body.weight(.semibold))
-//                                .foregroundStyle(.primary)
-//                        }
-//
-//                        Text(
-//                            "This app is completely free. If you'd like, you can leave a voluntary tip to support the developer. Tipping is optional and does not unlock any features or affect how the app works."
-//                        )
-//                        .font(.footnote)
-//                        .foregroundStyle(.white)
-//
-//                        HStack(spacing: 4) {
-//                            Text("Buy me a coffee")
-//                                .font(.subheadline.weight(.medium))
-//                            Image(systemName: "arrow.up.right")
-//                                .font(.caption)
-//                        }
-//                        .foregroundStyle(.blue)
-//                    }
-//                    .padding(.vertical, 4)
-//                }
-//            }
         }
-//        .sheet(isPresented: $showSupportSafari) {
-//            SafariView(
-//                url: URL(string: "https://www.buymeacoffee.com/aidanweinberg")!
-//            )
-//        }
         .sheet(isPresented: $showClearRoutes) {
             ClearRoutesSheet(
                 phoneRouteCount: $routeStore.routes.count,
@@ -827,21 +789,6 @@ struct ClearRidesSheet: View {
             }
         }
     }
-}
-
-// MARK: - Safari View
-
-struct SafariView: UIViewControllerRepresentable {
-    let url: URL
-
-    func makeUIViewController(context: Context) -> SFSafariViewController {
-        SFSafariViewController(url: url)
-    }
-
-    func updateUIViewController(
-        _ uiViewController: SFSafariViewController,
-        context: Context
-    ) {}
 }
 
 // MARK: - Settings Profile Subtitle

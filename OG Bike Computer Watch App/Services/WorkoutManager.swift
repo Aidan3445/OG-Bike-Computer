@@ -1587,16 +1587,9 @@ class WorkoutManager: NSObject, ObservableObject {
             }
         }
 
-        var locationsToSave = recordedLocations
-        var hrsToSave = recordedHeartRates
-        var powersToSave = recordedPowers
-        if ridePreferences.ridePrivacy == .trimStartEnd {
-            let trimDist = ridePreferences.ridePrivacy.trimDistance
-            let (trimmed, startTrim, endTrim) = trimStartEndWithCounts(locationsToSave, trimDistance: trimDist)
-            locationsToSave = trimmed
-            hrsToSave = Array(hrsToSave.dropFirst(startTrim).dropLast(endTrim))
-            powersToSave = Array(powersToSave.dropFirst(startTrim).dropLast(endTrim))
-        }
+        let locationsToSave = recordedLocations
+        let hrsToSave = recordedHeartRates
+        let powersToSave = recordedPowers
 
         let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
         let rideID = currentRideID ?? UUID()
@@ -1649,60 +1642,6 @@ class WorkoutManager: NSObject, ObservableObject {
             ConnectivityManager.shared.sendRide(summary: summary, trackURL: tempURL)
             self.deleteCheckpointFiles()
         }
-    }
-
-    // MARK: - Ride Privacy
-
-    private func trimStartEnd(_ locations: [CLLocation], trimDistance: Double) -> [CLLocation] {
-        guard locations.count > 2 else { return locations }
-
-        // Find start trim index
-        var startIdx = 0
-        var dist: Double = 0
-        for i in 1..<locations.count {
-            dist += locations[i].distance(from: locations[i - 1])
-            if dist >= trimDistance {
-                startIdx = i
-                break
-            }
-        }
-
-        // Find end trim index
-        var endIdx = locations.count - 1
-        dist = 0
-        for i in stride(from: locations.count - 1, through: 1, by: -1) {
-            dist += locations[i].distance(from: locations[i - 1])
-            if dist >= trimDistance {
-                endIdx = i
-                break
-            }
-        }
-
-        guard startIdx < endIdx else { return [] }
-        return Array(locations[startIdx...endIdx])
-    }
-
-    /// Trim variant that returns the number of points removed from each end
-    private func trimStartEndWithCounts(_ locations: [CLLocation], trimDistance: Double) -> ([CLLocation], Int, Int) {
-        guard locations.count > 2 else { return (locations, 0, 0) }
-
-        var startIdx = 0
-        var dist: Double = 0
-        for i in 1..<locations.count {
-            dist += locations[i].distance(from: locations[i - 1])
-            if dist >= trimDistance { startIdx = i; break }
-        }
-
-        var endIdx = locations.count - 1
-        dist = 0
-        for i in stride(from: locations.count - 1, through: 1, by: -1) {
-            dist += locations[i].distance(from: locations[i - 1])
-            if dist >= trimDistance { endIdx = i; break }
-        }
-
-        guard startIdx < endIdx else { return ([], locations.count, 0) }
-        let endTrim = locations.count - 1 - endIdx
-        return (Array(locations[startIdx...endIdx]), startIdx, endTrim)
     }
 
     // MARK: - Telemetry (Phone Live Activity)

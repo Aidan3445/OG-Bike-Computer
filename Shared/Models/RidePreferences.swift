@@ -99,26 +99,6 @@ enum MapRotation: String, Codable, CaseIterable, Hashable {
     }
 }
 
-// MARK: - Ride Privacy
-
-enum RidePrivacy: String, Codable, CaseIterable, Hashable {
-    case off, trimStartEnd
-
-    var label: String {
-        switch self {
-        case .off: return "Off"
-        case .trimStartEnd: return "Trim Start & End"
-        }
-    }
-
-    var trimDistance: Double {
-        switch self {
-        case .off: return 0
-        case .trimStartEnd: return 200
-        }
-    }
-}
-
 // MARK: - Auto-Pause Preferences
 
 struct AutoPausePreferences: Codable, Equatable, Hashable {
@@ -147,33 +127,6 @@ struct AutoPausePreferences: Codable, Equatable, Hashable {
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         speedThreshold = try c.decodeIfPresent(Double.self, forKey: .speedThreshold) ?? 0.894
         resumeProbeInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .resumeProbeInterval) ?? 15
-    }
-}
-
-// MARK: - Auto-Lap Preferences
-
-struct AutoLapPreferences: Codable, Equatable, Hashable {
-    var enabled: Bool
-    var lapDistance: Double // meters
-    var mode: AlertMode
-
-    static let `default` = AutoLapPreferences(
-        enabled: false,
-        lapDistance: 1609.34, // 1 mile
-        mode: .voiceOnly
-    )
-
-    init(enabled: Bool = false, lapDistance: Double = 1609.34, mode: AlertMode = .voiceOnly) {
-        self.enabled = enabled
-        self.lapDistance = lapDistance
-        self.mode = mode
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        lapDistance = try c.decodeIfPresent(Double.self, forKey: .lapDistance) ?? 1609.34
-        mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceOnly
     }
 }
 
@@ -269,12 +222,10 @@ struct WorkoutTabKey: Codable, Equatable, Hashable, Identifiable {
 
 struct RidePreferences: Codable, Equatable, Hashable {
     var autoPause: AutoPausePreferences
-    var autoLap: AutoLapPreferences
     var gpsAccuracyFloor: GPSAccuracyFloor
     var elevationSmoothing: ElevationSmoothing
     var mapRotation: MapRotation
     var wakeOnAlert: Bool
-    var ridePrivacy: RidePrivacy
     var dynamicGPSOptimization: Bool
     var telemetryRate: TelemetryRate
     var offRouteGraceSamples: Int
@@ -287,12 +238,10 @@ struct RidePreferences: Codable, Equatable, Hashable {
 
     static let `default` = RidePreferences(
         autoPause: .default,
-        autoLap: .default,
         gpsAccuracyFloor: .best,
         elevationSmoothing: .moderate,
         mapRotation: .headingUp,
         wakeOnAlert: true,
-        ridePrivacy: .off,
         dynamicGPSOptimization: true,
         telemetryRate: .standard,
         offRouteGraceSamples: 3,
@@ -304,12 +253,10 @@ struct RidePreferences: Codable, Equatable, Hashable {
 
     init(
         autoPause: AutoPausePreferences = .default,
-        autoLap: AutoLapPreferences = .default,
         gpsAccuracyFloor: GPSAccuracyFloor = .best,
         elevationSmoothing: ElevationSmoothing = .moderate,
         mapRotation: MapRotation = .headingUp,
         wakeOnAlert: Bool = true,
-        ridePrivacy: RidePrivacy = .off,
         dynamicGPSOptimization: Bool = true,
         telemetryRate: TelemetryRate = .standard,
         offRouteGraceSamples: Int = 3,
@@ -319,12 +266,10 @@ struct RidePreferences: Codable, Equatable, Hashable {
         tabOrder: [WorkoutTabKey]? = nil
     ) {
         self.autoPause = autoPause
-        self.autoLap = autoLap
         self.gpsAccuracyFloor = gpsAccuracyFloor
         self.elevationSmoothing = elevationSmoothing
         self.mapRotation = mapRotation
         self.wakeOnAlert = wakeOnAlert
-        self.ridePrivacy = ridePrivacy
         self.dynamicGPSOptimization = dynamicGPSOptimization
         self.telemetryRate = telemetryRate
         self.offRouteGraceSamples = offRouteGraceSamples
@@ -337,12 +282,10 @@ struct RidePreferences: Codable, Equatable, Hashable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         autoPause = try c.decodeIfPresent(AutoPausePreferences.self, forKey: .autoPause) ?? .default
-        autoLap = try c.decodeIfPresent(AutoLapPreferences.self, forKey: .autoLap) ?? .default
         gpsAccuracyFloor = try c.decodeIfPresent(GPSAccuracyFloor.self, forKey: .gpsAccuracyFloor) ?? .best
         elevationSmoothing = try c.decodeIfPresent(ElevationSmoothing.self, forKey: .elevationSmoothing) ?? .moderate
         mapRotation = try c.decodeIfPresent(MapRotation.self, forKey: .mapRotation) ?? .headingUp
         wakeOnAlert = try c.decodeIfPresent(Bool.self, forKey: .wakeOnAlert) ?? true
-        ridePrivacy = try c.decodeIfPresent(RidePrivacy.self, forKey: .ridePrivacy) ?? .off
         dynamicGPSOptimization = try c.decodeIfPresent(Bool.self, forKey: .dynamicGPSOptimization) ?? true
         telemetryRate = try c.decodeIfPresent(TelemetryRate.self, forKey: .telemetryRate) ?? .standard
         offRouteGraceSamples = try c.decodeIfPresent(Int.self, forKey: .offRouteGraceSamples) ?? 3

@@ -211,37 +211,11 @@ struct NavigationAlertSettingsView: View {
 
             if userSettings.settings.navigationAlerts.endOfRouteAlerts.enabled {
                 AlertModePicker(label: "Mode", mode: prefs.endOfRouteAlerts.mode)
-
-                Toggle("Use Split Stats", isOn: prefs.endOfRouteAlerts.useSplitsMetrics)
-
-                if !userSettings.settings.navigationAlerts.endOfRouteAlerts.useSplitsMetrics {
-                    NavigationLink {
-                        SplitMetricPickerView(
-                            metrics: Binding(
-                                get: {
-                                    userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride
-                                        ?? userSettings.settings.navigationAlerts.splitAlerts.metrics
-                                },
-                                set: { userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride = $0 }
-                            ),
-                            userSettings: userSettings
-                        )
-                    } label: {
-                        HStack {
-                            Text("Stats to Read")
-                            Spacer()
-                            let count = (userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride
-                                ?? userSettings.settings.navigationAlerts.splitAlerts.metrics).count
-                            Text("\(count) selected")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
             }
         } header: {
             Label("End-of-Route Readout", systemImage: "flag.checkered")
         } footer: {
-            Text("Reads ride stats once after the route is completed. Defaults to mirroring the split/halfway selection.")
+            Text("Read your ride stats once when you finish the route. Uses the Stats to Read list shared with Split Updates and Halfway.")
         }
     }
 
@@ -290,34 +264,12 @@ struct NavigationAlertSettingsView: View {
             if userSettings.settings.navigationAlerts.waypointAlerts.enabled {
                 AlertModePicker(label: "Mode", mode: prefs.waypointAlerts.mode)
 
-                Toggle("Custom Distances", isOn: prefs.waypointAlerts.useCustomDistances)
-
-                if userSettings.settings.navigationAlerts.waypointAlerts.useCustomDistances {
-                    DistancePicker(
-                        label: "Primary Distance",
-                        meters: prefs.waypointAlerts.primaryApproachDistance,
-                        min: 30.48,    // 100ft
-                        max: 402.336   // 0.25mi
-                    )
-
-                    Toggle("Secondary Approach", isOn: prefs.waypointAlerts.secondaryApproachEnabled)
-
-                    if userSettings.settings.navigationAlerts.waypointAlerts.secondaryApproachEnabled {
-                        DistancePicker(
-                            label: "Secondary Distance",
-                            meters: prefs.waypointAlerts.secondaryApproachDistance,
-                            min: 402.336,  // 0.25mi
-                            max: 3218.69   // 2mi
-                        )
-                    }
-                }
-
                 MaxOffRouteRangeField(meters: prefs.waypointAlerts.maxOffRouteDistance)
             }
         } header: {
             Label("Waypoint Alerts", systemImage: "mappin.and.ellipse")
         } footer: {
-            Text("Announce points of interest along or near the route — e.g. \"in 500ft, pass the world's largest spork\". When custom distances are off, waypoint alerts use the same approach distances as turn alerts.")
+            Text("Announce POIs along the route with a specified max distance from the route. E.g. \"in 500ft (150m) the world's largest spork is 0.5mi (800m) to your right\".")
         }
     }
 
