@@ -180,6 +180,12 @@ final class ConnectivityManager: NSObject, ObservableObject {
     /// Callback when the phone requests to hold the current ride (watchOS only).
     var onHoldRideRequested: (() -> Void)?
 
+    /// Callback when the phone requests a sample haptic preview (watchOS only).
+    /// Receives the raw intensity string from the message (e.g. "light",
+    /// "medium", "strong") so the watch can play a buzz the rider can feel on
+    /// the wrist, matching the setting they just picked.
+    var onSampleHapticRequested: ((String) -> Void)?
+
     /// Callback when the phone requests to continue a held ride (watchOS only).
     /// `summary` is the held ride snapshot from the phone (used to recover if the
     /// watch's local store is missing the entry). The callback MUST invoke the
@@ -387,6 +393,20 @@ extension ConnectivityManager {
     
     func sendHoldRide() {
         sendRideCommand(["type": "holdRide"])
+    }
+
+    /// Fire-and-forget: ask the watch to play a sample haptic matching the
+    /// intensity the rider just picked. Silently drops when the watch is
+    /// unreachable (users will feel it next time they tweak the setting with
+    /// the watch awake).
+    func sendSampleHaptic(intensity: String) {
+        guard WCSession.default.activationState == .activated,
+              WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(
+            ["type": "sampleHaptic", "intensity": intensity],
+            replyHandler: nil,
+            errorHandler: nil
+        )
     }
 
     /// Tell the watch to continue a held ride. The full summary is included in the
@@ -1343,6 +1363,13 @@ extension ConnectivityManager: WCSessionDelegate {
                     self.onHoldRideRequested?()
                 }
                 replyHandler(["held": true])
+                return
+            case "sampleHaptic":
+                let intensity = (message["intensity"] as? String) ?? "medium"
+                DispatchQueue.main.async {
+                    self.onSampleHapticRequested?(intensity)
+                }
+                replyHandler(["played": true])
                 return
             case "continueHeldRide":
                 guard let idStr = message["rideID"] as? String,

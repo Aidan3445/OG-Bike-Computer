@@ -70,9 +70,9 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
 
     static let `default` = TurnAlertPreferences(
         defaultMode: .voiceAndHaptic,
-        primaryApproachDistance: 121.92,  // 400ft
+        primaryApproachDistance: 121.92,  // 400 ft / snaps to 125 m
         secondaryApproachEnabled: false,
-        secondaryApproachDistance: 804.672, // 0.5mi
+        secondaryApproachDistance: 1609.34, // 1 mi / snaps to 1.6 km
         atTurnMode: nil,
         primaryApproachMode: nil,
         secondaryApproachMode: nil,
@@ -120,7 +120,7 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
         defaultMode: AlertMode = .voiceAndHaptic,
         primaryApproachDistance: Double = 121.92,
         secondaryApproachEnabled: Bool = false,
-        secondaryApproachDistance: Double = 804.672,
+        secondaryApproachDistance: Double = 1609.34,
         atTurnMode: AlertMode? = nil,
         primaryApproachMode: AlertMode? = nil,
         secondaryApproachMode: AlertMode? = nil,
@@ -141,7 +141,7 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
         defaultMode = try c.decodeIfPresent(AlertMode.self, forKey: .defaultMode) ?? .voiceAndHaptic
         primaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .primaryApproachDistance) ?? 121.92
         secondaryApproachEnabled = try c.decodeIfPresent(Bool.self, forKey: .secondaryApproachEnabled) ?? false
-        secondaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .secondaryApproachDistance) ?? 804.672
+        secondaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .secondaryApproachDistance) ?? 1609.34
         atTurnMode = try c.decodeIfPresent(AlertMode.self, forKey: .atTurnMode)
         primaryApproachMode = try c.decodeIfPresent(AlertMode.self, forKey: .primaryApproachMode)
         secondaryApproachMode = try c.decodeIfPresent(AlertMode.self, forKey: .secondaryApproachMode)
