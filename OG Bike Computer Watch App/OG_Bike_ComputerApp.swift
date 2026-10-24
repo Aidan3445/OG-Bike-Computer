@@ -65,6 +65,16 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             self.workout.attemptHold()
         }
 
+        ConnectivityManager.shared.onSampleHapticRequested = { intensity in
+            let haptic: WKHapticType
+            switch intensity {
+            case "light":  haptic = .click
+            case "strong": haptic = .notification
+            default:       haptic = .directionUp
+            }
+            WKInterfaceDevice.current().play(haptic)
+        }
+
         ConnectivityManager.shared.onContinueHeldRideRequested = { [weak self] rideID, providedSummary, ack in
             guard let self = self else {
                 ack("Watch app not ready")

@@ -398,20 +398,14 @@ class VoiceNavigator: NSObject, ObservableObject {
         guard prefs.enabled, prefs.mode != .none, !route.pois.isEmpty else { return }
 
         // Tiers descending (largest distance first) so we pick the earliest
-        // tier the rider has just crossed.
+        // tier the rider has just crossed. Waypoint alerts always use the
+        // turn-alert approach distances.
         var tiers: [Double] = []
-        if prefs.useCustomDistances {
-            if prefs.secondaryApproachEnabled {
-                tiers.append(prefs.secondaryApproachDistance)
-            }
-            tiers.append(prefs.primaryApproachDistance)
-        } else {
-            let turn = preferences.turnAlerts
-            if turn.secondaryApproachEnabled {
-                tiers.append(turn.secondaryApproachDistance)
-            }
-            tiers.append(turn.primaryApproachDistance)
+        let turn = preferences.turnAlerts
+        if turn.secondaryApproachEnabled {
+            tiers.append(turn.secondaryApproachDistance)
         }
+        tiers.append(turn.primaryApproachDistance)
         tiers.sort(by: >)
         guard !tiers.isEmpty else { return }
 
@@ -782,12 +776,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         let prefs = preferences.endOfRouteAlerts
         guard prefs.enabled, let wm = workoutManager else { return }
 
-        let metrics: [SplitMetricConfig]
-        if prefs.useSplitsMetrics {
-            metrics = preferences.splitAlerts.metrics
-        } else {
-            metrics = prefs.metricsOverride ?? preferences.splitAlerts.metrics
-        }
+        let metrics = preferences.splitAlerts.metrics
         guard !metrics.isEmpty else { return }
 
         let rideStats = wm.currentRideStats()

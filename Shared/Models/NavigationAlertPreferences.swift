@@ -70,9 +70,9 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
 
     static let `default` = TurnAlertPreferences(
         defaultMode: .voiceAndHaptic,
-        primaryApproachDistance: 121.92,  // 400ft
+        primaryApproachDistance: 121.92,  // 400 ft / snaps to 125 m
         secondaryApproachEnabled: false,
-        secondaryApproachDistance: 804.672, // 0.5mi
+        secondaryApproachDistance: 1609.34, // 1 mi / snaps to 1.6 km
         atTurnMode: nil,
         primaryApproachMode: nil,
         secondaryApproachMode: nil,
@@ -120,7 +120,7 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
         defaultMode: AlertMode = .voiceAndHaptic,
         primaryApproachDistance: Double = 121.92,
         secondaryApproachEnabled: Bool = false,
-        secondaryApproachDistance: Double = 804.672,
+        secondaryApproachDistance: Double = 1609.34,
         atTurnMode: AlertMode? = nil,
         primaryApproachMode: AlertMode? = nil,
         secondaryApproachMode: AlertMode? = nil,
@@ -141,7 +141,7 @@ struct TurnAlertPreferences: Codable, Equatable, Hashable {
         defaultMode = try c.decodeIfPresent(AlertMode.self, forKey: .defaultMode) ?? .voiceAndHaptic
         primaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .primaryApproachDistance) ?? 121.92
         secondaryApproachEnabled = try c.decodeIfPresent(Bool.self, forKey: .secondaryApproachEnabled) ?? false
-        secondaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .secondaryApproachDistance) ?? 804.672
+        secondaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .secondaryApproachDistance) ?? 1609.34
         atTurnMode = try c.decodeIfPresent(AlertMode.self, forKey: .atTurnMode)
         primaryApproachMode = try c.decodeIfPresent(AlertMode.self, forKey: .primaryApproachMode)
         secondaryApproachMode = try c.decodeIfPresent(AlertMode.self, forKey: .secondaryApproachMode)
@@ -392,9 +392,9 @@ enum AlertAudioSource: String, Codable, CaseIterable, Hashable {
 
     var detail: String {
         switch self {
-        case .auto:  return "Watch headphones, otherwise iPhone audio"
-        case .watch: return "Always play on the watch"
-        case .phone: return "Always play on the iPhone"
+        case .auto:  return "Prefer headphones"
+        case .watch: return "Only built-in speakers"
+        case .phone: return "Built-in or headphones"
         }
     }
 }
@@ -416,59 +416,39 @@ struct AudioOutputPreferences: Codable, Equatable, Hashable {
 
 // MARK: - End-of-Route Alert Preferences
 
-/// Reads back ride stats once the route is completed. Defaults to mirroring
-/// the halfway-alert metric list; `useSplitsMetrics = false` lets the rider
-/// override with a custom selection (`metricsOverride`).
+/// Reads back ride stats once the route is completed. Always uses the shared
+/// Stats to Read list (same list used by Split Updates and Halfway).
 struct EndOfRouteAlertPreferences: Codable, Equatable, Hashable {
     var enabled: Bool
     var mode: AlertMode
-    /// When true, use the same metrics the rider picked for split/halfway.
-    var useSplitsMetrics: Bool
-    /// Used only when `useSplitsMetrics` is false. Nil falls back to splits metrics.
-    var metricsOverride: [SplitMetricConfig]?
 
     static let `default` = EndOfRouteAlertPreferences(
         enabled: true,
-        mode: .voiceOnly,
-        useSplitsMetrics: true,
-        metricsOverride: nil
+        mode: .voiceOnly
     )
 
     init(
         enabled: Bool = true,
-        mode: AlertMode = .voiceOnly,
-        useSplitsMetrics: Bool = true,
-        metricsOverride: [SplitMetricConfig]? = nil
+        mode: AlertMode = .voiceOnly
     ) {
         self.enabled = enabled
         self.mode = mode
-        self.useSplitsMetrics = useSplitsMetrics
-        self.metricsOverride = metricsOverride
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceOnly
-        useSplitsMetrics = try c.decodeIfPresent(Bool.self, forKey: .useSplitsMetrics) ?? true
-        let raw = try c.decodeIfPresent([SplitMetricConfig].self, forKey: .metricsOverride)
-        metricsOverride = raw?.filter { voiceReadableMetrics.contains($0.metric) }
     }
 }
 
 // MARK: - Waypoint / POI Alert Preferences
 
 /// Announce when approaching POI/waypoints along (or near) the route.
-/// Defaults to using the same approach distances as turn alerts;
-/// `useCustomDistances` lets the user override them for waypoints alone.
+/// Uses the same approach distances as turn alerts.
 struct WaypointAlertPreferences: Codable, Equatable, Hashable {
     var enabled: Bool
     var mode: AlertMode
-    /// When true, use the custom distances below; when false, mirror turn alert distances.
-    var useCustomDistances: Bool
-    var primaryApproachDistance: Double      // meters
-    var secondaryApproachEnabled: Bool
-    var secondaryApproachDistance: Double    // meters
     /// Maximum off-route distance (meters) before suppressing a POI alert.
     /// Beyond this the POI is considered too far away to be relevant.
     var maxOffRouteDistance: Double
@@ -476,28 +456,16 @@ struct WaypointAlertPreferences: Codable, Equatable, Hashable {
     static let `default` = WaypointAlertPreferences(
         enabled: true,
         mode: .voiceOnly,
-        useCustomDistances: false,
-        primaryApproachDistance: 152.4,         // 500ft
-        secondaryApproachEnabled: false,
-        secondaryApproachDistance: 804.672,     // 0.5mi
         maxOffRouteDistance: 4828.03            // 3 miles
     )
 
     init(
         enabled: Bool = true,
         mode: AlertMode = .voiceOnly,
-        useCustomDistances: Bool = false,
-        primaryApproachDistance: Double = 152.4,
-        secondaryApproachEnabled: Bool = false,
-        secondaryApproachDistance: Double = 804.672,
         maxOffRouteDistance: Double = 4828.03
     ) {
         self.enabled = enabled
         self.mode = mode
-        self.useCustomDistances = useCustomDistances
-        self.primaryApproachDistance = primaryApproachDistance
-        self.secondaryApproachEnabled = secondaryApproachEnabled
-        self.secondaryApproachDistance = secondaryApproachDistance
         self.maxOffRouteDistance = maxOffRouteDistance
     }
 
@@ -505,10 +473,6 @@ struct WaypointAlertPreferences: Codable, Equatable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         mode = try c.decodeIfPresent(AlertMode.self, forKey: .mode) ?? .voiceOnly
-        useCustomDistances = try c.decodeIfPresent(Bool.self, forKey: .useCustomDistances) ?? false
-        primaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .primaryApproachDistance) ?? 152.4
-        secondaryApproachEnabled = try c.decodeIfPresent(Bool.self, forKey: .secondaryApproachEnabled) ?? false
-        secondaryApproachDistance = try c.decodeIfPresent(Double.self, forKey: .secondaryApproachDistance) ?? 804.672
         maxOffRouteDistance = try c.decodeIfPresent(Double.self, forKey: .maxOffRouteDistance) ?? 4828.03
     }
 }

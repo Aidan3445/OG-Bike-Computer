@@ -9,6 +9,7 @@ import SwiftUI
 
 struct PhoneAlertSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    @State private var showResetConfirm = false
 
     private var prefs: Binding<PhoneAlertPreferences> {
         $userSettings.settings.phoneAlerts
@@ -32,7 +33,7 @@ struct PhoneAlertSettingsView: View {
             } header: {
                 Text("Live Activity")
             } footer: {
-                Text("The Live Activity is shown on the Lock Screen and Dynamic Island whenever a ride is in progress. Pick the six stats that appear in its lock-screen grid.")
+                Text("Shown on the Lock Screen and Dynamic Island whenever a ride is in progress. Pick the six stats that appear in the lock-screen grid. Safe to dismiss from the Lock Screen: your ride keeps recording on the watch.")
             }
 
             Section {
@@ -46,12 +47,20 @@ struct PhoneAlertSettingsView: View {
             if userSettings.settings.phoneAlerts != .default {
                 Section {
                     Button("Reset to Defaults", role: .destructive) {
-                        userSettings.settings.phoneAlerts = .default
+                        showResetConfirm = true
                     }
                 }
             }
         }
-        .settingsPageTitle("Live Activity", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Live Activity", preset: userSettings.activePresetName)
+        .alert("Reset Live Activity to Defaults?", isPresented: $showResetConfirm) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.phoneAlerts = .default
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Stat slots, fallback, Dynamic Island, and turn notifications will be restored to their defaults.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

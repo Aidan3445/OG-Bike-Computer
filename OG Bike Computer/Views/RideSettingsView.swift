@@ -11,11 +11,7 @@ struct RideSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
-
-    /// Phone-only — doesn't ride along to the watch, so we keep it in
-    /// `@AppStorage` rather than `RidePreferences`. Read by
-    /// `RouteImportCoordinator.handle(_:)` via the same defaults key.
-    @AppStorage("autoSendRoutesToWatch") private var autoSendRoutesToWatch: Bool = false
+    @State private var showResetConfirm = false
 
     private var prefs: Binding<RidePreferences> {
         $userSettings.settings.ridePreferences
@@ -25,23 +21,26 @@ struct RideSettingsView: View {
         Form {
             tabOrderSection
             autoPauseSection
-            gpsSensorsSection
-            displaySection
-            routeSharingSection
-            alertsSection
-            privacySection
             checkpointSection
             phoneAlertsSection
 
             if userSettings.settings.ridePreferences != .default {
                 Section {
                     Button("Reset Ride Settings to Defaults", role: .destructive) {
-                        userSettings.settings.ridePreferences = .default
+                        showResetConfirm = true
                     }
                 }
             }
         }
-        .settingsPageTitle("Ride Settings", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Ride Settings", preset: userSettings.activePresetName)
+        .alert("Reset Ride Settings to Defaults?", isPresented: $showResetConfirm) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.ridePreferences = .default
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All ride settings will be restored to their defaults.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
@@ -89,90 +88,7 @@ struct RideSettingsView: View {
         } header: {
             Label("Auto-Pause", systemImage: "pause.circle")
         } footer: {
-            Text("Automatically pause the ride when speed drops below the threshold. While paused, the watch briefly wakes GPS at the resume check interval to detect movement — shorter intervals resume faster but use more battery.")
-        }
-    }
-
-    // MARK: - GPS & Sensors
-
-    @ViewBuilder
-    private var gpsSensorsSection: some View {
-        Section {
-            Picker("GPS Accuracy", selection: prefs.gpsAccuracyFloor) {
-                ForEach(GPSAccuracyFloor.allCases, id: \.self) { floor in
-                    Text(floor.label).tag(floor)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Picker("Elevation Smoothing", selection: prefs.elevationSmoothing) {
-                ForEach(ElevationSmoothing.allCases, id: \.self) { level in
-                    Text(level.label).tag(level)
-                }
-            }
-        } header: {
-            Label("GPS & Sensors", systemImage: "location.circle")
-        } footer: {
-            Text("GPS accuracy sets the minimum quality floor. The app still dynamically reduces GPS near turns to save battery. Higher elevation smoothing filters noise but may miss small hills.")
-        }
-    }
-
-    // MARK: - Display
-
-    @ViewBuilder
-    private var displaySection: some View {
-        Section {
-            Picker("Map Rotation", selection: prefs.mapRotation) {
-                ForEach(MapRotation.allCases, id: \.self) { rotation in
-                    Text(rotation.label).tag(rotation)
-                }
-            }
-            .pickerStyle(.segmented)
-        } header: {
-            Label("Display", systemImage: "map")
-        }
-    }
-
-    // MARK: - Route Sharing
-
-    @ViewBuilder
-    private var routeSharingSection: some View {
-        Section {
-            Toggle("Auto-Send to Watch", isOn: $autoSendRoutesToWatch)
-        } header: {
-            Label("Route Sharing", systemImage: "applewatch.and.arrow.forward")
-        } footer: {
-            Text("When on, every newly imported route is automatically queued for transfer to the watch.")
-        }
-    }
-
-    // MARK: - Alerts
-
-    @ViewBuilder
-    private var alertsSection: some View {
-        Section {
-            Toggle("Wake Screen on Alert", isOn: prefs.wakeOnAlert)
-        } header: {
-            Label("Alerts", systemImage: "bell.badge")
-        } footer: {
-            Text("Sends a time-sensitive notification to light up the watch display when a navigation alert fires.")
-        }
-    }
-
-    // MARK: - Privacy
-
-    @ViewBuilder
-    private var privacySection: some View {
-        Section {
-            Picker("Ride Privacy", selection: prefs.ridePrivacy) {
-                ForEach(RidePrivacy.allCases, id: \.self) { privacy in
-                    Text(privacy.label).tag(privacy)
-                }
-            }
-        } header: {
-            Label("Privacy", systemImage: "eye.slash")
-        } footer: {
-            Text("Removes approximately 200m from the start and end of your recorded track to hide your home location.")
+            Text("Automatically pause the ride when speed drops below the threshold. While paused, the watch briefly wakes GPS at the resume check interval to detect movement. Shorter intervals resume faster but use more battery.")
         }
     }
 
@@ -211,7 +127,7 @@ struct RideSettingsView: View {
                 }
             }
         } header: {
-            Label("Phone", systemImage: "iphone")
+            Label("Live Activity", systemImage: "iphone")
         } footer: {
             Text("Customize the ride Live Activity stats and optional turn notifications on your iPhone.")
         }

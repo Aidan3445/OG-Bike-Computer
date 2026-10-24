@@ -11,6 +11,22 @@ struct MapCustomizationView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject private var unitState = UnitState.shared
     @State private var showProfileImport = false
+    @State private var showResetConfirm = false
+
+    private var hasNonDefaultRouteScreenSettings: Bool {
+        let ride = userSettings.settings.ridePreferences
+        return ride.mapScreen != .default
+            || ride.elevationScreen != .default
+            || ride.mapRotation != RidePreferences.default.mapRotation
+            || ride.elevationSmoothing != RidePreferences.default.elevationSmoothing
+    }
+
+    private func resetRouteScreens() {
+        userSettings.settings.ridePreferences.mapScreen = .default
+        userSettings.settings.ridePreferences.elevationScreen = .default
+        userSettings.settings.ridePreferences.mapRotation = RidePreferences.default.mapRotation
+        userSettings.settings.ridePreferences.elevationSmoothing = RidePreferences.default.elevationSmoothing
+    }
     
     @Environment(\.colorScheme) var colorScheme
 
@@ -18,13 +34,13 @@ struct MapCustomizationView: View {
         $userSettings.settings.ridePreferences.mapScreen
     }
 
-    /// Map configs from other profiles available for import, excluding any identical to the current config
-    private var otherProfileConfigs: [(profileName: String, config: MapScreenConfig)] {
+    /// Map configs from other presets available for import, excluding any identical to the current config
+    private var otherPresetConfigs: [(presetName: String, config: MapScreenConfig)] {
         guard let activeID = userSettings.activePresetID else { return [] }
         let current = userSettings.settings.ridePreferences.mapScreen
         return userSettings.presets
             .filter { $0.id != activeID }
-            .map { (profileName: $0.name, config: $0.settings.ridePreferences.mapScreen) }
+            .map { (presetName: $0.name, config: $0.settings.ridePreferences.mapScreen) }
             .filter { $0.config != current }
     }
 
@@ -32,6 +48,7 @@ struct MapCustomizationView: View {
         Form {
             previewSection
             mapDetailSection
+            mapRotationSection
             statsSection
             displaySection
             zoomSection
@@ -42,9 +59,9 @@ struct MapCustomizationView: View {
             elevationScreenSection
             resetSection
         }
-        .settingsPageTitle("Route Screens", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Route Screens", preset: userSettings.activePresetName)
         .toolbar {
-            if !otherProfileConfigs.isEmpty {
+            if !otherPresetConfigs.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showProfileImport = true
@@ -63,11 +80,19 @@ struct MapCustomizationView: View {
         }
         .sheet(isPresented: $showProfileImport) {
             MapConfigImportSheet(
-                configs: otherProfileConfigs,
+                configs: otherPresetConfigs,
                 onImport: { imported in
                     userSettings.settings.ridePreferences.mapScreen = imported
                 }
             )
+        }
+        .alert("Reset Route Screens to Defaults?", isPresented: $showResetConfirm) {
+            Button("Reset", role: .destructive) {
+                resetRouteScreens()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Map, elevation, rotation, and smoothing settings will be restored to their defaults.")
         }
     }
 
@@ -154,7 +179,23 @@ struct MapCustomizationView: View {
         }
     }
 
-    // MARK: - Display
+    // MARK: - Map Rotation
+
+    @ViewBuilder
+    private var mapRotationSection: some View {
+        Section {
+            Picker("Map Rotation", selection: $userSettings.settings.ridePreferences.mapRotation) {
+                ForEach(MapRotation.allCases, id: \.self) { rotation in
+                    Text(rotation.label).tag(rotation)
+                }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Label("Map Rotation", systemImage: "location.north.line")
+        }
+    }
+
+    // MARK: - Map Buttons
 
     @ViewBuilder
     private var displaySection: some View {
@@ -163,7 +204,7 @@ struct MapCustomizationView: View {
             Toggle("Compass Direction", isOn: config.showHeading)
             Toggle("Repeat Turn Alert Button", isOn: config.showRepeatAlertButton)
         } header: {
-            Label("Display", systemImage: "map")
+            Label("Map Buttons", systemImage: "map")
         } footer: {
             Text("The full route toggle lets you switch between zoomed breadcrumb and full route views mid-ride. Compass direction shows your heading (N, NE, E, etc.). The repeat turn alert button (waveform icon) replays the upcoming turn announcement.")
         }
@@ -189,29 +230,53 @@ struct MapCustomizationView: View {
         return "\(Int(meters))m"
     }
 
+    /// Imperial-native closest-zoom options (meters): 300 / 500 / 650 / 1000 / 1300 ft.
+    private var closestZoomImperialOptions: [Double] {
+        [300.0 / 3.28084, 500.0 / 3.28084, 650.0 / 3.28084, 1000.0 / 3.28084, 1300.0 / 3.28084]
+    }
+    /// Imperial-native farthest-zoom options (meters): 0.5 / 0.75 / 1 / 1.5 / 2 mi.
+    private var farthestZoomImperialOptions: [Double] {
+        [0.5 * 1609.34, 0.75 * 1609.34, 1 * 1609.34, 1.5 * 1609.34, 2 * 1609.34]
+    }
+    private var closestZoomMetricOptions: [Double] { [100, 150, 200, 300, 400] }
+    private var farthestZoomMetricOptions: [Double] { [800, 1200, 1600, 2400, 3200] }
+
+    /// Snap a stored meter value to the closest option in the active option set.
+    private func snapToClosest(_ value: Double, in options: [Double]) -> Double {
+        options.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
+    }
+
     @ViewBuilder
     private var zoomSection: some View {
+        let closestOptions = isImperial ? closestZoomImperialOptions : closestZoomMetricOptions
+        let farthestOptions = isImperial ? farthestZoomImperialOptions : farthestZoomMetricOptions
+
+        let closestBinding = Binding<Double>(
+            get: { snapToClosest(userSettings.settings.ridePreferences.mapScreen.zoomMin, in: closestOptions) },
+            set: { userSettings.settings.ridePreferences.mapScreen.zoomMin = $0 }
+        )
+        let farthestBinding = Binding<Double>(
+            get: { snapToClosest(userSettings.settings.ridePreferences.mapScreen.zoomMax, in: farthestOptions) },
+            set: { userSettings.settings.ridePreferences.mapScreen.zoomMax = $0 }
+        )
+
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Closest Zoom")
-                Picker("Closest Zoom", selection: config.zoomMin) {
-                    Text(zoomLabel(100)).tag(100.0)
-                    Text(zoomLabel(150)).tag(150.0)
-                    Text(zoomLabel(200)).tag(200.0)
-                    Text(zoomLabel(300)).tag(300.0)
-                    Text(zoomLabel(400)).tag(400.0)
+                Picker("Closest Zoom", selection: closestBinding) {
+                    ForEach(closestOptions, id: \.self) { meters in
+                        Text(zoomLabel(meters)).tag(meters)
+                    }
                 }
                 .pickerStyle(.segmented)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Farthest Zoom")
-                Picker("Farthest Zoom", selection: config.zoomMax) {
-                    Text(zoomLabel(800)).tag(800.0)
-                    Text(zoomLabel(1200)).tag(1200.0)
-                    Text(zoomLabel(1600)).tag(1600.0)
-                    Text(zoomLabel(2400)).tag(2400.0)
-                    Text(zoomLabel(3200)).tag(3200.0)
+                Picker("Farthest Zoom", selection: farthestBinding) {
+                    ForEach(farthestOptions, id: \.self) { meters in
+                        Text(zoomLabel(meters)).tag(meters)
+                    }
                 }
                 .pickerStyle(.segmented)
             }
@@ -362,12 +427,18 @@ struct MapCustomizationView: View {
 
                 Toggle("Show Total Gain Readout", isOn: elevationConfig.showGainLossReadout)
                 Toggle("Show Grade Overlay", isOn: elevationConfig.showGrade)
+
+                Picker("Elevation Smoothing", selection: $userSettings.settings.ridePreferences.elevationSmoothing) {
+                    ForEach(ElevationSmoothing.allCases, id: \.self) { level in
+                        Text(level.label).tag(level)
+                    }
+                }
             }
         } header: {
             Label("Elevation Screen", systemImage: "mountain.2")
         } footer: {
             if userSettings.settings.ridePreferences.elevationScreen.enabled {
-                Text("Adds an elevation profile tab to the watch when riding a route with elevation data. \"Ahead\" mode shows the next stretch of route only.")
+                Text("Adds an elevation profile tab to the watch when riding a route with elevation data. \"Ahead\" mode shows the next stretch of route only. Smoothing filters elevation noise and affects the chart, the total gain readout, and the grade overlay.")
             } else {
                 Text("Elevation screen is hidden from the watch.")
             }
@@ -378,10 +449,10 @@ struct MapCustomizationView: View {
 
     @ViewBuilder
     private var resetSection: some View {
-        if userSettings.settings.ridePreferences.mapScreen != .default {
+        if hasNonDefaultRouteScreenSettings {
             Section {
-                Button("Reset Map Settings to Defaults", role: .destructive) {
-                    userSettings.settings.ridePreferences.mapScreen = .default
+                Button("Reset Route Screens to Defaults", role: .destructive) {
+                    showResetConfirm = true
                 }
             }
         }
@@ -795,7 +866,7 @@ struct MapScreenPreview: View {
 // MARK: - Map Config Import Sheet
 
 struct MapConfigImportSheet: View {
-    let configs: [(profileName: String, config: MapScreenConfig)]
+    let configs: [(presetName: String, config: MapScreenConfig)]
     let onImport: (MapScreenConfig) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -811,7 +882,7 @@ struct MapConfigImportSheet: View {
                             VStack(spacing: 8) {
                                 MapScreenPreview(config: item.config)
 
-                                Text(item.profileName)
+                                Text(item.presetName)
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
 

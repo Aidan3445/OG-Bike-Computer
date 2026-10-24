@@ -115,7 +115,7 @@ struct RideControlView: View {
             Button("Keep Changes") {
                 userSettings.clearRideTracking()
             }
-            Button("Update \(userSettings.activeProfileName)") {
+            Button("Update \(userSettings.activePresetName)") {
                 userSettings.clearRideTracking()
             }
             Button("Revert to Original", role: .destructive) {

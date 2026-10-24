@@ -12,7 +12,9 @@ import UIKit
 
 struct NavigationAlertSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
+    @State private var showResetConfirm = false
 
     private var prefs: Binding<NavigationAlertPreferences> {
         $userSettings.settings.navigationAlerts
@@ -21,23 +23,31 @@ struct NavigationAlertSettingsView: View {
     var body: some View {
         Form {
             turnAlertsSection
-            navigationEventsSection
             waypointAlertsSection
-            splitAlertsSection
-            endOfRouteAlertsSection
+            progressUpdatesSection
+            routeStatusSection
             autoPauseAlertsSection
             audioOutputSection
             hapticsSection
+            watchDisplaySection
 
             if userSettings.settings.navigationAlerts != .default {
                 Section {
                     Button("Reset Alerts to Defaults", role: .destructive) {
-                        userSettings.settings.navigationAlerts = .default
+                        showResetConfirm = true
                     }
                 }
             }
         }
-        .settingsPageTitle("Alerts", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Alerts", preset: userSettings.activePresetName)
+        .alert("Reset Alerts to Defaults?", isPresented: $showResetConfirm) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.navigationAlerts = .default
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All alert settings will be restored to their defaults.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
@@ -54,7 +64,7 @@ struct NavigationAlertSettingsView: View {
     @ViewBuilder
     private var turnAlertsSection: some View {
         Section {
-            AlertModePicker(label: "Default Mode", mode: prefs.turnAlerts.defaultMode)
+            AlertModePicker(label: "Alert Style", mode: prefs.turnAlerts.defaultMode)
         } header: {
             Label("Turn Alerts", systemImage: "arrow.triangle.turn.up.right.diamond")
         }
@@ -79,8 +89,8 @@ struct NavigationAlertSettingsView: View {
                 DistancePicker(
                     label: "Secondary Distance",
                     meters: prefs.turnAlerts.secondaryApproachDistance,
-                    min: 804.672,  // 0.5mi / 750m
-                    max: 3218.69   // 2mi / 3km
+                    min: 800,      // 0.5 mi / 800 m
+                    max: 3218.69   // 2 mi / 3 km
                 )
             }
         } header: {
@@ -112,11 +122,28 @@ struct NavigationAlertSettingsView: View {
         }
     }
 
-    // MARK: - Navigation Events
+    // MARK: - Progress Updates (stat-reading events)
 
     @ViewBuilder
-    private var navigationEventsSection: some View {
+    private var progressUpdatesSection: some View {
         Section {
+            NavigationLink {
+                SplitMetricPickerView(metrics: prefs.splitAlerts.metrics, userSettings: userSettings)
+            } label: {
+                HStack {
+                    Text("Stats to Read")
+                    Spacer()
+                    Text("\(userSettings.settings.navigationAlerts.splitAlerts.metrics.count) selected")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Toggle("Split Updates", isOn: prefs.splitAlerts.enabled)
+            if userSettings.settings.navigationAlerts.splitAlerts.enabled {
+                AlertModePicker(label: "Split Mode", mode: prefs.splitAlerts.mode)
+                SplitDistancePicker(meters: prefs.splitAlerts.splitDistance)
+            }
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("Halfway")
                 Picker("Halfway", selection: prefs.navigationEvents.halfwayAlert) {
@@ -127,6 +154,22 @@ struct NavigationAlertSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
+            Toggle("End-of-Route Readout", isOn: prefs.endOfRouteAlerts.enabled)
+            if userSettings.settings.navigationAlerts.endOfRouteAlerts.enabled {
+                AlertModePicker(label: "End-of-Route Mode", mode: prefs.endOfRouteAlerts.mode)
+            }
+        } header: {
+            Label("Progress Updates", systemImage: "stopwatch")
+        } footer: {
+            Text("Read your ride stats at key moments. Split, Halfway, and End-of-Route all use the stats you pick in Stats to Read.")
+        }
+    }
+
+    // MARK: - Route Status (non-stat events)
+
+    @ViewBuilder
+    private var routeStatusSection: some View {
+        Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Off Route")
                 Picker("Off Route", selection: prefs.navigationEvents.offRouteAlert) {
@@ -136,6 +179,13 @@ struct NavigationAlertSettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
+
+            DistancePicker(
+                label: "Off-Route Threshold",
+                meters: prefs.navigationEvents.offRouteThreshold,
+                min: 30,   // ~100ft / 30m
+                max: 300   // ~1000ft / 300m
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Back on Route")
@@ -157,91 +207,9 @@ struct NavigationAlertSettingsView: View {
                 .pickerStyle(.segmented)
             }
         } header: {
-            Label("Navigation Events", systemImage: "location.fill")
-        }
-
-        Section {
-            DistancePicker(
-                label: "Off-Route Threshold",
-                meters: prefs.navigationEvents.offRouteThreshold,
-                min: 30,   // ~100ft / 30m
-                max: 300   // ~1000ft / 300m
-            )
+            Label("Route Status", systemImage: "location.fill")
         } footer: {
-            Text("How far from the route before you're considered off-route.")
-        }
-    }
-
-    // MARK: - Split Alerts
-
-    @ViewBuilder
-    private var splitAlertsSection: some View {
-        Section {
-            Toggle("Split Updates", isOn: prefs.splitAlerts.enabled)
-
-            if userSettings.settings.navigationAlerts.splitAlerts.enabled {
-                AlertModePicker(label: "Mode", mode: prefs.splitAlerts.mode)
-
-                SplitDistancePicker(meters: prefs.splitAlerts.splitDistance)
-
-                NavigationLink {
-                    SplitMetricPickerView(metrics: prefs.splitAlerts.metrics, userSettings: userSettings)
-                } label: {
-                    HStack {
-                        Text("Stats to Read")
-                        Spacer()
-                        Text("\(userSettings.settings.navigationAlerts.splitAlerts.metrics.count) selected")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        } header: {
-            Label("Split Updates", systemImage: "stopwatch")
-        } footer: {
-            Text("Announce ride stats at regular distance intervals. Interrupted by turn alerts.")
-        }
-    }
-
-    // MARK: - End of Route Alerts
-
-    @ViewBuilder
-    private var endOfRouteAlertsSection: some View {
-        Section {
-            Toggle("End-of-Route Readout", isOn: prefs.endOfRouteAlerts.enabled)
-
-            if userSettings.settings.navigationAlerts.endOfRouteAlerts.enabled {
-                AlertModePicker(label: "Mode", mode: prefs.endOfRouteAlerts.mode)
-
-                Toggle("Use Split Stats", isOn: prefs.endOfRouteAlerts.useSplitsMetrics)
-
-                if !userSettings.settings.navigationAlerts.endOfRouteAlerts.useSplitsMetrics {
-                    NavigationLink {
-                        SplitMetricPickerView(
-                            metrics: Binding(
-                                get: {
-                                    userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride
-                                        ?? userSettings.settings.navigationAlerts.splitAlerts.metrics
-                                },
-                                set: { userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride = $0 }
-                            ),
-                            userSettings: userSettings
-                        )
-                    } label: {
-                        HStack {
-                            Text("Stats to Read")
-                            Spacer()
-                            let count = (userSettings.settings.navigationAlerts.endOfRouteAlerts.metricsOverride
-                                ?? userSettings.settings.navigationAlerts.splitAlerts.metrics).count
-                            Text("\(count) selected")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-        } header: {
-            Label("End-of-Route Readout", systemImage: "flag.checkered")
-        } footer: {
-            Text("Reads ride stats once after the route is completed. Defaults to mirroring the split/halfway selection.")
+            Text("Alerts for route position changes.")
         }
     }
 
@@ -249,30 +217,53 @@ struct NavigationAlertSettingsView: View {
 
     @ViewBuilder
     private var autoPauseAlertsSection: some View {
+        let autoPauseEnabled = userSettings.settings.ridePreferences.autoPause.enabled
+
         Section {
-            Toggle("Auto-Pause Alerts", isOn: prefs.autoPauseAlerts.enabled)
-
-            if userSettings.settings.navigationAlerts.autoPauseAlerts.enabled {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Paused")
-                    Picker("Paused", selection: prefs.autoPauseAlerts.pauseMode) {
-                        ForEach(AlertMode.allCases, id: \.self) { m in
-                            Text(m.shortLabel).tag(m)
+            if !autoPauseEnabled {
+                NavigationLink {
+                    RideSettingsView(userSettings: userSettings, metricConfig: metricConfig)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-Pause is off")
+                                .font(.subheadline.weight(.medium))
+                            Text("Turn it on in Ride Settings to enable these alerts.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .pickerStyle(.segmented)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Resumed")
-                    Picker("Resumed", selection: prefs.autoPauseAlerts.resumeMode) {
-                        ForEach(AlertMode.allCases, id: \.self) { m in
-                            Text(m.shortLabel).tag(m)
-                        }
-                    }
-                    .pickerStyle(.segmented)
                 }
             }
+
+            Group {
+                Toggle("Auto-Pause Alerts", isOn: prefs.autoPauseAlerts.enabled)
+
+                if userSettings.settings.navigationAlerts.autoPauseAlerts.enabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Paused")
+                        Picker("Paused", selection: prefs.autoPauseAlerts.pauseMode) {
+                            ForEach(AlertMode.allCases, id: \.self) { m in
+                                Text(m.shortLabel).tag(m)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Resumed")
+                        Picker("Resumed", selection: prefs.autoPauseAlerts.resumeMode) {
+                            ForEach(AlertMode.allCases, id: \.self) { m in
+                                Text(m.shortLabel).tag(m)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+            }
+            .disabled(!autoPauseEnabled)
         } header: {
             Label("Auto-Pause Alerts", systemImage: "pause.circle")
         } footer: {
@@ -290,34 +281,12 @@ struct NavigationAlertSettingsView: View {
             if userSettings.settings.navigationAlerts.waypointAlerts.enabled {
                 AlertModePicker(label: "Mode", mode: prefs.waypointAlerts.mode)
 
-                Toggle("Custom Distances", isOn: prefs.waypointAlerts.useCustomDistances)
-
-                if userSettings.settings.navigationAlerts.waypointAlerts.useCustomDistances {
-                    DistancePicker(
-                        label: "Primary Distance",
-                        meters: prefs.waypointAlerts.primaryApproachDistance,
-                        min: 30.48,    // 100ft
-                        max: 402.336   // 0.25mi
-                    )
-
-                    Toggle("Secondary Approach", isOn: prefs.waypointAlerts.secondaryApproachEnabled)
-
-                    if userSettings.settings.navigationAlerts.waypointAlerts.secondaryApproachEnabled {
-                        DistancePicker(
-                            label: "Secondary Distance",
-                            meters: prefs.waypointAlerts.secondaryApproachDistance,
-                            min: 402.336,  // 0.25mi
-                            max: 3218.69   // 2mi
-                        )
-                    }
-                }
-
                 MaxOffRouteRangeField(meters: prefs.waypointAlerts.maxOffRouteDistance)
             }
         } header: {
             Label("Waypoint Alerts", systemImage: "mappin.and.ellipse")
         } footer: {
-            Text("Announce points of interest along or near the route — e.g. \"in 500ft, pass the world's largest spork\". When custom distances are off, waypoint alerts use the same approach distances as turn alerts.")
+            Text("Announce POIs along the route with a specified max distance from the route. E.g. \"in 500ft (150m) the world's largest spork is 0.5mi (800m) to your right\".")
         }
     }
 
@@ -333,12 +302,9 @@ struct NavigationAlertSettingsView: View {
             }
             .pickerStyle(.segmented)
             .onChange(of: prefs.haptics.intensity.wrappedValue) { _, newValue in
-                let style: UIImpactFeedbackGenerator.FeedbackStyle = switch newValue {
-                case .light:  .light
-                case .medium: .medium
-                case .strong: .heavy
-                }
-                UIImpactFeedbackGenerator(style: style).impactOccurred()
+                // Preview the haptic on the WATCH (that's the device the
+                // setting actually affects). Phone preview was misleading.
+                ConnectivityManager.shared.sendSampleHaptic(intensity: newValue.rawValue)
             }
         } header: {
             Label("Haptic Feedback", systemImage: "hand.point.up.braille")
@@ -364,8 +330,19 @@ struct NavigationAlertSettingsView: View {
                 .foregroundStyle(.secondary)
         } header: {
             Label("Audio Source", systemImage: "speaker.wave.2")
+        }
+    }
+
+    // MARK: - Watch Display
+
+    @ViewBuilder
+    private var watchDisplaySection: some View {
+        Section {
+            Toggle("Wake Screen on Alert", isOn: $userSettings.settings.ridePreferences.wakeOnAlert)
+        } header: {
+            Label("Watch Display", systemImage: "applewatch")
         } footer: {
-            Text("Auto plays through headphones if connected to the watch, otherwise the phone, otherwise the watch speaker. For nicer voices, install a Premium voice via Settings → Accessibility → Spoken Content → Voices → English.")
+            Text("Sends a time-sensitive notification to light up the watch display when a navigation alert fires.")
         }
     }
 }
@@ -405,6 +382,12 @@ private struct MaxOffRouteRangeField: View {
                 }
                 .onChange(of: focused) { _, isFocused in
                     if !isFocused { commit() }
+                }
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { focused = false }
+                    }
                 }
             Text(unitLabel)
                 .foregroundStyle(.secondary)

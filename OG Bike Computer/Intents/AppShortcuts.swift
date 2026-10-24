@@ -113,19 +113,19 @@ struct AppShortcuts: AppShortcutsProvider {
             systemImageName: "arrow.triangle.swap"
         )
 
-        // Select settings profile
+        // Select settings preset
         AppShortcut(
-            intent: SelectSettingsProfileIntent(),
+            intent: SelectSettingsPresetIntent(),
             phrases: [
-                "Switch to \(\.$profile) profile in \(.applicationName)",
-                "Select \(\.$profile) profile in \(.applicationName)",
-                "Use \(\.$profile) settings in \(.applicationName)",
+                "Switch to \(\.$preset) preset in \(.applicationName)",
+                "Select \(\.$preset) preset in \(.applicationName)",
+                "Use \(\.$preset) settings in \(.applicationName)",
 
-                "Switch \(.applicationName) to \(\.$profile) profile",
-                "Select \(.applicationName) \(\.$profile) profile",
-                "Use \(.applicationName) \(\.$profile) settings",
+                "Switch \(.applicationName) to \(\.$preset) preset",
+                "Select \(.applicationName) \(\.$preset) preset",
+                "Use \(.applicationName) \(\.$preset) settings",
             ],
-            shortTitle: "Select Profile",
+            shortTitle: "Select Preset",
             systemImageName: "gearshape.2"
         )
 

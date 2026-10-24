@@ -10,6 +10,7 @@ import SwiftUI
 struct TabOrderingView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject var metricConfig: MetricConfigStore
+    @State private var showResetConfirm = false
 
     /// What the resolver sees right now (we always preview against these,
     /// since the user is offline editing — we want all available tabs visible).
@@ -45,19 +46,27 @@ struct TabOrderingView: View {
                 Text("Drag to reorder. Updates the watch live.")
                     .textCase(nil)
             } footer: {
-                Text("The Route Map screen always opens first. Elevation and metric pages can be ordered freely.")
+                Text("Drag any tab to reorder. The order you set is used on the watch during a ride. Updates live.")
             }
 
             if userSettings.settings.ridePreferences.tabOrder != nil {
                 Section {
                     Button("Reset to Default Order", role: .destructive) {
-                        userSettings.settings.ridePreferences.tabOrder = nil
+                        showResetConfirm = true
                     }
                 }
             }
         }
         .environment(\.editMode, .constant(.active))
-        .settingsPageTitle("Tab Order", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Tab Order", preset: userSettings.activePresetName)
+        .alert("Reset to Default Order?", isPresented: $showResetConfirm) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.ridePreferences.tabOrder = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your custom tab order will be cleared.")
+        }
     }
 
     private func metricPage(for key: WorkoutTabKey) -> MetricPage? {

@@ -12,20 +12,20 @@ import SwiftUI
 struct MetricCustomizationView: View {
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject var userSettings: UserSettingsStore
-    var profileName: String = ""
+    var presetName: String = ""
     @State private var showAddPage = false
     @State private var newPageName = ""
     @State private var showResetConfirm = false
     @State private var editingPageIndex: Int?
 
-    /// Pages from other profiles available for import, excluding any that match a current page
-    private var otherProfilePages: [(profileName: String, page: MetricPage)] {
+    /// Pages from other presets available for import, excluding any that match a current page
+    private var otherPresetPages: [(presetName: String, page: MetricPage)] {
         guard let activeID = userSettings.activePresetID else { return [] }
         let currentPages = metricConfig.config.pages
         return userSettings.presets
             .filter { $0.id != activeID }
             .flatMap { preset in
-                preset.metricConfig.pages.map { (profileName: preset.name, page: $0) }
+                preset.metricConfig.pages.map { (presetName: preset.name, page: $0) }
             }
             .filter { item in
                 !currentPages.contains { current in
@@ -90,17 +90,17 @@ struct MetricCustomizationView: View {
                 }
                 .buttonStyle(.plain)
 
-                // Pages from other profiles
-                ForEach(Array(otherProfilePages.enumerated()), id: \.element.page.id) { index, item in
+                // Pages from other presets
+                ForEach(Array(otherPresetPages.enumerated()), id: \.element.page.id) { index, item in
                     Button {
                         importPage(item.page)
                     } label: {
                         VStack(spacing: 6) {
-                            ProfilePageCard(page: item.page, profileName: item.profileName)
+                            PresetPageCard(page: item.page, presetName: item.presetName)
                             Text(item.page.name)
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
-                            Text("From \(item.profileName)")
+                            Text("From \(item.presetName)")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -112,12 +112,19 @@ struct MetricCustomizationView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
+            Text("Reorder pages for the watch in Ride Settings \u{2192} Tab Order.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
             Button("Reset to Defaults", role: .destructive) {
                 showResetConfirm = true
             }
             .padding(.bottom, 16)
         }
-        .settingsPageTitle("Customize Metrics", profile: profileName)
+        .settingsPageTitle("Metric Pages", preset: presetName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
@@ -183,11 +190,11 @@ struct MetricCustomizationView: View {
     }
 }
 
-// MARK: - Profile Page Card (greyed-out preview from another profile)
+// MARK: - Preset Page Card (greyed-out preview from another preset)
 
-private struct ProfilePageCard: View {
+private struct PresetPageCard: View {
     let page: MetricPage
-    let profileName: String
+    let presetName: String
 
     private let watchWidth: CGFloat  = 148
     private let watchHeight: CGFloat = 182
@@ -198,13 +205,13 @@ private struct ProfilePageCard: View {
             WatchPagePreview(page: page)
                 .opacity(0.35)
 
-            // Profile name badge
+            // Preset name badge
             VStack {
                 Spacer()
                 HStack(spacing: 4) {
                     Image(systemName: "square.and.arrow.down")
                         .font(.system(size: 10, weight: .semibold))
-                    Text(profileName)
+                    Text(presetName)
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .foregroundStyle(.white)
@@ -287,6 +294,15 @@ struct MetricPageEditor: View {
     var body: some View {
         List {
             Section {
+                WatchPagePreview(page: page)
+                    .padding(.vertical, 8)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            } header: {
+                Text("Preview")
+            }
+
+            Section {
                 TextField("Page Name", text: Binding(
                     get: { page.name },
                     set: { newName in
@@ -358,15 +374,6 @@ struct MetricPageEditor: View {
                     Label("Add Metric", systemImage: "plus.circle")
                 }
                 .disabled(page.slots.count >= MetricPage.maxSlots)
-            }
-
-            Section {
-                WatchPagePreview(page: page)
-                    .padding(.vertical, 8)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-            } header: {
-                Text("Preview")
             }
         }
         .navigationTitle(page.name)
@@ -472,8 +479,8 @@ struct MetricPageEditor: View {
         case .maxSpeed: return "Highest recorded"
         case .distance: return "Total distance"
         case .distanceRemaining: return "Route remaining"
-        case .elapsedTime: return "Wall clock time"
-        case .movingTime: return "Time in motion"
+        case .elapsedTime: return "Total time since you started, including pauses"
+        case .movingTime: return "Time spent actually riding (pauses excluded)"
         case .heartRate: return "Current BPM"
         case .averageHeartRate: return "Average BPM"
         case .maxHeartRate: return "Peak BPM"
