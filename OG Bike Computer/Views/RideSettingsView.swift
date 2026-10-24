@@ -33,11 +33,7 @@ struct RideSettingsView: View {
             }
         }
         .settingsPageTitle("Ride Settings", preset: userSettings.activePresetName)
-        .confirmationDialog(
-            "Reset Ride Settings to Defaults?",
-            isPresented: $showResetConfirm,
-            titleVisibility: .visible
-        ) {
+        .alert("Reset Ride Settings to Defaults?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {
                 userSettings.settings.ridePreferences = .default
             }
@@ -92,7 +88,7 @@ struct RideSettingsView: View {
         } header: {
             Label("Auto-Pause", systemImage: "pause.circle")
         } footer: {
-            Text("Automatically pause the ride when speed drops below the threshold. While paused, the watch briefly wakes GPS at the resume check interval to detect movement — shorter intervals resume faster but use more battery.")
+            Text("Automatically pause the ride when speed drops below the threshold. While paused, the watch briefly wakes GPS at the resume check interval to detect movement. Shorter intervals resume faster but use more battery.")
         }
     }
 

@@ -128,11 +128,7 @@ struct LiveActivityCustomizationView: View {
         }
         .settingsPageTitle("Live Activity Stats", preset: userSettings.activePresetName)
         .animation(.default, value: usesDistanceRemaining)
-        .confirmationDialog(
-            "Reset Live Activity Stats to Defaults?",
-            isPresented: $showResetConfirm,
-            titleVisibility: .visible
-        ) {
+        .alert("Reset Live Activity Stats to Defaults?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {
                 userSettings.settings.phoneAlerts.liveActivitySlots = LiveActivitySlot.defaultSlots
                 userSettings.settings.phoneAlerts.distanceRemainingFallback = nil

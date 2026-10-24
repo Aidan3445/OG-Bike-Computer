@@ -86,11 +86,7 @@ struct MapCustomizationView: View {
                 }
             )
         }
-        .confirmationDialog(
-            "Reset Route Screens to Defaults?",
-            isPresented: $showResetConfirm,
-            titleVisibility: .visible
-        ) {
+        .alert("Reset Route Screens to Defaults?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {
                 resetRouteScreens()
             }

@@ -53,11 +53,7 @@ struct PhoneAlertSettingsView: View {
             }
         }
         .settingsPageTitle("Live Activity", preset: userSettings.activePresetName)
-        .confirmationDialog(
-            "Reset Live Activity to Defaults?",
-            isPresented: $showResetConfirm,
-            titleVisibility: .visible
-        ) {
+        .alert("Reset Live Activity to Defaults?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {
                 userSettings.settings.phoneAlerts = .default
             }
