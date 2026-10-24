@@ -23,7 +23,7 @@ private func zoomLabel(_ meters: Double) -> String {
 }
 
 private func weightLabel(_ kg: Double) -> String {
-    if currentUnits.distance == .miles {
+    if currentUnits.weight == .pounds {
         return "\(String(format: "%.0f", kg * 2.20462)) lbs"
     }
     return "\(String(format: "%.1f", kg)) kg"
@@ -117,26 +117,6 @@ struct SettingsView: View {
                     } icon: {
                         Image(systemName: "gauge.with.dots.needle.33percent")
                             .foregroundStyle(.yellow)
-                    }
-                }
-
-                // MARK: - Units
-                NavigationLink {
-                    UnitsSettingsView(userSettings: userSettings)
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Units")
-                            Text(
-                                userSettings.settings.unitPreferences.system?
-                                    .label ?? "Custom"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "ruler")
-                            .foregroundStyle(.orange)
                     }
                 }
 
@@ -381,6 +361,21 @@ struct SettingsView: View {
 
 // MARK: - Rider Profile
 
+/// Three-way choice for the inline Units picker at the top of Rider Profile.
+/// Independent of the per-dimension values so Custom stays visible even when
+/// the dimensions happen to match a clean system.
+private enum UnitSystemChoice: String, CaseIterable, Hashable {
+    case imperial, metric, custom
+
+    var label: String {
+        switch self {
+        case .imperial: return "Imperial"
+        case .metric: return "Metric"
+        case .custom: return "Custom"
+        }
+    }
+}
+
 struct RiderProfileView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @State private var showAddBike = false
@@ -391,7 +386,33 @@ struct RiderProfileView: View {
     @State private var heightFeet: Int = 5
     @State private var heightInches: Int = 9
     @State private var bikeWeightText = ""
+    @State private var showUnitsResetConfirm = false
     @FocusState private var isFieldFocused: Bool
+
+    private var unitPrefs: Binding<UnitPreferences> {
+        $userSettings.settings.unitPreferences
+    }
+
+    private var unitSystemChoice: Binding<UnitSystemChoice> {
+        Binding(
+            get: {
+                let p = userSettings.settings.unitPreferences
+                if p.isCustom { return .custom }
+                switch p.system {
+                case .imperial: return .imperial
+                case .metric:   return .metric
+                case .none:     return .custom
+                }
+            },
+            set: { newValue in
+                switch newValue {
+                case .imperial: userSettings.settings.unitPreferences.apply(.imperial)
+                case .metric:   userSettings.settings.unitPreferences.apply(.metric)
+                case .custom:   userSettings.settings.unitPreferences.enterCustom()
+                }
+            }
+        )
+    }
 
     private func syncHeightFromModel() {
         let totalInches = userSettings.settings.riderHeight / 2.54
@@ -417,18 +438,22 @@ struct RiderProfileView: View {
         }
     }
 
-    private var weightUnit: String { isImperial ? "lbs" : "kg" }
+    /// Weight has its own unit axis separate from distance so Custom users
+    /// can mix e.g. km rides with lbs rider weight.
+    private var isWeightImperial: Bool { currentUnits.weight == .pounds }
+
+    private var weightUnit: String { isWeightImperial ? "lbs" : "kg" }
     private var heightUnit: String { isImperial ? "in" : "cm" }
 
     private func kgToDisplay(_ kg: Double) -> String {
-        if isImperial {
+        if isWeightImperial {
             return "\(Int(round(kg * 2.20462)))"
         }
         return String(format: "%.1f", kg)
     }
 
     private func displayToKg(_ value: Double) -> Double {
-        isImperial ? value / 2.20462 : value
+        isWeightImperial ? value / 2.20462 : value
     }
 
     private func cmToDisplay(_ cm: Double) -> String {
@@ -444,6 +469,47 @@ struct RiderProfileView: View {
 
     var body: some View {
         Form {
+            // MARK: Units (moved from its own page: Weight and Height below
+            // follow this choice, so it lives at the top where it affects
+            // what the user is about to enter.)
+            Section {
+                Picker("Units", selection: unitSystemChoice) {
+                    ForEach(UnitSystemChoice.allCases, id: \.self) { choice in
+                        Text(choice.label).tag(choice)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                if userSettings.settings.unitPreferences.isCustom {
+                    Picker("Speed", selection: unitPrefs.speed) {
+                        ForEach(SpeedUnit.allCases, id: \.self) { unit in
+                            Text(unit.label).tag(unit)
+                        }
+                    }
+                    Picker("Distance", selection: unitPrefs.distance) {
+                        ForEach(DistanceUnit.allCases, id: \.self) { unit in
+                            Text(unit.label).tag(unit)
+                        }
+                    }
+                    Picker("Elevation", selection: unitPrefs.elevation) {
+                        ForEach(ElevationUnit.allCases, id: \.self) { unit in
+                            Text(unit.label).tag(unit)
+                        }
+                    }
+                    Picker("Weight", selection: unitPrefs.weight) {
+                        ForEach(WeightUnit.allCases, id: \.self) { unit in
+                            Text(unit.label).tag(unit)
+                        }
+                    }
+
+                    Button("Reset Units to Defaults", role: .destructive) {
+                        showUnitsResetConfirm = true
+                    }
+                }
+            } header: {
+                Text("Units")
+            }
+
             // MARK: Rider
             Section {
                 HStack {
@@ -647,6 +713,14 @@ struct RiderProfileView: View {
             }
         }
         .settingsPageTitle("Rider Profile", preset: userSettings.activePresetName)
+        .alert("Reset Units to Defaults?", isPresented: $showUnitsResetConfirm) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.unitPreferences = .default
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Units will be restored to Imperial.")
+        }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
