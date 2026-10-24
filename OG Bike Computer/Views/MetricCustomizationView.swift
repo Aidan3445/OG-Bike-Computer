@@ -117,7 +117,7 @@ struct MetricCustomizationView: View {
             }
             .padding(.bottom, 16)
         }
-        .settingsPageTitle("Customize Metrics", preset: presetName)
+        .settingsPageTitle("Metric Pages", preset: presetName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

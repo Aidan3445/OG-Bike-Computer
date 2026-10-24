@@ -163,7 +163,7 @@ struct MapCustomizationView: View {
             Toggle("Compass Direction", isOn: config.showHeading)
             Toggle("Repeat Turn Alert Button", isOn: config.showRepeatAlertButton)
         } header: {
-            Label("Display", systemImage: "map")
+            Label("Map Buttons", systemImage: "map")
         } footer: {
             Text("The full route toggle lets you switch between zoomed breadcrumb and full route views mid-ride. Compass direction shows your heading (N, NE, E, etc.). The repeat turn alert button (waveform icon) replays the upcoming turn announcement.")
         }
@@ -380,7 +380,7 @@ struct MapCustomizationView: View {
     private var resetSection: some View {
         if userSettings.settings.ridePreferences.mapScreen != .default {
             Section {
-                Button("Reset Map Settings to Defaults", role: .destructive) {
+                Button("Reset Route Screens to Defaults", role: .destructive) {
                     userSettings.settings.ridePreferences.mapScreen = .default
                 }
             }

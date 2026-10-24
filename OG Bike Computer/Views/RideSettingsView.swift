@@ -193,7 +193,7 @@ struct RideSettingsView: View {
                 }
             }
         } header: {
-            Label("Phone", systemImage: "iphone")
+            Label("Live Activity", systemImage: "iphone")
         } footer: {
             Text("Customize the ride Live Activity stats and optional turn notifications on your iPhone.")
         }

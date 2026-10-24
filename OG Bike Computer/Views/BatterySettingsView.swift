@@ -33,7 +33,7 @@ struct BatterySettingsView: View {
                     title: "Map Detail",
                     value: userSettings.settings.ridePreferences.mapScreen.mapDetail.label,
                     impact: userSettings.settings.ridePreferences.mapScreen.mapDetail.batteryImpact,
-                    instruction: "Change in Map Screen settings."
+                    instruction: "Change in Route Screens."
                 )
                 batteryTipRow(
                     title: "Display Brightness & Always-On",
@@ -91,7 +91,7 @@ struct BatterySettingsView: View {
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Map Screen")
+                            Text("Route Screens")
                             Text("Map background, route colors, overlays")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -139,7 +139,7 @@ struct BatterySettingsView: View {
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Alert Frequency")
+                            Text("Alerts")
                             Text("Turn alerts, splits, haptics")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)

@@ -54,7 +54,7 @@ struct NavigationAlertSettingsView: View {
     @ViewBuilder
     private var turnAlertsSection: some View {
         Section {
-            AlertModePicker(label: "Default Mode", mode: prefs.turnAlerts.defaultMode)
+            AlertModePicker(label: "Alert Style", mode: prefs.turnAlerts.defaultMode)
         } header: {
             Label("Turn Alerts", systemImage: "arrow.triangle.turn.up.right.diamond")
         }
