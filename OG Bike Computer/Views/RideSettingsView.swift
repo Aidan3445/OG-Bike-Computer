@@ -11,6 +11,7 @@ struct RideSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
+    @State private var showResetConfirm = false
 
     private var prefs: Binding<RidePreferences> {
         $userSettings.settings.ridePreferences
@@ -26,12 +27,24 @@ struct RideSettingsView: View {
             if userSettings.settings.ridePreferences != .default {
                 Section {
                     Button("Reset Ride Settings to Defaults", role: .destructive) {
-                        userSettings.settings.ridePreferences = .default
+                        showResetConfirm = true
                     }
                 }
             }
         }
         .settingsPageTitle("Ride Settings", preset: userSettings.activePresetName)
+        .confirmationDialog(
+            "Reset Ride Settings to Defaults?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.ridePreferences = .default
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All ride settings will be restored to their defaults.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

@@ -25,6 +25,7 @@ private enum UnitSystemChoice: String, CaseIterable, Hashable {
 
 struct UnitsSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    @State private var showResetConfirm = false
 
     private var prefs: Binding<UnitPreferences> {
         $userSettings.settings.unitPreferences
@@ -96,12 +97,24 @@ struct UnitsSettingsView: View {
             if userSettings.settings.unitPreferences.isCustom {
                 Section {
                     Button("Reset Units to Defaults", role: .destructive) {
-                        userSettings.settings.unitPreferences = .default
+                        showResetConfirm = true
                     }
                 }
             }
         }
         .settingsPageTitle("Units", preset: userSettings.activePresetName)
+        .confirmationDialog(
+            "Reset Units to Defaults?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.unitPreferences = .default
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Units will be restored to Imperial.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
