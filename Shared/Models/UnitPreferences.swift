@@ -59,27 +59,41 @@ enum ElevationUnit: String, Codable, CaseIterable {
     }
 }
 
+enum WeightUnit: String, Codable, CaseIterable {
+    case pounds, kilograms
+
+    var label: String {
+        switch self {
+        case .pounds: return "lbs"
+        case .kilograms: return "kg"
+        }
+    }
+}
+
 struct UnitPreferences: Codable, Equatable, Hashable {
     var speed: SpeedUnit
     var distance: DistanceUnit
     var elevation: ElevationUnit
+    var weight: WeightUnit
     /// When true, the user has explicitly opted into per-dimension overrides.
     /// Independent of whether the dimensions happen to match a clean system.
     var isCustom: Bool
 
-    static let imperial = UnitPreferences(speed: .mph, distance: .miles, elevation: .feet, isCustom: false)
-    static let metric = UnitPreferences(speed: .kmh, distance: .kilometers, elevation: .meters, isCustom: false)
+    static let imperial = UnitPreferences(speed: .mph, distance: .miles, elevation: .feet, weight: .pounds, isCustom: false)
+    static let metric = UnitPreferences(speed: .kmh, distance: .kilometers, elevation: .meters, weight: .kilograms, isCustom: false)
     static let `default` = imperial
 
     init(
         speed: SpeedUnit,
         distance: DistanceUnit,
         elevation: ElevationUnit,
+        weight: WeightUnit,
         isCustom: Bool = false
     ) {
         self.speed = speed
         self.distance = distance
         self.elevation = elevation
+        self.weight = weight
         self.isCustom = isCustom
     }
 
@@ -88,8 +102,8 @@ struct UnitPreferences: Codable, Equatable, Hashable {
     /// dimensions don't match a single system.
     var system: MeasurementSystem? {
         if isCustom { return nil }
-        if speed == .mph && distance == .miles && elevation == .feet { return .imperial }
-        if speed == .kmh && distance == .kilometers && elevation == .meters { return .metric }
+        if speed == .mph && distance == .miles && elevation == .feet && weight == .pounds { return .imperial }
+        if speed == .kmh && distance == .kilometers && elevation == .meters && weight == .kilograms { return .metric }
         return nil
     }
 
@@ -109,10 +123,13 @@ struct UnitPreferences: Codable, Equatable, Hashable {
         isCustom = true
     }
 
-    // Migration-safe decoding: pre-isCustom data infers isCustom from whether
-    // the dimensions already form a mixed set (not all imperial, not all metric).
+    // Migration-safe decoding:
+    //   - pre-isCustom data infers isCustom from whether the dimensions
+    //     already form a mixed set (not all imperial, not all metric).
+    //   - pre-weight data falls back to the distance choice (mi -> lbs,
+    //     km -> kg) so no one's rider weight silently flips units.
     enum CodingKeys: String, CodingKey {
-        case speed, distance, elevation, isCustom
+        case speed, distance, elevation, weight, isCustom
     }
 
     init(from decoder: Decoder) throws {
@@ -120,11 +137,16 @@ struct UnitPreferences: Codable, Equatable, Hashable {
         speed = try c.decodeIfPresent(SpeedUnit.self, forKey: .speed) ?? .mph
         distance = try c.decodeIfPresent(DistanceUnit.self, forKey: .distance) ?? .miles
         elevation = try c.decodeIfPresent(ElevationUnit.self, forKey: .elevation) ?? .feet
+        if let storedWeight = try c.decodeIfPresent(WeightUnit.self, forKey: .weight) {
+            weight = storedWeight
+        } else {
+            weight = (distance == .miles) ? .pounds : .kilograms
+        }
         if let stored = try c.decodeIfPresent(Bool.self, forKey: .isCustom) {
             isCustom = stored
         } else {
-            let allImperial = speed == .mph && distance == .miles && elevation == .feet
-            let allMetric = speed == .kmh && distance == .kilometers && elevation == .meters
+            let allImperial = speed == .mph && distance == .miles && elevation == .feet && weight == .pounds
+            let allMetric = speed == .kmh && distance == .kilometers && elevation == .meters && weight == .kilograms
             isCustom = !(allImperial || allMetric)
         }
     }

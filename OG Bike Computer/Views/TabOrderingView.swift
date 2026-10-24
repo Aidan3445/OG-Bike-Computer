@@ -59,11 +59,7 @@ struct TabOrderingView: View {
         }
         .environment(\.editMode, .constant(.active))
         .settingsPageTitle("Tab Order", preset: userSettings.activePresetName)
-        .confirmationDialog(
-            "Reset to Default Order?",
-            isPresented: $showResetConfirm,
-            titleVisibility: .visible
-        ) {
+        .alert("Reset to Default Order?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {
                 userSettings.settings.ridePreferences.tabOrder = nil
             }
