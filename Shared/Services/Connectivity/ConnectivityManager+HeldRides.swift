@@ -67,7 +67,7 @@ extension ConnectivityManager {
         guard WCSession.default.activationState == .activated else { return }
         let msg: [String: Any] = ["type": "deleteHeldRide", "rideID": summary.id.uuidString]
         if WCSession.default.isReachable {
-            WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+            WCSession.default.sendMessage(msg, replyHandler: { _ in }, errorHandler: { _ in
                 WCSession.default.transferUserInfo(msg)
             })
         } else {
@@ -90,7 +90,7 @@ extension ConnectivityManager {
         guard WCSession.default.activationState == .activated else { return }
         let msg: [String: Any] = ["type": "deleteHeldRide", "rideID": rideID.uuidString]
         if WCSession.default.isReachable {
-            WCSession.default.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+            WCSession.default.sendMessage(msg, replyHandler: { _ in }, errorHandler: { _ in
                 WCSession.default.transferUserInfo(msg)
             })
         } else {
