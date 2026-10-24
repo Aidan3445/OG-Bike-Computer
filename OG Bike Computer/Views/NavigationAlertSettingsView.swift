@@ -21,10 +21,9 @@ struct NavigationAlertSettingsView: View {
     var body: some View {
         Form {
             turnAlertsSection
-            navigationEventsSection
             waypointAlertsSection
-            splitAlertsSection
-            endOfRouteAlertsSection
+            progressUpdatesSection
+            routeStatusSection
             autoPauseAlertsSection
             audioOutputSection
             hapticsSection
@@ -113,11 +112,28 @@ struct NavigationAlertSettingsView: View {
         }
     }
 
-    // MARK: - Navigation Events
+    // MARK: - Progress Updates (stat-reading events)
 
     @ViewBuilder
-    private var navigationEventsSection: some View {
+    private var progressUpdatesSection: some View {
         Section {
+            NavigationLink {
+                SplitMetricPickerView(metrics: prefs.splitAlerts.metrics, userSettings: userSettings)
+            } label: {
+                HStack {
+                    Text("Stats to Read")
+                    Spacer()
+                    Text("\(userSettings.settings.navigationAlerts.splitAlerts.metrics.count) selected")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Toggle("Split Updates", isOn: prefs.splitAlerts.enabled)
+            if userSettings.settings.navigationAlerts.splitAlerts.enabled {
+                AlertModePicker(label: "Split Mode", mode: prefs.splitAlerts.mode)
+                SplitDistancePicker(meters: prefs.splitAlerts.splitDistance)
+            }
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("Halfway")
                 Picker("Halfway", selection: prefs.navigationEvents.halfwayAlert) {
@@ -128,6 +144,22 @@ struct NavigationAlertSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
+            Toggle("End-of-Route Readout", isOn: prefs.endOfRouteAlerts.enabled)
+            if userSettings.settings.navigationAlerts.endOfRouteAlerts.enabled {
+                AlertModePicker(label: "End-of-Route Mode", mode: prefs.endOfRouteAlerts.mode)
+            }
+        } header: {
+            Label("Progress Updates", systemImage: "stopwatch")
+        } footer: {
+            Text("Read your ride stats at key moments. Split, Halfway, and End-of-Route all use the stats you pick in Stats to Read.")
+        }
+    }
+
+    // MARK: - Route Status (non-stat events)
+
+    @ViewBuilder
+    private var routeStatusSection: some View {
+        Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Off Route")
                 Picker("Off Route", selection: prefs.navigationEvents.offRouteAlert) {
@@ -137,6 +169,13 @@ struct NavigationAlertSettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
+
+            DistancePicker(
+                label: "Off-Route Threshold",
+                meters: prefs.navigationEvents.offRouteThreshold,
+                min: 30,   // ~100ft / 30m
+                max: 300   // ~1000ft / 300m
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Back on Route")
@@ -158,65 +197,9 @@ struct NavigationAlertSettingsView: View {
                 .pickerStyle(.segmented)
             }
         } header: {
-            Label("Navigation Events", systemImage: "location.fill")
-        }
-
-        Section {
-            DistancePicker(
-                label: "Off-Route Threshold",
-                meters: prefs.navigationEvents.offRouteThreshold,
-                min: 30,   // ~100ft / 30m
-                max: 300   // ~1000ft / 300m
-            )
+            Label("Route Status", systemImage: "location.fill")
         } footer: {
-            Text("How far from the route before you're considered off-route.")
-        }
-    }
-
-    // MARK: - Split Alerts
-
-    @ViewBuilder
-    private var splitAlertsSection: some View {
-        Section {
-            Toggle("Split Updates", isOn: prefs.splitAlerts.enabled)
-
-            if userSettings.settings.navigationAlerts.splitAlerts.enabled {
-                AlertModePicker(label: "Mode", mode: prefs.splitAlerts.mode)
-
-                SplitDistancePicker(meters: prefs.splitAlerts.splitDistance)
-
-                NavigationLink {
-                    SplitMetricPickerView(metrics: prefs.splitAlerts.metrics, userSettings: userSettings)
-                } label: {
-                    HStack {
-                        Text("Stats to Read")
-                        Spacer()
-                        Text("\(userSettings.settings.navigationAlerts.splitAlerts.metrics.count) selected")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        } header: {
-            Label("Split Updates", systemImage: "stopwatch")
-        } footer: {
-            Text("Announce ride stats at regular distance intervals. Interrupted by turn alerts.")
-        }
-    }
-
-    // MARK: - End of Route Alerts
-
-    @ViewBuilder
-    private var endOfRouteAlertsSection: some View {
-        Section {
-            Toggle("End-of-Route Readout", isOn: prefs.endOfRouteAlerts.enabled)
-
-            if userSettings.settings.navigationAlerts.endOfRouteAlerts.enabled {
-                AlertModePicker(label: "Mode", mode: prefs.endOfRouteAlerts.mode)
-            }
-        } header: {
-            Label("End-of-Route Readout", systemImage: "flag.checkered")
-        } footer: {
-            Text("Read your ride stats once when you finish the route. Uses the Stats to Read list shared with Split Updates and Halfway.")
+            Text("Alerts for route position changes.")
         }
     }
 
