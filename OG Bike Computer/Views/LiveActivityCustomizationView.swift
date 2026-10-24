@@ -10,6 +10,8 @@ import SwiftUI
 
 struct LiveActivityCustomizationView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    @State private var editingSlot: Int?
+    @State private var showResetConfirm = false
 
     private var slots: Binding<[LiveActivitySlot]> {
         $userSettings.settings.phoneAlerts.liveActivitySlots
@@ -65,13 +67,17 @@ struct LiveActivityCustomizationView: View {
     var body: some View {
         Form {
             Section {
-                // Preview of the 2x3 grid
-                LiveActivityPreview(slots: userSettings.settings.phoneAlerts.liveActivitySlots)
-                    .padding(.vertical, 4)
+                // Interactive preview of the 2x3 grid: tap a cell to change
+                // that slot directly.
+                LiveActivityPreview(
+                    slots: userSettings.settings.phoneAlerts.liveActivitySlots,
+                    onSlotTap: { index in editingSlot = index }
+                )
+                .padding(.vertical, 4)
             } header: {
                 Text("Preview")
             } footer: {
-                Text("This shows how stats will appear on your Lock Screen during a ride.")
+                Text("Tap any slot to change it. This mirrors how stats will appear on your Lock Screen during a ride.")
             }
 
             Section {
@@ -92,7 +98,7 @@ struct LiveActivityCustomizationView: View {
             } header: {
                 Text("Bottom Row")
             } footer: {
-                Text("Choose which metric appears in each row (from left to right).")
+                Text("Choose the metric for each slot, left to right.")
             }
 
             if usesDistanceRemaining {
@@ -115,15 +121,51 @@ struct LiveActivityCustomizationView: View {
                 || !phoneAlerts.showStatsInDynamicIsland {
                 Section {
                     Button("Reset to Defaults", role: .destructive) {
-                        userSettings.settings.phoneAlerts.liveActivitySlots = LiveActivitySlot.defaultSlots
-                        userSettings.settings.phoneAlerts.distanceRemainingFallback = nil
-                        userSettings.settings.phoneAlerts.showStatsInDynamicIsland = true
+                        showResetConfirm = true
                     }
                 }
             }
         }
         .settingsPageTitle("Live Activity Stats", preset: userSettings.activePresetName)
         .animation(.default, value: usesDistanceRemaining)
+        .confirmationDialog(
+            "Reset Live Activity Stats to Defaults?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.phoneAlerts.liveActivitySlots = LiveActivitySlot.defaultSlots
+                userSettings.settings.phoneAlerts.distanceRemainingFallback = nil
+                userSettings.settings.phoneAlerts.showStatsInDynamicIsland = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Slot assignments, Dynamic Island, and fallback will be restored to their defaults.")
+        }
+        .sheet(item: Binding(
+            get: { editingSlot.map(SlotEditIdentifier.init) },
+            set: { editingSlot = $0?.index }
+        )) { ident in
+            NavigationStack {
+                Form {
+                    Picker("Metric", selection: $userSettings.settings.phoneAlerts.liveActivitySlots[ident.index].metricType) {
+                        ForEach(availableMetrics) { metric in
+                            Label(metric.label, systemImage: metric.icon).tag(metric)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+                .navigationTitle("Slot \(ident.index + 1)")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { editingSlot = nil }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
@@ -138,15 +180,22 @@ struct LiveActivityCustomizationView: View {
 
 // MARK: - Live Activity Preview
 
+/// Wraps the editing-slot index so SwiftUI's `.sheet(item:)` can bind to it.
+private struct SlotEditIdentifier: Identifiable {
+    let index: Int
+    var id: Int { index }
+}
+
 private struct LiveActivityPreview: View {
     let slots: [LiveActivitySlot]
+    let onSlotTap: (Int) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             // Top row
             HStack(spacing: 0) {
                 ForEach(0..<min(3, slots.count), id: \.self) { i in
-                    previewCell(slots[i].metricType)
+                    previewCell(slots[i].metricType, index: i)
                     if i < 2 {
                         Divider().frame(height: 32)
                     }
@@ -159,7 +208,7 @@ private struct LiveActivityPreview: View {
             // Bottom row
             HStack(spacing: 0) {
                 ForEach(3..<min(6, slots.count), id: \.self) { i in
-                    previewCell(slots[i].metricType)
+                    previewCell(slots[i].metricType, index: i)
                     if i < 5 {
                         Divider().frame(height: 32)
                     }
@@ -171,16 +220,22 @@ private struct LiveActivityPreview: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func previewCell(_ metric: MetricType) -> some View {
-        VStack(spacing: 2) {
-            Text("--")
-                .font(.subheadline.weight(.semibold))
-                .monospacedDigit()
-            Text(metric.label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+    private func previewCell(_ metric: MetricType, index: Int) -> some View {
+        Button {
+            onSlotTap(index)
+        } label: {
+            VStack(spacing: 2) {
+                Text("--")
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                Text(metric.label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
+        .buttonStyle(.plain)
     }
 }

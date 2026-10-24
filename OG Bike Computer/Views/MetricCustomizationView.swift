@@ -112,6 +112,13 @@ struct MetricCustomizationView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
+            Text("Reorder pages for the watch in Ride Settings \u{2192} Tab Order.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
             Button("Reset to Defaults", role: .destructive) {
                 showResetConfirm = true
             }
@@ -287,6 +294,15 @@ struct MetricPageEditor: View {
     var body: some View {
         List {
             Section {
+                WatchPagePreview(page: page)
+                    .padding(.vertical, 8)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            } header: {
+                Text("Preview")
+            }
+
+            Section {
                 TextField("Page Name", text: Binding(
                     get: { page.name },
                     set: { newName in
@@ -358,15 +374,6 @@ struct MetricPageEditor: View {
                     Label("Add Metric", systemImage: "plus.circle")
                 }
                 .disabled(page.slots.count >= MetricPage.maxSlots)
-            }
-
-            Section {
-                WatchPagePreview(page: page)
-                    .padding(.vertical, 8)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-            } header: {
-                Text("Preview")
             }
         }
         .navigationTitle(page.name)
@@ -472,8 +479,8 @@ struct MetricPageEditor: View {
         case .maxSpeed: return "Highest recorded"
         case .distance: return "Total distance"
         case .distanceRemaining: return "Route remaining"
-        case .elapsedTime: return "Wall clock time"
-        case .movingTime: return "Time in motion"
+        case .elapsedTime: return "Total time since you started, including pauses"
+        case .movingTime: return "Time spent actually riding (pauses excluded)"
         case .heartRate: return "Current BPM"
         case .averageHeartRate: return "Average BPM"
         case .maxHeartRate: return "Peak BPM"
