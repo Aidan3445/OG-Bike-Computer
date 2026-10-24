@@ -7,6 +7,22 @@
 
 import SwiftUI
 
+/// Picker sentinel used by `UnitsSettingsView` to represent the three
+/// top-level choices: Imperial, Metric, Custom. Independent of the per-
+/// dimension values so Custom stays visible even when the dimensions
+/// happen to match a clean system.
+private enum UnitSystemChoice: String, CaseIterable, Hashable {
+    case imperial, metric, custom
+
+    var label: String {
+        switch self {
+        case .imperial: return "Imperial"
+        case .metric: return "Metric"
+        case .custom: return "Custom"
+        }
+    }
+}
+
 struct UnitsSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
 
@@ -14,15 +30,22 @@ struct UnitsSettingsView: View {
         $userSettings.settings.unitPreferences
     }
 
-    /// Binding for the blanket system picker.
-    /// Returns the current system (imperial/metric) or nil when custom.
-    /// Setting a non-nil value applies the blanket system to all dimensions.
-    private var systemBinding: Binding<MeasurementSystem?> {
+    private var systemChoice: Binding<UnitSystemChoice> {
         Binding(
-            get: { userSettings.settings.unitPreferences.system },
+            get: {
+                let p = userSettings.settings.unitPreferences
+                if p.isCustom { return .custom }
+                switch p.system {
+                case .imperial: return .imperial
+                case .metric:   return .metric
+                case .none:     return .custom
+                }
+            },
             set: { newValue in
-                if let system = newValue {
-                    userSettings.settings.unitPreferences.apply(system)
+                switch newValue {
+                case .imperial: userSettings.settings.unitPreferences.apply(.imperial)
+                case .metric:   userSettings.settings.unitPreferences.apply(.metric)
+                case .custom:   userSettings.settings.unitPreferences.enterCustom()
                 }
             }
         )
@@ -30,44 +53,47 @@ struct UnitsSettingsView: View {
 
     var body: some View {
         Form {
-            // MARK: - System Toggle
+            // MARK: - System
             Section {
-                Picker("Units", selection: systemBinding) {
-                    ForEach(MeasurementSystem.allCases, id: \.self) { system in
-                        Text(system.label).tag(Optional(system))
-                    }
-                    if userSettings.settings.unitPreferences.system == nil {
-                        Text("Custom").tag(MeasurementSystem?.none)
+                Picker("Units", selection: systemChoice) {
+                    ForEach(UnitSystemChoice.allCases, id: \.self) { choice in
+                        Text(choice.label).tag(choice)
                     }
                 }
                 .pickerStyle(.segmented)
             }
 
-            // MARK: - Advanced
-            Section {
-                Picker("Speed", selection: prefs.speed) {
-                    ForEach(SpeedUnit.allCases, id: \.self) { unit in
-                        Text(unit.label).tag(unit)
+            // MARK: - Custom Units (only when Custom is selected)
+            if userSettings.settings.unitPreferences.isCustom {
+                Section {
+                    Picker("Speed", selection: prefs.speed) {
+                        ForEach(SpeedUnit.allCases, id: \.self) { unit in
+                            Text(unit.label).tag(unit)
+                        }
                     }
-                }
 
-                Picker("Distance", selection: prefs.distance) {
-                    ForEach(DistanceUnit.allCases, id: \.self) { unit in
-                        Text(unit.label).tag(unit)
+                    Picker("Distance", selection: prefs.distance) {
+                        ForEach(DistanceUnit.allCases, id: \.self) { unit in
+                            Text(unit.label).tag(unit)
+                        }
                     }
-                }
 
-                Picker("Elevation", selection: prefs.elevation) {
-                    ForEach(ElevationUnit.allCases, id: \.self) { unit in
-                        Text(unit.label).tag(unit)
+                    Picker("Elevation", selection: prefs.elevation) {
+                        ForEach(ElevationUnit.allCases, id: \.self) { unit in
+                            Text(unit.label).tag(unit)
+                        }
                     }
+                } header: {
+                    Text("Custom Units")
+                } footer: {
+                    Text("Pick a unit for each dimension. Weight and some other fields follow your Distance choice (mi \u{2192} lbs, km \u{2192} kg).")
                 }
-            } header: {
-                Text("Advanced")
-            } footer: {
-                Text("Override individual units. Changing these will set the system to Custom.")
             }
-            if userSettings.settings.unitPreferences != .default {
+
+            // Reset button only appears while in Custom mode. Imperial and
+            // Metric users don't see a reset that would flip them to the other
+            // clean system (which was previously aggressive).
+            if userSettings.settings.unitPreferences.isCustom {
                 Section {
                     Button("Reset Units to Defaults", role: .destructive) {
                         userSettings.settings.unitPreferences = .default
