@@ -157,34 +157,67 @@ struct AlertModePicker: View {
     }
 }
 
+/// Sentinel for the per-moment override picker: `defaultOverride` means
+/// "no override, follow the default style"; the other cases map 1:1 to
+/// `AlertMode`.
+private enum OverrideChoice: String, CaseIterable, Hashable {
+    case defaultOverride
+    case voiceAndHaptic
+    case voiceOnly
+    case hapticOnly
+    case none
+
+    var shortLabel: String {
+        switch self {
+        case .defaultOverride: return "Default"
+        case .voiceAndHaptic:  return AlertMode.voiceAndHaptic.shortLabel
+        case .voiceOnly:       return AlertMode.voiceOnly.shortLabel
+        case .hapticOnly:      return AlertMode.hapticOnly.shortLabel
+        case .none:            return AlertMode.none.shortLabel
+        }
+    }
+
+    init(_ mode: AlertMode?) {
+        guard let mode else { self = .defaultOverride; return }
+        switch mode {
+        case .voiceAndHaptic: self = .voiceAndHaptic
+        case .voiceOnly:      self = .voiceOnly
+        case .hapticOnly:     self = .hapticOnly
+        case .none:           self = .none
+        }
+    }
+
+    var toMode: AlertMode? {
+        switch self {
+        case .defaultOverride: return nil
+        case .voiceAndHaptic:  return .voiceAndHaptic
+        case .voiceOnly:       return .voiceOnly
+        case .hapticOnly:      return .hapticOnly
+        case .none:            return AlertMode.none
+        }
+    }
+}
+
 struct OptionalAlertModePicker: View {
     let label: String
     @Binding var mode: AlertMode?
+    /// Retained for parity with the old call sites; no longer used now that
+    /// "Default" is an explicit option in the picker.
     let defaultMode: AlertMode
 
-    private var binding: Binding<AlertMode> {
+    private var binding: Binding<OverrideChoice> {
         Binding(
-            get: { mode ?? defaultMode },
-            set: { newValue in
-                mode = (newValue == defaultMode) ? nil : newValue
-            }
+            get: { OverrideChoice(mode) },
+            set: { newValue in mode = newValue.toMode }
         )
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(label)
-                Spacer()
-                if mode == nil {
-                    Text("Default")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Text(label)
             Picker(label, selection: binding) {
-                ForEach(AlertMode.allCases, id: \.self) { m in
-                    Text(m.shortLabel).tag(m)
+                ForEach(OverrideChoice.allCases, id: \.self) { c in
+                    Text(c.shortLabel).tag(c)
                 }
             }
             .pickerStyle(.segmented)
@@ -288,6 +321,7 @@ struct SplitDistancePicker: View {
             return [
                 ("0.5 km", 500),
                 ("1 km", 1000),
+                ("1.5 km", 1500),
                 ("2 km", 2000),
                 ("5 km", 5000),
                 ("10 km", 10000),
