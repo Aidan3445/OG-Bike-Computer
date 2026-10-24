@@ -41,6 +41,9 @@ struct RideSummary: Codable, Identifiable {
     /// Watch-only: held ride was discarded by the user. The ride is kept on
     /// disk for a grace period (see TransferLedger) so the user can undiscard.
     var wasDiscarded: Bool?
+    /// Where the current split stood when the ride was held, so continuing
+    /// picks the split up where it left off.
+    var splitProgress: SplitProgress?
 
     var onHold: Bool { isOnHold == true }
     var discarded: Bool { wasDiscarded == true }
@@ -54,7 +57,8 @@ struct RideSummary: Codable, Identifiable {
          highestElevation: Double? = nil, lowestElevation: Double? = nil,
          uploads: [ServiceUploadRecord]? = nil,
          isOnHold: Bool? = nil, wasAutoFinalized: Bool? = nil,
-         heldRouteID: UUID? = nil, wasDiscarded: Bool? = nil) {
+         heldRouteID: UUID? = nil, wasDiscarded: Bool? = nil,
+         splitProgress: SplitProgress? = nil) {
         self.id = id
         self.name = name
         self.activityType = activityType
@@ -80,6 +84,7 @@ struct RideSummary: Codable, Identifiable {
         self.wasAutoFinalized = wasAutoFinalized
         self.heldRouteID = heldRouteID
         self.wasDiscarded = wasDiscarded
+        self.splitProgress = splitProgress
     }
 
     init(from decoder: Decoder) throws {
@@ -110,5 +115,23 @@ struct RideSummary: Codable, Identifiable {
         wasAutoFinalized = try container.decodeIfPresent(Bool.self, forKey: .wasAutoFinalized)
         heldRouteID = try container.decodeIfPresent(UUID.self, forKey: .heldRouteID)
         wasDiscarded = try container.decodeIfPresent(Bool.self, forKey: .wasDiscarded)
+        splitProgress = try container.decodeIfPresent(SplitProgress.self, forKey: .splitProgress)
     }
+}
+
+/// Snapshot of the split in progress. Distances in meters.
+struct SplitProgress: Codable, Equatable {
+    let splitLength: Double
+    let number: Int
+    let lastSplitDistance: Double
+    let startDistance: Double
+    let startMovingTime: TimeInterval
+    let startElapsedTime: TimeInterval
+    let startElevationGain: Double
+    let startElevationLoss: Double
+    let startCalories: Double
+    let maxSpeed: Double
+    let maxHeartRate: Double
+    let heartRateSum: Double
+    let heartRateCount: Int
 }

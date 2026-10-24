@@ -40,6 +40,7 @@ private struct CheckpointMeta: Codable, Sendable {
     let highestElevation: Double?
     let lowestElevation: Double?
     let pointCount: Int
+    let splitProgress: SplitProgress?
 }
 
 private func decodeCheckpointMeta(_ data: Data) -> CheckpointMeta? {
@@ -129,6 +130,10 @@ class WorkoutManager: NSObject, ObservableObject {
     private var splitMaxHR: Double = 0
     private var splitHRSum: Double = 0
     private var splitHRCount: Int = 0
+    /// Split saved with a held ride, applied when the ride continues.
+    private var heldSplitProgress: SplitProgress?
+    /// Calories from before a hold. Each workout session counts from zero.
+    private var caloriesBase: Double = 0
     var navigationAlerts: NavigationAlertPreferences = .default {
         didSet {
             // When split distance changes mid-ride, re-anchor to the nearest split
@@ -159,6 +164,56 @@ class WorkoutManager: NSObject, ObservableObject {
         splitMaxHR = 0
         splitHRSum = 0
         splitHRCount = 0
+    }
+
+    private func currentSplitProgress() -> SplitProgress {
+        SplitProgress(
+            splitLength: navigationAlerts.splitAlerts.splitDistance,
+            number: currentSplitNumber,
+            lastSplitDistance: lastSplitDistance,
+            startDistance: splitStartDistance,
+            startMovingTime: splitStartMovingTime,
+            startElapsedTime: splitStartElapsedTime,
+            startElevationGain: splitStartElevationGain,
+            startElevationLoss: splitStartElevationLoss,
+            startCalories: splitStartCalories,
+            maxSpeed: splitMaxSpeed,
+            maxHeartRate: splitMaxHR,
+            heartRateSum: splitHRSum,
+            heartRateCount: splitHRCount
+        )
+    }
+
+    /// Picks the split back up where it was when the ride was held. Older
+    /// held rides didn't save it, so the split start is estimated from the
+    /// ride's averages.
+    private func restoreHeldSplit(splitDist: Double) {
+        if let saved = heldSplitProgress, saved.splitLength == splitDist {
+            currentSplitNumber = saved.number
+            lastSplitDistance = saved.lastSplitDistance
+            splitStartDistance = saved.startDistance
+            splitStartMovingTime = saved.startMovingTime
+            splitStartElapsedTime = saved.startElapsedTime
+            splitStartElevationGain = saved.startElevationGain
+            splitStartElevationLoss = saved.startElevationLoss
+            splitStartCalories = saved.startCalories
+            splitMaxSpeed = saved.maxSpeed
+            splitMaxHR = saved.maxHeartRate
+            splitHRSum = saved.heartRateSum
+            splitHRCount = saved.heartRateCount
+        } else {
+            currentSplitNumber = Int(totalDistance / splitDist)
+            lastSplitDistance = Double(currentSplitNumber) * splitDist
+            let fraction = totalDistance > 0 ? lastSplitDistance / totalDistance : 0
+            resetSplitAccumulators()
+            splitStartDistance = lastSplitDistance
+            splitStartMovingTime = movingTime * fraction
+            splitStartElapsedTime = timerAccumulated * fraction
+            splitStartElevationGain = liveElevationGain * fraction
+            splitStartElevationLoss = liveElevationLoss * fraction
+            splitStartCalories = activeCalories * fraction
+        }
+        heldSplitProgress = nil
     }
 
     /// Set after ride ends, cleared when user dismisses summary screen
@@ -663,6 +718,7 @@ class WorkoutManager: NSObject, ObservableObject {
         if continuationBase == nil {
             timerAccumulated = 0
             initialRideStartDate = workoutStartDate
+            caloriesBase = 0
         }
         startDisplayTimer()
 
@@ -672,21 +728,18 @@ class WorkoutManager: NSObject, ObservableObject {
         slowSampleCount = 0
         positionBuffer = []
         lastLocationUpdateAt = nil
-        // Seed lastCommittedLocation from restored track end when continuing
+        // Seed lastCommittedLocation from restored track end when continuing.
+        // The rider may have moved since the hold, so that gap isn't ridden distance.
         lastCommittedLocation = continuationBase != nil ? recordedLocations.last : nil
-        skipNextDistanceGap = false
-        // Split tracking anchors to current accumulated distance when continuing.
-        // When resuming a held ride, restore the split number and last-split boundary
-        // so numbering and timing carry over correctly (e.g. 12 mi in at 5mi splits → split 3 fires at 15mi).
+        skipNextDistanceGap = continuationBase != nil
         let splitDist = navigationAlerts.splitAlerts.splitDistance
         if continuationBase != nil && splitDist > 0 {
-            currentSplitNumber = Int(totalDistance / splitDist)
-            lastSplitDistance = Double(currentSplitNumber) * splitDist
+            restoreHeldSplit(splitDist: splitDist)
         } else {
             currentSplitNumber = 0
             lastSplitDistance = totalDistance
+            resetSplitAccumulators()
         }
-        resetSplitAccumulators()
         initialRouteName = navigation.processedRoute?.name
         startTelemetryTimer()
 
@@ -1152,6 +1205,14 @@ class WorkoutManager: NSObject, ObservableObject {
     func dismissSummary() {
         completedRideSummary = nil
         isActive = false
+    }
+
+    /// The summary keeps `isActive` true until it's dismissed, so phone
+    /// commands clear it first or they'd see a ride that already ended.
+    func dismissSummaryIfShowing() {
+        if completedRideSummary != nil {
+            dismissSummary()
+        }
     }
 
     private func cleanup() {
@@ -1710,7 +1771,8 @@ class WorkoutManager: NSObject, ObservableObject {
             maxPower: maxPower > 0 ? maxPower : nil,
             highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
             lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil,
-            pointCount: locations.count
+            pointCount: locations.count,
+            splitProgress: currentSplitProgress()
         )
 
         let trackURL = checkpointTrackURL
@@ -1813,7 +1875,8 @@ class WorkoutManager: NSObject, ObservableObject {
                 maxHeartRate: meta.maxHeartRate,
                 highestElevation: meta.highestElevation,
                 lowestElevation: meta.lowestElevation,
-                isOnHold: true
+                isOnHold: true,
+                splitProgress: meta.splitProgress
             )
 
             ConnectivityManager.shared.sendRide(summary: summary, trackURL: destURL)
@@ -1926,7 +1989,8 @@ class WorkoutManager: NSObject, ObservableObject {
             highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
             lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil,
             isOnHold: true,
-            heldRouteID: activeRoute?.id
+            heldRouteID: activeRoute?.id,
+            splitProgress: currentSplitProgress()
         )
 
         let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
@@ -2080,6 +2144,9 @@ class WorkoutManager: NSObject, ObservableObject {
         maxSpeed = summary.maxSpeed ?? 0
         maxHeartRate = summary.maxHeartRate ?? 0
         maxPower = summary.maxPower ?? 0
+        activeCalories = summary.calories
+        caloriesBase = summary.calories
+        heldSplitProgress = summary.splitProgress
         highestElevation = summary.highestElevation ?? -Double.greatestFiniteMagnitude
         lowestElevation = summary.lowestElevation ?? Double.greatestFiniteMagnitude
         averageHeartRate = heartRateSampleCount > 0 ? heartRateSum / Double(heartRateSampleCount) : 0
@@ -2410,7 +2477,7 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
                     }
                 case HKQuantityType(.activeEnergyBurned):
                     let unit = HKUnit.kilocalorie()
-                    self.activeCalories = statistics?.sumQuantity()?.doubleValue(for: unit) ?? 0
+                    self.activeCalories = self.caloriesBase + (statistics?.sumQuantity()?.doubleValue(for: unit) ?? 0)
                 default:
                     break
                 }
