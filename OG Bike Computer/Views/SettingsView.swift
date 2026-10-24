@@ -120,27 +120,6 @@ struct SettingsView: View {
                     }
                 }
 
-                // MARK: - Rider Profile
-                Section {
-                    NavigationLink {
-                        RiderProfileView(userSettings: userSettings)
-                    } label: {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Rider Profile")
-                                Text(
-                                    "\(weightLabel(userSettings.settings.riderWeight)) \u{2022} \(userSettings.settings.activeBikeName) (\(weightLabel(userSettings.settings.bikeWeight)))"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
-                        } icon: {
-                            Image(systemName: "figure.outdoor.cycle")
-                                .foregroundStyle(.purple)
-                        }
-                    }
-                }
-
                 // MARK: - Units
                 NavigationLink {
                     UnitsSettingsView(userSettings: userSettings)
@@ -213,8 +192,26 @@ struct SettingsView: View {
                 }
             }
 
-            // MARK: - Integrations
+            // MARK: - Rider Profile + Integrations + Tips (grouped)
             Section {
+                NavigationLink {
+                    RiderProfileView(userSettings: userSettings)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Rider Profile")
+                            Text(
+                                "\(weightLabel(userSettings.settings.riderWeight)) \u{2022} \(userSettings.settings.activeBikeName) (\(weightLabel(userSettings.settings.bikeWeight)))"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "figure.outdoor.cycle")
+                            .foregroundStyle(.purple)
+                    }
+                }
+
                 NavigationLink {
                     IntegrationsSettingsView(integrationSettings: integrationSettings, userSettings: userSettings)
                 } label: {
@@ -230,10 +227,7 @@ struct SettingsView: View {
                             .foregroundStyle(.teal)
                     }
                 }
-            }
-            
-            // MARK: - Tips
-            Section {
+
                 NavigationLink {
                     TipsView()
                 } label: {
