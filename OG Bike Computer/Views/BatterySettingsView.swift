@@ -126,7 +126,7 @@ struct BatterySettingsView: View {
                 }
 
                 NavigationLink {
-                    NavigationAlertSettingsView(userSettings: userSettings)
+                    NavigationAlertSettingsView(userSettings: userSettings, metricConfig: metricConfig)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {

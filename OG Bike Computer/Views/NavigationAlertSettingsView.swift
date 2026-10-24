@@ -12,7 +12,9 @@ import UIKit
 
 struct NavigationAlertSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
+    @State private var showResetConfirm = false
 
     private var prefs: Binding<NavigationAlertPreferences> {
         $userSettings.settings.navigationAlerts
@@ -32,12 +34,24 @@ struct NavigationAlertSettingsView: View {
             if userSettings.settings.navigationAlerts != .default {
                 Section {
                     Button("Reset Alerts to Defaults", role: .destructive) {
-                        userSettings.settings.navigationAlerts = .default
+                        showResetConfirm = true
                     }
                 }
             }
         }
         .settingsPageTitle("Alerts", preset: userSettings.activePresetName)
+        .confirmationDialog(
+            "Reset Alerts to Defaults?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) {
+                userSettings.settings.navigationAlerts = .default
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All alert settings will be restored to their defaults.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
@@ -79,8 +93,8 @@ struct NavigationAlertSettingsView: View {
                 DistancePicker(
                     label: "Secondary Distance",
                     meters: prefs.turnAlerts.secondaryApproachDistance,
-                    min: 804.672,  // 0.5mi / 750m
-                    max: 3218.69   // 2mi / 3km
+                    min: 800,      // 0.5 mi / 800 m
+                    max: 3218.69   // 2 mi / 3 km
                 )
             }
         } header: {
@@ -207,30 +221,53 @@ struct NavigationAlertSettingsView: View {
 
     @ViewBuilder
     private var autoPauseAlertsSection: some View {
+        let autoPauseEnabled = userSettings.settings.ridePreferences.autoPause.enabled
+
         Section {
-            Toggle("Auto-Pause Alerts", isOn: prefs.autoPauseAlerts.enabled)
-
-            if userSettings.settings.navigationAlerts.autoPauseAlerts.enabled {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Paused")
-                    Picker("Paused", selection: prefs.autoPauseAlerts.pauseMode) {
-                        ForEach(AlertMode.allCases, id: \.self) { m in
-                            Text(m.shortLabel).tag(m)
+            if !autoPauseEnabled {
+                NavigationLink {
+                    RideSettingsView(userSettings: userSettings, metricConfig: metricConfig)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-Pause is off")
+                                .font(.subheadline.weight(.medium))
+                            Text("Turn it on in Ride Settings to enable these alerts.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .pickerStyle(.segmented)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Resumed")
-                    Picker("Resumed", selection: prefs.autoPauseAlerts.resumeMode) {
-                        ForEach(AlertMode.allCases, id: \.self) { m in
-                            Text(m.shortLabel).tag(m)
-                        }
-                    }
-                    .pickerStyle(.segmented)
                 }
             }
+
+            Group {
+                Toggle("Auto-Pause Alerts", isOn: prefs.autoPauseAlerts.enabled)
+
+                if userSettings.settings.navigationAlerts.autoPauseAlerts.enabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Paused")
+                        Picker("Paused", selection: prefs.autoPauseAlerts.pauseMode) {
+                            ForEach(AlertMode.allCases, id: \.self) { m in
+                                Text(m.shortLabel).tag(m)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Resumed")
+                        Picker("Resumed", selection: prefs.autoPauseAlerts.resumeMode) {
+                            ForEach(AlertMode.allCases, id: \.self) { m in
+                                Text(m.shortLabel).tag(m)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+            }
+            .disabled(!autoPauseEnabled)
         } header: {
             Label("Auto-Pause Alerts", systemImage: "pause.circle")
         } footer: {
@@ -269,12 +306,9 @@ struct NavigationAlertSettingsView: View {
             }
             .pickerStyle(.segmented)
             .onChange(of: prefs.haptics.intensity.wrappedValue) { _, newValue in
-                let style: UIImpactFeedbackGenerator.FeedbackStyle = switch newValue {
-                case .light:  .light
-                case .medium: .medium
-                case .strong: .heavy
-                }
-                UIImpactFeedbackGenerator(style: style).impactOccurred()
+                // Preview the haptic on the WATCH (that's the device the
+                // setting actually affects). Phone preview was misleading.
+                ConnectivityManager.shared.sendSampleHaptic(intensity: newValue.rawValue)
             }
         } header: {
             Label("Haptic Feedback", systemImage: "hand.point.up.braille")
