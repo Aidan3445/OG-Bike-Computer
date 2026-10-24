@@ -40,7 +40,7 @@ struct RideSettingsView: View {
                 }
             }
         }
-        .settingsPageTitle("Ride Settings", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Ride Settings", preset: userSettings.activePresetName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

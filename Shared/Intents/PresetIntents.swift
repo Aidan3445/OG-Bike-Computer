@@ -1,28 +1,28 @@
 //
-//  ProfileIntents.swift
+//  PresetIntents.swift
 //  OG Bike Computer
 //
-//  App Intents for selecting settings profiles and bikes.
+//  App Intents for selecting settings presets and bikes.
 //
 
 import AppIntents
 import Foundation
 
-// MARK: - Select Settings Profile
+// MARK: - Select Settings Preset
 
-struct SelectSettingsProfileIntent: AppIntent {
-    static var title: LocalizedStringResource = "Select Settings Profile"
-    static var description: IntentDescription = "Switches to a different settings profile."
+struct SelectSettingsPresetIntent: AppIntent {
+    static var title: LocalizedStringResource = "Select Settings Preset"
+    static var description: IntentDescription = "Switches to a different settings preset."
 
-    @Parameter(title: "Profile")
-    var profile: SettingsProfileEntity
+    @Parameter(title: "Preset")
+    var preset: SettingsPresetEntity
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         await MainActor.run {
             let store = UserSettingsStore()
-            store.switchToProfile(id: profile.id)
+            store.switchToPreset(id: preset.id)
         }
-        return .result(dialog: "Switched to \(profile.name) profile.")
+        return .result(dialog: "Switched to \(preset.name) preset.")
     }
 }
 

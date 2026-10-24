@@ -18,13 +18,13 @@ struct MapCustomizationView: View {
         $userSettings.settings.ridePreferences.mapScreen
     }
 
-    /// Map configs from other profiles available for import, excluding any identical to the current config
-    private var otherProfileConfigs: [(profileName: String, config: MapScreenConfig)] {
+    /// Map configs from other presets available for import, excluding any identical to the current config
+    private var otherPresetConfigs: [(presetName: String, config: MapScreenConfig)] {
         guard let activeID = userSettings.activePresetID else { return [] }
         let current = userSettings.settings.ridePreferences.mapScreen
         return userSettings.presets
             .filter { $0.id != activeID }
-            .map { (profileName: $0.name, config: $0.settings.ridePreferences.mapScreen) }
+            .map { (presetName: $0.name, config: $0.settings.ridePreferences.mapScreen) }
             .filter { $0.config != current }
     }
 
@@ -42,9 +42,9 @@ struct MapCustomizationView: View {
             elevationScreenSection
             resetSection
         }
-        .settingsPageTitle("Route Screens", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Route Screens", preset: userSettings.activePresetName)
         .toolbar {
-            if !otherProfileConfigs.isEmpty {
+            if !otherPresetConfigs.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showProfileImport = true
@@ -63,7 +63,7 @@ struct MapCustomizationView: View {
         }
         .sheet(isPresented: $showProfileImport) {
             MapConfigImportSheet(
-                configs: otherProfileConfigs,
+                configs: otherPresetConfigs,
                 onImport: { imported in
                     userSettings.settings.ridePreferences.mapScreen = imported
                 }
@@ -795,7 +795,7 @@ struct MapScreenPreview: View {
 // MARK: - Map Config Import Sheet
 
 struct MapConfigImportSheet: View {
-    let configs: [(profileName: String, config: MapScreenConfig)]
+    let configs: [(presetName: String, config: MapScreenConfig)]
     let onImport: (MapScreenConfig) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -811,7 +811,7 @@ struct MapConfigImportSheet: View {
                             VStack(spacing: 8) {
                                 MapScreenPreview(config: item.config)
 
-                                Text(item.profileName)
+                                Text(item.presetName)
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
 

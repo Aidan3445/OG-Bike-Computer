@@ -51,7 +51,7 @@ struct PhoneAlertSettingsView: View {
                 }
             }
         }
-        .settingsPageTitle("Live Activity", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Live Activity", preset: userSettings.activePresetName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

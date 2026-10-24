@@ -37,7 +37,7 @@ struct NavigationAlertSettingsView: View {
                 }
             }
         }
-        .settingsPageTitle("Alerts", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Alerts", preset: userSettings.activePresetName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

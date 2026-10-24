@@ -81,9 +81,9 @@
 			membershipExceptions = (
 				Entities/BikeEntity.swift,
 				Entities/RouteEntity.swift,
-				Entities/SettingsProfileEntity.swift,
+				Entities/SettingsPresetEntity.swift,
 				Intents/ChangeSettingIntent.swift,
-				Intents/ProfileIntents.swift,
+				Intents/PresetIntents.swift,
 				Intents/RideIntents.swift,
 				Models/SampleProcessedRoute.swift,
 				Models/SettingsPreset.swift,

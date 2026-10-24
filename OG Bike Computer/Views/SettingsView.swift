@@ -103,7 +103,7 @@ struct SettingsView: View {
                 }
                 
                 NavigationLink {
-                    MetricCustomizationView(metricConfig: metricConfig, userSettings: userSettings, profileName: userSettings.activeProfileName)
+                    MetricCustomizationView(metricConfig: metricConfig, userSettings: userSettings, presetName: userSettings.activePresetName)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
@@ -355,7 +355,7 @@ struct SettingsView: View {
                 ShareSheet(activityItems: [url])
             }
         }
-        .settingsPageTitle("Settings", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Settings", preset: userSettings.activePresetName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
@@ -610,7 +610,7 @@ struct RiderProfileView: View {
                 )
             }
         }
-        .settingsPageTitle("Rider Profile", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Rider Profile", preset: userSettings.activePresetName)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -794,12 +794,12 @@ struct ClearRidesSheet: View {
 // MARK: - Settings Profile Subtitle
 
 extension View {
-    func settingsPageTitle(_ title: String, profile: String) -> some View {
+    func settingsPageTitle(_ title: String, preset: String) -> some View {
         if #available(iOS 26.0, *) {
             AnyView(
                 self
                     .navigationTitle(title)
-                    .navigationSubtitle(profile)
+                    .navigationSubtitle(preset)
             )
         } else {
             AnyView(

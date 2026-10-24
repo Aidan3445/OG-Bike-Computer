@@ -75,7 +75,7 @@ struct UnitsSettingsView: View {
                 }
             }
         }
-        .settingsPageTitle("Units", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Units", preset: userSettings.activePresetName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {

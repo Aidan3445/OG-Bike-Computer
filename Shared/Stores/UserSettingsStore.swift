@@ -114,12 +114,12 @@ class UserSettingsStore: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     static let maxPresets = 10
 
-    /// Name of the currently active profile (for display in navigation subtitles)
-    var activeProfileName: String {
+    /// Name of the currently active preset (for display in navigation subtitles)
+    var activePresetName: String {
         if let id = activePresetID, let preset = presets.first(where: { $0.id == id }) {
             return preset.name
         }
-        return "No Profile"
+        return "No Preset"
     }
 
     init() {
@@ -152,7 +152,7 @@ class UserSettingsStore: ObservableObject {
             activePresetID = id
         }
 
-        // Create default "Main" profile on first launch
+        // Create default "Main" preset on first launch
         if presets.isEmpty {
             let main = SettingsPreset(name: "Main", settings: settings)
             presets = [main]
@@ -166,7 +166,7 @@ class UserSettingsStore: ObservableObject {
             persistActivePresetID()
         }
 
-        // Debounce disk writes, watch sync, and auto-save to active profile
+        // Debounce disk writes, watch sync, and auto-save to active preset
         $settings
             .dropFirst()
             .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
@@ -193,7 +193,7 @@ class UserSettingsStore: ObservableObject {
         #endif
     }
 
-    /// Attach the MetricConfigStore so metric pages are included in profile auto-save.
+    /// Attach the MetricConfigStore so metric pages are included in preset auto-save.
     /// Call this once after both stores are initialized.
     func attachMetricStore(_ store: MetricConfigStore) {
         self.metricConfigStore = store
@@ -228,9 +228,9 @@ class UserSettingsStore: ObservableObject {
         #endif
     }
 
-    // MARK: - Profiles
+    // MARK: - Presets
 
-    /// Auto-save current settings + metric config to the active profile.
+    /// Auto-save current settings + metric config to the active preset.
     /// Called automatically on every debounced settings or metric config change.
     private func autoSaveToActivePreset() {
         guard let id = activePresetID,
@@ -242,7 +242,7 @@ class UserSettingsStore: ObservableObject {
         savePresets()
     }
 
-    /// Create a new profile from the current settings and activate it.
+    /// Create a new preset from the current settings and activate it.
     func createFromCurrent(name: String) -> Bool {
         guard presets.count < Self.maxPresets else { return false }
         let preset = SettingsPreset(
@@ -257,40 +257,40 @@ class UserSettingsStore: ObservableObject {
         return true
     }
 
-    /// Create a new profile from default settings and activate it.
+    /// Create a new preset from default settings and activate it.
     func createFromDefaults(name: String) -> Bool {
         guard presets.count < Self.maxPresets else { return false }
         let preset = SettingsPreset(name: name, settings: .default, metricConfig: .default)
         presets.append(preset)
         activePresetID = preset.id
         persistActivePresetID()
-        // Apply default settings (preserve rider profile)
-        let currentProfile = (settings.riderWeight, settings.riderHeight, settings.bikes)
+        // Apply default settings (preserve Rider Profile: weight, height, bikes)
+        let currentRider = (settings.riderWeight, settings.riderHeight, settings.bikes)
         settings = .default
-        settings.riderWeight = currentProfile.0
-        settings.riderHeight = currentProfile.1
-        settings.bikes = currentProfile.2
+        settings.riderWeight = currentRider.0
+        settings.riderHeight = currentRider.1
+        settings.bikes = currentRider.2
         if let first = settings.bikes.first { settings.activeBikeID = first.id }
         metricConfigStore?.config = .default
         savePresets()
         return true
     }
 
-    /// Switch to a different profile. Auto-saves current profile first, then loads the target.
-    func switchToProfile(id: UUID) {
+    /// Switch to a different preset. Auto-saves the current preset first, then loads the target.
+    func switchToPreset(id: UUID) {
         guard let preset = presets.first(where: { $0.id == id }),
               id != activePresetID else { return }
 
-        // Auto-save current profile before switching
+        // Auto-save current preset before switching
         autoSaveToActivePreset()
 
-        // Load the target profile — preserve rider list (weight, height, bikes) but restore activeBikeID
-        let currentProfile = (settings.riderWeight, settings.riderHeight, settings.bikes)
+        // Load the target preset. Preserve Rider Profile fields (weight, height, bikes) but restore activeBikeID.
+        let currentRider = (settings.riderWeight, settings.riderHeight, settings.bikes)
         settings = preset.settings
-        settings.riderWeight = currentProfile.0
-        settings.riderHeight = currentProfile.1
-        settings.bikes = currentProfile.2
-        // Restore which bike was active in this profile (if it still exists)
+        settings.riderWeight = currentRider.0
+        settings.riderHeight = currentRider.1
+        settings.bikes = currentRider.2
+        // Restore which bike was active in this preset (if it still exists)
         if let bikeID = preset.settings.activeBikeID,
            settings.bikes.contains(where: { $0.id == bikeID }) {
             settings.activeBikeID = bikeID
@@ -306,7 +306,7 @@ class UserSettingsStore: ObservableObject {
     func deletePreset(id: UUID) {
         presets.removeAll { $0.id == id }
         if activePresetID == id {
-            // Activate the first remaining profile
+            // Activate the first remaining preset
             activePresetID = presets.first?.id
             persistActivePresetID()
         }

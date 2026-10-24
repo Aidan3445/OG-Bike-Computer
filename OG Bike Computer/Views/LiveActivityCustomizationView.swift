@@ -122,7 +122,7 @@ struct LiveActivityCustomizationView: View {
                 }
             }
         }
-        .settingsPageTitle("Live Activity Stats", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Live Activity Stats", preset: userSettings.activePresetName)
         .animation(.default, value: usesDistanceRemaining)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

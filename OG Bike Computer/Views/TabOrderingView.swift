@@ -57,7 +57,7 @@ struct TabOrderingView: View {
             }
         }
         .environment(\.editMode, .constant(.active))
-        .settingsPageTitle("Tab Order", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Tab Order", preset: userSettings.activePresetName)
     }
 
     private func metricPage(for key: WorkoutTabKey) -> MetricPage? {

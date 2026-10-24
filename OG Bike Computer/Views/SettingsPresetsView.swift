@@ -11,7 +11,7 @@ struct SettingsPresetsView: View {
     @ObservedObject var userSettings: UserSettingsStore
     @State private var showCreateSheet = false
     @State private var showRenameAlert = false
-    @State private var newProfileName = ""
+    @State private var newPresetName = ""
     @State private var renameTargetID: UUID?
     @State private var createFromDefaults = false
 
@@ -22,7 +22,7 @@ struct SettingsPresetsView: View {
                     let isActive = userSettings.activePresetID == preset.id
 
                     Button {
-                        userSettings.switchToProfile(id: preset.id)
+                        userSettings.switchToPreset(id: preset.id)
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
@@ -48,7 +48,7 @@ struct SettingsPresetsView: View {
                     }
                     .contextMenu {
                         Button {
-                            newProfileName = preset.name
+                            newPresetName = preset.name
                             renameTargetID = preset.id
                             showRenameAlert = true
                         } label: {
@@ -73,7 +73,7 @@ struct SettingsPresetsView: View {
                         }
 
                         Button {
-                            newProfileName = preset.name
+                            newPresetName = preset.name
                             renameTargetID = preset.id
                             showRenameAlert = true
                         } label: {
@@ -83,15 +83,15 @@ struct SettingsPresetsView: View {
                     }
                 }
             } header: {
-                Text("Profiles")
+                Text("Presets")
             } footer: {
-                Text("Tap to switch profiles. Settings changes are saved automatically to the active profile. Long-press or swipe for more options.")
+                Text("Tap to switch presets. Settings changes are saved automatically to the active preset. Long-press or swipe for more options.")
             }
 
             Section {
                 Button {
                     createFromDefaults = false
-                    newProfileName = ""
+                    newPresetName = ""
                     showCreateSheet = true
                 } label: {
                     Label("New from Current Settings", systemImage: "doc.on.doc")
@@ -100,21 +100,21 @@ struct SettingsPresetsView: View {
 
                 Button {
                     createFromDefaults = true
-                    newProfileName = ""
+                    newPresetName = ""
                     showCreateSheet = true
                 } label: {
                     Label("New from Defaults", systemImage: "plus.circle")
                 }
                 .disabled(userSettings.presets.count >= UserSettingsStore.maxPresets)
             } footer: {
-                Text("Up to \(UserSettingsStore.maxPresets) profiles. Rider profiles (weight, height, bikes) are shared across all settings profiles.")
+                Text("Up to \(UserSettingsStore.maxPresets) presets. Your Rider Profile (weight, bikes) is shared across all presets.")
             }
         }
-        .navigationTitle("Profiles")
-        .alert("New Profile", isPresented: $showCreateSheet) {
-            TextField("Profile name", text: $newProfileName)
+        .navigationTitle("Presets")
+        .alert("New Preset", isPresented: $showCreateSheet) {
+            TextField("Preset name", text: $newPresetName)
             Button("Create") {
-                let name = newProfileName.isEmpty ? "Profile \(userSettings.presets.count + 1)" : newProfileName
+                let name = newPresetName.isEmpty ? "Preset \(userSettings.presets.count + 1)" : newPresetName
                 if createFromDefaults {
                     _ = userSettings.createFromDefaults(name: name)
                 } else {
@@ -123,11 +123,11 @@ struct SettingsPresetsView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .alert("Rename Profile", isPresented: $showRenameAlert) {
-            TextField("New name", text: $newProfileName)
+        .alert("Rename Preset", isPresented: $showRenameAlert) {
+            TextField("New name", text: $newPresetName)
             Button("Rename") {
                 if let id = renameTargetID {
-                    userSettings.renamePreset(id: id, name: newProfileName)
+                    userSettings.renamePreset(id: id, name: newPresetName)
                 }
             }
             Button("Cancel", role: .cancel) {}

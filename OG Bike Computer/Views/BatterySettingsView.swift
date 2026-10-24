@@ -157,7 +157,7 @@ struct BatterySettingsView: View {
                 )
             }
         }
-        .settingsPageTitle("Battery & Efficiency", profile: userSettings.activeProfileName)
+        .settingsPageTitle("Battery & Efficiency", preset: userSettings.activePresetName)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
