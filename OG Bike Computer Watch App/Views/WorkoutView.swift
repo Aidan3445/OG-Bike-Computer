@@ -11,10 +11,10 @@ struct WorkoutView<ExtraTab: View>: View {
     @ObservedObject var workout: WorkoutManager
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
+    @ObservedObject private var voice = VoiceNavigator.shared
     var onStop: () -> Void
     var extraTab: ExtraTab?
 
-    @State private var voiceEnabled = true
     @State private var page = 2
     @State private var tab = 1
     @State private var endCountdown: Double = 0
@@ -170,6 +170,8 @@ struct WorkoutView<ExtraTab: View>: View {
             navOverlayTask?.cancel()
             navOverlayTask = nil
             showNavOverlay = false
+            cancelEndCountdown()
+            cancelHoldCountdown()
         }
         .sheet(isPresented: $showHoldExplainer) {
             holdExplainerSheet
@@ -239,7 +241,7 @@ struct WorkoutView<ExtraTab: View>: View {
             HStack(spacing: 10) {
                 if workout.isPaused || workout.isAutoPaused {
                     Button {
-                        cancelEndCountdown()
+                        cancelCountdowns()
                         workout.resume()
                         withAnimation { page = 2 }
                     } label: {
@@ -251,7 +253,7 @@ struct WorkoutView<ExtraTab: View>: View {
                     .buttonStyle(.plain)
                 } else {
                     Button {
-                        cancelEndCountdown()
+                        cancelCountdowns()
                         workout.pause()
                     } label: {
                         Image(systemName: "pause.fill")
@@ -265,7 +267,7 @@ struct WorkoutView<ExtraTab: View>: View {
 
                 ZStack {
                     if holdCountdown > 0 {
-                        Button { cancelHoldCountdown() } label: {
+                        Button { cancelCountdowns() } label: {
                             ZStack {
                                 Circle()
                                     .trim(from: 0, to: holdCountdown / 3.0)
@@ -292,7 +294,7 @@ struct WorkoutView<ExtraTab: View>: View {
 
                 ZStack {
                     if endCountdown > 0 {
-                        Button { cancelEndCountdown() } label: {
+                        Button { cancelCountdowns() } label: {
                             ZStack {
                                 Circle()
                                     .trim(from: 0, to: endCountdown / 3.0)
@@ -320,13 +322,12 @@ struct WorkoutView<ExtraTab: View>: View {
 
             Divider()
 
-            Toggle(isOn: $voiceEnabled) {
-                Label("Voice", systemImage: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+            Toggle(isOn: $voice.isEnabled) {
+                Label("Voice", systemImage: voice.isEnabled ? "speaker.wave.2.fill" : "speaker.slash")
                     .font(.caption)
             }
-            .onChange(of: voiceEnabled) { _, newValue in
-                VoiceNavigator.shared.isEnabled = newValue
-            }
+            // Controls swallow the tap, so cancel alongside them.
+            .simultaneousGesture(TapGesture().onEnded { cancelCountdowns() })
 
             if workout.navigation.processedRoute?.hasWaypoints == true {
                 Divider()
@@ -355,26 +356,35 @@ struct WorkoutView<ExtraTab: View>: View {
                         }
                     }
                 }
+                .simultaneousGesture(TapGesture().onEnded { cancelCountdowns() })
             }
 
         }
         .ignoresSafeArea(edges: .top)
         .contentShape(Rectangle())
-        .onTapGesture {
-            if endCountdown > 0 { cancelEndCountdown() }
-            if holdCountdown > 0 { cancelHoldCountdown() }
-        }
-        .onChange(of: page) { _, _ in
-            cancelEndCountdown()
-            cancelHoldCountdown()
-        }
+        .onTapGesture { cancelCountdowns() }
+        .onChange(of: page) { _, _ in cancelCountdowns() }
+    }
+
+    /// Any tap on the controls page cancels whichever countdown is running.
+    private func cancelCountdowns() {
+        cancelEndCountdown()
+        cancelHoldCountdown()
     }
 
     private func startEndCountdown() {
+        cancelCountdowns()
         endCountdown = 0.001 // trigger visible state
-        endTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+        endTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
+            // Invalidate this timer itself, not just the stored one, so it can
+            // never outlive the ride and fire onStop again.
+            guard workout.isActive, workout.completedRideSummary == nil else {
+                timer.invalidate()
+                return
+            }
             endCountdown += 0.05
             if endCountdown >= 3.0 {
+                timer.invalidate()
                 cancelEndCountdown()
                 onStop()
             }
@@ -396,11 +406,16 @@ struct WorkoutView<ExtraTab: View>: View {
     }
 
     private func startHoldCountdown() {
-        cancelEndCountdown()
+        cancelCountdowns()
         holdCountdown = 0.001
-        holdTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+        holdTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
+            guard workout.isActive, workout.completedRideSummary == nil else {
+                timer.invalidate()
+                return
+            }
             holdCountdown += 0.05
             if holdCountdown >= 3.0 {
+                timer.invalidate()
                 cancelHoldCountdown()
                 if UserDefaults.standard.bool(forKey: "holdExplainerShown") {
                     workout.attemptHold()
