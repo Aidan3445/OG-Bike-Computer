@@ -69,7 +69,6 @@ struct MidRideRouteList: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(route.name)
                                         .font(.subheadline)
-                                        .lineLimit(1)
                                     Text(formatDistance(route.distance))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)

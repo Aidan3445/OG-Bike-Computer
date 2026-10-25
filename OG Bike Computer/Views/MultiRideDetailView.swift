@@ -369,7 +369,6 @@ struct MultiRideDetailView: View {
                                     .foregroundStyle(.secondary)
                                 Text(s.name)
                                     .font(.caption)
-                                    .lineLimit(1)
                                 Spacer()
                                 Text(formatDistance(s.distance))
                                     .font(.caption.monospacedDigit())

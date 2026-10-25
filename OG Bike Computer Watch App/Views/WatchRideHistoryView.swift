@@ -78,7 +78,6 @@ struct WatchRideHistoryView: View {
                     statusIcon(for: status, ride: ride, isInFlight: isInFlight, presence: presence)
                     Text(ride.name)
                         .font(.headline)
-                        .lineLimit(1)
                 }
                 Text(formatDistance(ride.distance))
                     .font(.caption)

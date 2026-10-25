@@ -19,40 +19,38 @@ struct RideRow: View {
     var body: some View {
         let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top) {
-                Image(systemName: ride.activityType.icon)
-                    .foregroundStyle(.secondary)
-                Text(ride.name)
-                    .font(.headline)
-                if let uploads = ride.uploads, !uploads.isEmpty {
-                    // Show one badge per service (deduplicate in case of retransmit duplicates)
-                    let uniqueServices = uploads.uniqueByService()
-                    ForEach(uniqueServices) { upload in
-                        ServiceBadge(service: upload.service)
+            // Everything but the name sits on the date line so the name gets the full width.
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: ride.activityType.icon)
+                    Text(ride.date.formatted(date: .abbreviated, time: .shortened))
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    if ride.wasAutoFinalized == true {
+                        Image(systemName: "exclamationmark.circle")
+                            .help("Auto-saved when a new ride started")
                     }
-                }
-                if ride.wasAutoFinalized == true {
-                    Image(systemName: "exclamationmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .help("Auto-saved when a new ride started")
-                }
-                if isTransferring {
-                    HStack(spacing: 4) {
+                    if isTransferring {
                         ProgressView()
                             .scaleEffect(0.7)
                             .frame(width: 14, height: 14)
                     }
+                    Spacer(minLength: 0)
+                    if let uploads = ride.uploads, !uploads.isEmpty {
+                        // One badge per service, in case a retransmit duplicated a record
+                        HStack(spacing: 4) {
+                            ForEach(uploads.uniqueByService()) { upload in
+                                ServiceBadge(service: upload.service)
+                            }
+                        }
+                    }
                 }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(ride.date, style: .date)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(ride.date, style: .time)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Text(ride.name)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {

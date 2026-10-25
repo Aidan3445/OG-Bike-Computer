@@ -25,13 +25,9 @@ struct RouteRow: View {
     var body: some View {
         let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(route.name)
-                    .font(.headline)
-                if let source = route.source {
-                    ServiceBadge(service: source.service)
-                }
-            }
+            Text(route.name)
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
                 if canSendToWatch {
                     Button {
@@ -69,6 +65,9 @@ struct RouteRow: View {
                 }
                 if route.elevationLoss > 0 {
                     Label(formatElevation(route.elevationLoss), systemImage: "arrow.down.right")
+                }
+                if let source = route.source {
+                    ServiceBadge(service: source.service)
                 }
             }
             .labelStyle(StatLabelStyle())
