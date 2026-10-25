@@ -237,6 +237,7 @@ struct RouteDetailView: View {
                 if visibleRegion == nil {
                     visibleRegion = context.region
                     MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+                    updateMarkerInterval(for: context.region)
                 }
             }
             .onMapCameraChange(frequency: .onEnd) { context in
@@ -526,22 +527,22 @@ struct RouteDetailView: View {
     private func handleCameraChange(_ context: MapCameraUpdateContext) {
         visibleRegion = context.region
         MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+        updateMarkerInterval(for: context.region)
+    }
 
-        let region = context.region
+    /// Re-buckets mile markers for the visible span. Does nothing until the route has loaded.
+    private func updateMarkerInterval(for region: MKCoordinateRegion) {
         let latRad = region.center.latitude * .pi / 180
-        let cosLat = cos(latRad)
-        let widthMeters = region.span.longitudeDelta * 111_320 * cosLat
+        let widthMeters = region.span.longitudeDelta * 111_320 * cos(latRad)
         let heightMeters = region.span.latitudeDelta * 111_320
-        let visibleMeters = max(widthMeters, heightMeters)
-        let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
-        if interval != currentMarkerInterval && !cachedProcessedPoints.isEmpty {
-            currentMarkerInterval = interval
-            let points = cachedProcessedPoints
-            Task.detached(priority: .userInitiated) {
-                let markers = computeMileMarkers(points: points, interval: interval)
-                await MainActor.run {
-                    if currentMarkerInterval == interval { cachedMileMarkers = markers }
-                }
+        let interval = mapZoomMarkerInterval(visibleMeters: max(widthMeters, heightMeters))
+        guard interval != currentMarkerInterval, !cachedProcessedPoints.isEmpty else { return }
+        currentMarkerInterval = interval
+        let points = cachedProcessedPoints
+        Task.detached(priority: .userInitiated) {
+            let markers = computeMileMarkers(points: points, interval: interval)
+            await MainActor.run {
+                if currentMarkerInterval == interval { cachedMileMarkers = markers }
             }
         }
     }
@@ -1037,8 +1038,9 @@ struct RouteDetailView: View {
         }.value
 
         cachedProcessedPoints = built.processedPoints
-        // A camera-driven re-bucket may have already produced markers at the
-        // right interval — don't clobber them with the default-interval set.
+        // The first camera frame may have come before the route loaded, so
+        // size the markers for it now instead of showing the default spacing.
+        if let region = visibleRegion { updateMarkerInterval(for: region) }
         if currentMarkerInterval == 0 { cachedMileMarkers = built.mileMarkers }
         cachedElevationExtremes = built.elevationExtremes
         cachedElevationData = built.elevationData

@@ -189,25 +189,14 @@ struct RideDetailView: View {
                     visibleRegion = context.region
                     useCoarseSegments = visibleSpanMeters(of: context.region) > Self.coarseSegmentSpanMeters
                     MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+                    updateMarkerInterval(for: context.region)
                 }
             }
             .onMapCameraChange(frequency: .onEnd) { context in
                 visibleRegion = context.region
                 MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
-
-                let visibleMeters = visibleSpanMeters(of: context.region)
-                useCoarseSegments = visibleMeters > Self.coarseSegmentSpanMeters
-                let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
-                if interval != currentMarkerInterval && !allLocations.isEmpty {
-                    currentMarkerInterval = interval
-                    let locations = allLocations
-                    Task.detached(priority: .userInitiated) {
-                        let markers = computeRideMileMarkers(locations: locations, interval: interval)
-                        await MainActor.run {
-                            if currentMarkerInterval == interval { mileMarkers = markers }
-                        }
-                    }
-                }
+                useCoarseSegments = visibleSpanMeters(of: context.region) > Self.coarseSegmentSpanMeters
+                updateMarkerInterval(for: context.region)
             }
             .overlay {
                 MapScrubDot(
@@ -616,6 +605,20 @@ struct RideDetailView: View {
             .padding(.top, 8)
     }
 
+    /// Re-buckets mile markers for the visible span. Does nothing until the track has loaded.
+    private func updateMarkerInterval(for region: MKCoordinateRegion) {
+        let interval = mapZoomMarkerInterval(visibleMeters: visibleSpanMeters(of: region))
+        guard interval != currentMarkerInterval, !allLocations.isEmpty else { return }
+        currentMarkerInterval = interval
+        let locations = allLocations
+        Task.detached(priority: .userInitiated) {
+            let markers = computeRideMileMarkers(locations: locations, interval: interval)
+            await MainActor.run {
+                if currentMarkerInterval == interval { mileMarkers = markers }
+            }
+        }
+    }
+
     private func continueHeldRide() {
         guard !isContinuing else { return }
         isContinuing = true
@@ -775,8 +778,9 @@ struct RideDetailView: View {
         pauseJumps          = built.pauseJumps
         coloredSegments     = built.fineSegments
         coarseSegments      = built.coarseSegments
-        // A camera-driven re-bucket may have already produced markers at the
-        // right interval — don't clobber them with the default-interval set.
+        // The first camera frame may have come before the track loaded, so
+        // size the markers for it now instead of showing the default spacing.
+        if let region = visibleRegion { updateMarkerInterval(for: region) }
         if currentMarkerInterval == 0 { mileMarkers = built.mileMarkers }
         elevationExtremes   = built.elevationExtremes
         chartData           = built.chartPoints
