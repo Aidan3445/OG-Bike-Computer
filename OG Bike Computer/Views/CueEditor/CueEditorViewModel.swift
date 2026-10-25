@@ -603,6 +603,27 @@ final class CueEditorViewModel: ObservableObject {
         advance(from: entry.id)
     }
 
+    /// The detector's direction for an Edit cue, until the rider sets their own.
+    func suggestedDirection(for entry: CueEntry) -> TurnDirection? {
+        guard entry.kind == .edit, case let .waypoint(id) = entry.id,
+              edits.waypointDecisions[id]?.directionOverride == nil,
+              let suggestion = entry.matchedCalculated?.direction,
+              suggestion != entry.turn.direction else { return nil }
+        return suggestion
+    }
+
+    /// Takes the detector's direction for an Edit cue in one tap.
+    func acceptSuggestedDirection(_ entry: CueEntry) {
+        guard case let .waypoint(id) = entry.id,
+              let suggestion = suggestedDirection(for: entry) else { return }
+        var d = edits.waypointDecisions[id] ?? WaypointDecision(status: .approved)
+        d.directionOverride = suggestion
+        d.status = .approved
+        edits.waypointDecisions[id] = d
+        commit()
+        advance(from: entry.id)
+    }
+
     func skipWaypoint(_ entry: CueEntry) {
         guard case let .waypoint(id) = entry.id else { return }
         var d = edits.waypointDecisions[id] ?? WaypointDecision(status: .skipped)

@@ -365,14 +365,28 @@ struct CueEditorPanel: View {
                             .foregroundStyle(status == .skipped ? Color.secondary : Color.primary)
                             .lineLimit(1)
                         HStack(spacing: 6) {
-                            Text(dir.label)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            if status == .pending, let suggestion = viewModel.suggestedDirection(for: entry) {
+                                Text("Cue: \(dir.label)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "arrow.right")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Text(suggestion.label)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                            } else {
+                                Text(dir.label)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                             Text("·").font(.caption2).foregroundStyle(.secondary)
                             Text(formatDistance(entry.turn.distanceFromStart))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     }
                     Spacer()
                     statusBadge(entry: entry, status: status)
@@ -608,6 +622,11 @@ struct CueEditorPanel: View {
                         Label("Skip", systemImage: "minus.circle")
                     }
                 case .missingNameOnly, .extra, .edit, .good:
+                    if let suggestion = viewModel.suggestedDirection(for: entry) {
+                        Button { viewModel.acceptSuggestedDirection(entry) } label: {
+                            Label("Change", systemImage: suggestion.icon)
+                        }
+                    }
                     Button { viewModel.beginEditWaypoint(entry) } label: {
                         Label("Edit", systemImage: "pencil")
                     }
@@ -615,7 +634,7 @@ struct CueEditorPanel: View {
                         Label("Skip", systemImage: "minus.circle")
                     }
                     Button { viewModel.approveWaypoint(entry) } label: {
-                        Label("OK", systemImage: "checkmark.circle")
+                        Label("Keep", systemImage: "checkmark.circle")
                     }
                 case .userAdded:
                     Button { viewModel.beginEditAddedCue(entry) } label: {
