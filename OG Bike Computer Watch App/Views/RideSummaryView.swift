@@ -24,13 +24,19 @@ struct WatchRideSummary {
     /// When true, the summary represents a held (paused-and-saved) ride
     /// rather than a fully ended ride — shown with orange + hand icon.
     var isHeld: Bool = false
+    let shownAt = Date()
 }
 
 struct RideSummaryView: View {
     let summary: WatchRideSummary
     var onDismiss: () -> Void
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var extendedSession: WKExtendedRuntimeSession?
+
+    /// Dismissed on its own after this long, so it isn't waiting on wrist raise or relaunch.
+    private static let lifetime: TimeInterval = 5 * 60
+    private var expiresAt: Date { summary.shownAt.addingTimeInterval(Self.lifetime) }
 
     var body: some View {
         ScrollView {
@@ -98,6 +104,17 @@ struct RideSummaryView: View {
         .onDisappear {
             extendedSession?.invalidate()
             extendedSession = nil
+        }
+        .task {
+            let remaining = expiresAt.timeIntervalSinceNow
+            if remaining > 0 {
+                try? await Task.sleep(for: .seconds(remaining))
+            }
+            if !Task.isCancelled { onDismiss() }
+        }
+        // A suspended app can miss the timer, so check again when it comes back.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, Date() >= expiresAt { onDismiss() }
         }
     }
 
