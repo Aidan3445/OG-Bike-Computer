@@ -132,12 +132,8 @@ class RideStore: ObservableObject {
             activityType: ride.activityType.rawValue,
             pointExtras: pointExtras)
         guard let gpxData = gpxString.data(using: .utf8) else { return nil }
-        let sanitized = ride.name
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .replacingOccurrences(of: " ", with: "_")
         let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(sanitized)_\(Int(ride.date.timeIntervalSince1970)).gpx")
+            .appendingPathComponent(GPXExporter.fileName(name: ride.name, date: ride.date))
         do {
             try gpxData.write(to: tempURL)
             return tempURL
@@ -156,8 +152,7 @@ class RideStore: ObservableObject {
         guard !rides.isEmpty else { return nil }
 
         let fm = FileManager.default
-        let stamp = Int(Date().timeIntervalSince1970)
-        let folderName = "OG_Bike_Rides_\(stamp)"
+        let folderName = "Computa_Rides_\(GPXExporter.datePrefix(Date()))"
         let stagingDir = fm.temporaryDirectory.appendingPathComponent(folderName, isDirectory: true)
 
         try? fm.removeItem(at: stagingDir)
@@ -170,8 +165,6 @@ class RideStore: ObservableObject {
 
         var usedNames: Set<String> = []
         var wrote = 0
-        let dateFmt = DateFormatter()
-        dateFmt.dateFormat = "yyyyMMdd"
 
         for ride in rides {
             let trackURL = directory.appendingPathComponent(ride.trackFilename)
@@ -199,15 +192,11 @@ class RideStore: ObservableObject {
                 pointExtras: extras)
             guard let gpxData = gpx.data(using: .utf8) else { continue }
 
-            let sanitized = ride.name
-                .replacingOccurrences(of: "/", with: "-")
-                .replacingOccurrences(of: ":", with: "-")
-                .replacingOccurrences(of: " ", with: "_")
-            let datePrefix = dateFmt.string(from: ride.date)
-            var fileName = "\(datePrefix)_\(sanitized).gpx"
+            let baseName = GPXExporter.fileName(name: ride.name, date: ride.date)
+            var fileName = baseName
             var dedupe = 2
             while usedNames.contains(fileName) {
-                fileName = "\(datePrefix)_\(sanitized)_\(dedupe).gpx"
+                fileName = baseName.replacingOccurrences(of: ".gpx", with: "_\(dedupe).gpx")
                 dedupe += 1
             }
             usedNames.insert(fileName)
@@ -287,12 +276,9 @@ class RideStore: ObservableObject {
         let gpx = GPXExporter.exportMulti(name: name, segments: segments, activityType: activity)
         guard let data = gpx.data(using: .utf8) else { return nil }
 
-        let sanitized = name
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .replacingOccurrences(of: " ", with: "_")
+        let firstDate = rides.map(\.date).min()
         let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(sanitized)_\(Int(Date().timeIntervalSince1970)).gpx")
+            .appendingPathComponent(GPXExporter.fileName(name: name, date: firstDate))
         do {
             try data.write(to: tempURL)
             return tempURL

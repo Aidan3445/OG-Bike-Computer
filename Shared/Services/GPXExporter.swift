@@ -164,30 +164,20 @@ struct GPXExporter {
         return xml
     }
 
-    static func exportToFile(
-        name: String,
-        locations: [CLLocation],
-        directory: URL,
-        activityType: String = "cycling",
-        pointExtras: [PointExtras]? = nil
-    ) -> String? {
-        let gpxString = export(name: name, locations: locations, activityType: activityType, pointExtras: pointExtras)
-        guard let data = gpxString.data(using: .utf8) else { return nil }
-
-        let sanitized = name
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
+    /// File name used by every GPX export, like `20261024_Morning_Ride.gpx`.
+    static func fileName(name: String, date: Date?) -> String {
+        let stem = name
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|").union(.newlines))
+            .joined(separator: "-")
             .replacingOccurrences(of: " ", with: "_")
-        let filename = "\(sanitized)_\(Int(Date().timeIntervalSince1970)).gpx"
-        let fileURL = directory.appendingPathComponent(filename)
+        guard let date else { return "\(stem).gpx" }
+        return "\(datePrefix(date))_\(stem).gpx"
+    }
 
-        do {
-            try data.write(to: fileURL)
-            return filename
-        } catch {
-            print("GPX write error: \(error)")
-            return nil
-        }
+    static func datePrefix(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd"
+        return formatter.string(from: date)
     }
 
     private static func escapeXML(_ string: String) -> String {
