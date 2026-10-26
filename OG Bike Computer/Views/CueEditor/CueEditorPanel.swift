@@ -109,8 +109,11 @@ struct CueEditorPanel: View {
             .frame(maxWidth: .infinity)
             .frame(height: 18)
             .contentShape(Rectangle())
+            // Global space, since the handle moves with the panel's top edge
+            // as it resizes. Measured locally the translation fights itself
+            // and the panel jitters.
             .gesture(
-                DragGesture(minimumDistance: 4)
+                DragGesture(minimumDistance: 4, coordinateSpace: .global)
                     .onChanged { value in
                         if dragStartHeight == nil { dragStartHeight = height }
                         let proposed = (dragStartHeight ?? height) - value.translation.height

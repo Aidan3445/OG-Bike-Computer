@@ -56,6 +56,9 @@ struct RouteDetailView: View {
     /// stack id. Set on tap so the stack doesn't flash back to its first cue
     /// while the editor briefly clears the selection between picks.
     @State private var cueStackFronts: [CueEntryID: CueEntryID] = [:]
+    /// Held in `@State` as a plain class so the per-frame size updates while
+    /// the panel is dragged don't re-render the map.
+    @State private var cueFraming = CueFramingMetrics()
     /// Live map camera heading. Held in `@State` (NOT `@StateObject`)
     /// deliberately: we want only the small counter-rotating annotation
     /// views (HighlightChevron, MileMarkerArrow) to observe the heading via
@@ -243,9 +246,13 @@ struct RouteDetailView: View {
                     MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
                     updateMarkerInterval(for: context.region)
                 }
+                if cueFraming.cameraDistanceScale == nil {
+                    calibrateCameraScale(context, proxy: mapProxy)
+                }
             }
             .onMapCameraChange(frequency: .onEnd) { context in
                 handleCameraChange(context)
+                calibrateCameraScale(context, proxy: mapProxy)
             }
             // Forward map taps to the editor view-model while a placement
             // mode is active. SpatialTapGesture exposes the local point so we
@@ -277,6 +284,9 @@ struct RouteDetailView: View {
                 VStack(spacing: 0) {
                     Spacer()
                     CueEditorPanel(viewModel: editor, availableHeight: proxy.size.height)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            cueFraming.panelHeight = $0
+                        }
                 }
             } else {
             // Stats overlay — collapsed (button) ↔ compact (stats)
@@ -398,6 +408,9 @@ struct RouteDetailView: View {
             }
             }  // end: stats-panel else
         }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            cueFraming.mapSize = $0
+        }
         }  // end: GeometryReader
         .navigationTitle(isEditingCues ? "Cue Editor" : route.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -488,10 +501,10 @@ struct RouteDetailView: View {
         }
     }
 
-    /// Pan/zoom the map to a selected waypoint. Mirrors the cue zoom's
-    /// offset so the pin sits about a third of the way down from the top of
-    /// the visible map — above the editor panel. Preserves the current map
-    /// heading since waypoints have no inherent travel direction.
+    /// Pan/zoom the map to a selected waypoint, offset so the pin sits about a
+    /// third of the way down from the top of the visible map, above the
+    /// editor panel. Preserves the current map heading since waypoints have
+    /// no inherent travel direction.
     private func zoomMapToWaypoint(_ id: UUID?) {
         guard let editor = cueEditorHolder.viewModel,
               let id = id,
@@ -499,7 +512,6 @@ struct RouteDetailView: View {
             return
         }
         let heading = cameraState.heading
-        // Same constants as the cue path so both feel identical.
         let centerOffsetMeters: Double = 70
         let target = shiftedCoordinate(
             from: wp.coordinate,
@@ -924,10 +936,9 @@ struct RouteDetailView: View {
         return result
     }
 
-    /// Pan/zoom the map to focus on the selected turn, oriented so the rider's
-    /// approach heading points "up", and biased so the turn sits about a third
-    /// of the way down from the top of the visible map — i.e., above the
-    /// editor panel no matter how tall the user has dragged it.
+    /// Pan/zoom the map so the selected turn's whole highlighted section,
+    /// chevrons included, fits in the part of the map above the editor panel,
+    /// oriented so the rider's approach heading points "up".
     private func zoomMapToSelection(_ sel: CueEntryID?) {
         guard let editor = cueEditorHolder.viewModel,
               let id = sel,
@@ -935,24 +946,68 @@ struct RouteDetailView: View {
             return
         }
         let heading = editor.inboundBearing(for: entry)
-        // Move the camera target backward along the heading so the turn appears
-        // above the camera-center on screen. ~70m at this zoom keeps the pin
-        // comfortably above the panel without crowding the top edge.
-        let centerOffsetMeters: Double = 70
-        let target = shiftedCoordinate(
-            from: entry.turn.coordinate,
-            distanceMeters: centerOffsetMeters,
-            bearingDegrees: heading + 180
-        )
+        let origin = entry.turn.coordinate
+        let h = heading * .pi / 180
+        let cosLat = cos(origin.latitude * .pi / 180)
+
+        // Section bounds in meters along the screen's axes once the camera
+        // turns heading-up: u to the right, v up.
+        var minU = 0.0, maxU = 0.0, minV = 0.0, maxV = 0.0
+        for c in editor.highlightCoordinates(for: entry) {
+            let x = (c.longitude - origin.longitude) * 111_320 * cosLat
+            let y = (c.latitude - origin.latitude) * 111_320
+            let u = x * cos(h) - y * sin(h)
+            let v = x * sin(h) + y * cos(h)
+            minU = min(minU, u); maxU = max(maxU, u)
+            minV = min(minV, v); maxV = max(maxV, v)
+        }
+
+        // Padding keeps the chevrons, pins and map controls off the edges. The
+        // minimum span stops a tight turn from zooming in to a single building.
+        let edgePadding: CGFloat = 48
+        let minSpanMeters = 120.0
+        let mapSize = cueFraming.mapSize
+        let panelHeight = cueFraming.panelHeight
+        let freeWidth = Double(max(mapSize.width - 2 * edgePadding, 100))
+        let freeHeight = Double(max(mapSize.height - panelHeight - 2 * edgePadding, 100))
+        let metersPerPoint = max(
+            max(maxU - minU, minSpanMeters) / freeWidth,
+            max(maxV - minV, minSpanMeters) / freeHeight)
+
+        // The camera centers on the full map, so put the section's middle half
+        // a panel height above that to center it in the uncovered area.
+        let midU = (minU + maxU) / 2
+        let midV = (minV + maxV) / 2 - Double(panelHeight) / 2 * metersPerPoint
+        let x = midU * cos(h) + midV * sin(h)
+        let y = -midU * sin(h) + midV * cos(h)
+        let target = CLLocationCoordinate2D(
+            latitude: origin.latitude + y / 111_320,
+            longitude: origin.longitude + x / (111_320 * cosLat))
+
         let camera = MapCamera(
             centerCoordinate: target,
-            distance: 700,             // ≈ a 250m radius framing
+            distance: metersPerPoint * (cueFraming.cameraDistanceScale ?? 900),
             heading: heading,
             pitch: 0
         )
         withAnimation(.easeInOut(duration: 0.4)) {
             mapPosition = .camera(camera)
         }
+    }
+
+    /// Measure how camera distance relates to on-screen scale by projecting a
+    /// known 100 m onto the live map, so cue framing doesn't have to guess
+    /// MapKit's field of view. Skipped while pitched, where scale varies
+    /// across the screen.
+    private func calibrateCameraScale(_ context: MapCameraUpdateContext, proxy: MapProxy) {
+        guard context.camera.pitch < 5 else { return }
+        let center = context.camera.centerCoordinate
+        let north = shiftedCoordinate(from: center, distanceMeters: 100, bearingDegrees: 0)
+        guard let a = proxy.convert(center, to: .local),
+              let b = proxy.convert(north, to: .local) else { return }
+        let points = hypot(b.x - a.x, b.y - a.y)
+        guard points > 1 else { return }
+        cueFraming.cameraDistanceScale = context.camera.distance / (100 / Double(points))
     }
 
     /// Great-circle shift of a coordinate by a given distance along a bearing.
@@ -1098,3 +1153,13 @@ private struct StatItem: View {
     }
 }
 
+
+/// Sizes the cue editor needs to frame a selected turn. A plain class, not
+/// observable, so writing to it never re-renders anything.
+final class CueFramingMetrics {
+    var mapSize: CGSize = .zero
+    var panelHeight: CGFloat = 0
+    /// Camera distance divided by meters per point at pitch 0, measured from
+    /// the live map. Nil until the map has drawn a frame.
+    var cameraDistanceScale: Double?
+}
