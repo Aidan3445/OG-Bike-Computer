@@ -189,8 +189,18 @@ final class CueEditorViewModel: ObservableObject {
             },
             parsedName: { [weak self] entry in
                 self?.displayName(for: entry)
+            },
+            arrivalBearing: { [weak self] entry in
+                self?.arrivalBearing(at: entry.turn.index)
             }
         )
+    }
+
+    /// Route heading coming into point `index`, from the point before it.
+    private func arrivalBearing(at index: Int) -> Double? {
+        let points = processed.points
+        guard points.indices.contains(index) else { return nil }
+        return points[max(index - 1, 0)].bearingToNext
     }
 
     /// Combine subscriptions live here.

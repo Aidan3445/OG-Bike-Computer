@@ -270,7 +270,10 @@ enum CueDiff {
     ///   • their resolved street names don't *positively disagree* — if both
     ///     entries have a non-empty name and the names differ
     ///     (case-insensitive), the merge is blocked. Missing names on
-    ///     either side don't disqualify.
+    ///     either side don't disqualify, AND
+    ///   • the rider arrives travelling the same way. An out and back passes
+    ///     the same "continue" spot in opposite directions, and those are two
+    ///     cues, not one. An unknown bearing on either side doesn't disqualify.
     ///
     /// Loops put colocated passes far apart in the distance-sorted list, so
     /// the algorithm checks every existing group on each entry rather than
@@ -280,7 +283,9 @@ enum CueDiff {
         entries: [CueEntry],
         direction: (CueEntry) -> TurnDirection,
         parsedName: (CueEntry) -> String?,
-        colocationMeters: Double = 10
+        arrivalBearing: (CueEntry) -> Double?,
+        colocationMeters: Double = 10,
+        sameWayDegrees: Double = 60
     ) -> [CueEntryGroup] {
         let sorted = entries.sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
         var groups: [CueEntryGroup] = []
@@ -296,6 +301,10 @@ enum CueDiff {
                    a.caseInsensitiveCompare(b) != .orderedSame {
                     return false
                 }
+                if let a = arrivalBearing(anchor), let b = arrivalBearing(entry),
+                   headingGap(a, b) > sameWayDegrees {
+                    return false
+                }
                 return true
             }) {
                 groups[idx].members.append(entry)
@@ -304,6 +313,12 @@ enum CueDiff {
             }
         }
         return groups
+    }
+
+    /// Smallest angle between two compass headings, 0 to 180.
+    private static func headingGap(_ a: Double, _ b: Double) -> Double {
+        let d = abs(a - b).truncatingRemainder(dividingBy: 360)
+        return d > 180 ? 360 - d : d
     }
 
     /// Flat-earth approximation, sufficient for the few-meters comparisons

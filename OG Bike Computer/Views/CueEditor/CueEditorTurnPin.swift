@@ -43,6 +43,48 @@ struct CueEditorTurnPin: View {
     }
 }
 
+/// Turn pins that would sit on top of each other at the current zoom. The
+/// front group is drawn at the spot and the rest fan out below it in the
+/// order a tap cycles through them, sliding into place when the front changes.
+/// Tapping a fanned pin brings it straight to the front.
+struct CueEditorTurnPinStack: View {
+    @ObservedObject var editor: CueEditorViewModel
+    let groups: [CueEntryGroup]
+    let frontID: CueEntryID
+    let onTap: (CueEntryID) -> Void
+
+    private static let fanStep: CGFloat = 13
+    private static let maxFanned = 4
+    /// Fits the selected pin's tap frame (22 pt pin × 1.8).
+    private static let pinFrame: CGFloat = 40
+
+    var body: some View {
+        let frontIndex = groups.firstIndex { $0.id == frontID } ?? 0
+        let fanned = min(groups.count - 1, Self.maxFanned)
+
+        ZStack {
+            ForEach(Array(groups.enumerated()), id: \.element.id) { i, group in
+                let depth = (i - frontIndex + groups.count) % groups.count
+                let slot = min(depth, Self.maxFanned)
+                CueEditorTurnPin(
+                    editor: editor,
+                    entry: group.anchor,
+                    countBadge: group.isMultiple ? group.members.count : nil
+                )
+                .scaleEffect(depth == 0 ? 1 : 1 - 0.07 * CGFloat(slot))
+                .opacity(depth > Self.maxFanned ? 0 : 1)
+                .offset(y: CGFloat(slot) * Self.fanStep)
+                .zIndex(Double(groups.count - depth))
+                .onTapGesture { onTap(group.id) }
+            }
+        }
+        // Padded equally above and below so the front pin stays centered on
+        // the annotation's coordinate while the fan hangs underneath.
+        .frame(height: Self.pinFrame + 2 * CGFloat(fanned) * Self.fanStep)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: frontID)
+    }
+}
+
 /// Pure presentation — no view-model dependency, just the values needed to draw.
 private struct CueEditorTurnPinBody: View {
     let entry: CueEntry

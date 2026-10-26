@@ -52,6 +52,10 @@ struct RouteDetailView: View {
     // Cue Editor state
     @State private var isEditingCues: Bool = false
     @StateObject private var cueEditorHolder = CueEditorHolder()
+    /// Which cue group shows on top of each overlapping pin stack, keyed by
+    /// stack id. Set on tap so the stack doesn't flash back to its first cue
+    /// while the editor briefly clears the selection between picks.
+    @State private var cueStackFronts: [CueEntryID: CueEntryID] = [:]
     /// Live map camera heading. Held in `@State` (NOT `@StateObject`)
     /// deliberately: we want only the small counter-rotating annotation
     /// views (HighlightChevron, MileMarkerArrow) to observe the heading via
@@ -606,24 +610,53 @@ struct RouteDetailView: View {
         coordinate: (Item) -> CLLocationCoordinate2D
     ) -> [AnnotationCluster<Item>] {
         // Zoomed-in or pre-first-frame → render every item as its own pin.
-        guard let r = visibleRegion, !isZoomedIn else {
+        guard !isZoomedIn else {
             return items.map {
                 AnnotationCluster(id: $0.id, center: coordinate($0), items: [$0])
             }
         }
-        // 3% of the visible span ≈ 20 pt on a phone-sized map at most zooms,
-        // roughly a pin's diameter, which is the threshold below which two
-        // pins would visually overlap.
-        let latThreshold = r.span.latitudeDelta * 0.03
-        let lonThreshold = r.span.longitudeDelta * 0.03
+        // 5% of the map's short side ≈ 20 pt on a phone, roughly a pin's
+        // diameter, which is the threshold below which two pins would
+        // visually overlap.
+        return groupByProximity(items, coordinate: coordinate, shortSideFraction: 0.05)
+    }
+
+    /// Zoomed-in turn pins that would still sit on top of each other, grouped
+    /// so each group renders as one tappable stack. Looser than the cluster
+    /// threshold (≈ 30 pt) since a pin's tap frame is wider than its dot.
+    private func stackOverlappingPins<Item: Identifiable>(
+        _ items: [Item],
+        coordinate: (Item) -> CLLocationCoordinate2D
+    ) -> [AnnotationCluster<Item>] {
+        groupByProximity(items, coordinate: coordinate, shortSideFraction: 0.08)
+    }
+
+    /// The threshold is a straight-line distance in meters, taken as a fraction
+    /// of the visible region's shorter side, so it's the same in every
+    /// direction no matter the map's shape or rotation.
+    private func groupByProximity<Item: Identifiable>(
+        _ items: [Item],
+        coordinate: (Item) -> CLLocationCoordinate2D,
+        shortSideFraction: Double
+    ) -> [AnnotationCluster<Item>] {
+        guard let r = visibleRegion else {
+            return items.map {
+                AnnotationCluster(id: $0.id, center: coordinate($0), items: [$0])
+            }
+        }
+        let cosLat = cos(r.center.latitude * .pi / 180)
+        let shortSide = min(r.span.latitudeDelta * 111_320, r.span.longitudeDelta * 111_320 * cosLat)
+        let threshold = shortSide * shortSideFraction
+        let meters = { (a: CLLocationCoordinate2D, b: CLLocationCoordinate2D) -> Double in
+            let dLat = (a.latitude - b.latitude) * 111_320
+            let dLon = (a.longitude - b.longitude) * 111_320 * cosLat
+            return sqrt(dLat * dLat + dLon * dLon)
+        }
 
         var clusters: [AnnotationCluster<Item>] = []
         for item in items {
             let c = coordinate(item)
-            if let idx = clusters.firstIndex(where: { existing in
-                abs(existing.center.latitude - c.latitude) <= latThreshold
-                    && abs(existing.center.longitude - c.longitude) <= lonThreshold
-            }) {
+            if let idx = clusters.firstIndex(where: { meters($0.center, c) <= threshold }) {
                 var merged = clusters[idx].items
                 merged.append(item)
                 let avgLat = merged.reduce(0.0) { $0 + coordinate($1).latitude } / Double(merged.count)
@@ -639,90 +672,44 @@ struct RouteDetailView: View {
         return clusters
     }
 
-    /// At zoomed-in levels, build a map from each turn entry's id to a
-    /// "display coordinate" that fans out colocated turns along their own
-    /// approach to the intersection. Loops and double-backs put two or more
-    /// turns at the same physical coordinate; if we render them all at the
-    /// exact same point the pins stack into one tap target. Solution: keep
-    /// the first turn in each colocated group at its real coordinate, and
-    /// walk every subsequent turn back along the route by `pinSpacingMeters`
-    /// per index — so the i-th turn appears `i * spacing` meters before its
-    /// own pass through the intersection.
-    ///
-    /// Returns an empty dictionary when zoomed out (clustering handles
-    /// overlaps there) or when the route cache is not yet built.
-    private func computeColocatedTurnOffsets(_ entries: [CueEntry]) -> [CueEntryID: CLLocationCoordinate2D] {
-        guard isZoomedIn, !cachedProcessedPoints.isEmpty else { return [:] }
-        // Two turns within this much of each other are treated as "the same
-        // intersection" — tight enough that they'd visually overlap, loose
-        // enough to catch GPS jitter between repeated passes.
-        let colocationMeters: Double = 10
-        // How far apart the offset pins sit along the route. Visible at
-        // street zoom without overshooting beyond the intersection.
-        let pinSpacingMeters: Double = 18
-
-        // Group by route-distance order so the "first pass" gets the
-        // real-coordinate slot and later passes fan back.
-        let sorted = entries.sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
-
-        var offsets: [CueEntryID: CLLocationCoordinate2D] = [:]
-        var i = 0
-        while i < sorted.count {
-            let anchor = sorted[i].turn.coordinate
-            var j = i + 1
-            while j < sorted.count,
-                  approxMeters(anchor, sorted[j].turn.coordinate) <= colocationMeters {
-                j += 1
-            }
-            if j - i > 1 {
-                for k in 1..<(j - i) {
-                    let entry = sorted[i + k]
-                    if let coord = walkBackAlongRoute(
-                        fromIndex: entry.turn.index,
-                        meters: Double(k) * pinSpacingMeters
-                    ) {
-                        offsets[entry.id] = coord
-                    }
-                }
-            }
-            i = j
+    /// The cue group holding the editor's selection. A list tap can select a
+    /// non-anchor member, so this resolves it to the group the pin draws.
+    private func selectedCueGroupID(_ editor: CueEditorViewModel) -> CueEntryID? {
+        editor.selection.flatMap { sel in
+            editor.groupedEntries.first {
+                $0.id == sel || $0.members.contains(where: { $0.id == sel })
+            }?.id
         }
-        return offsets
     }
 
-    /// Approximate flat-earth distance between two coordinates. Plenty for
-    /// the few-meters comparisons used to detect colocated turns.
-    private func approxMeters(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
-        let dLat = (a.latitude - b.latitude) * 111_320
-        let dLon = (a.longitude - b.longitude) * 111_320
-            * cos(a.latitude * .pi / 180)
-        return sqrt(dLat * dLat + dLon * dLon)
+    /// The group drawn on top of a stack: the selected one if it's in the
+    /// stack, else the last one tapped, else the first along the route.
+    private func cueStackFront(
+        _ stack: AnnotationCluster<CueEntryGroup>,
+        editor: CueEditorViewModel
+    ) -> CueEntryID {
+        let ids = stack.items.map(\.id)
+        if let sel = selectedCueGroupID(editor), ids.contains(sel) { return sel }
+        if let last = cueStackFronts[stack.id], ids.contains(last) { return last }
+        return stack.id
     }
 
-    /// Walk backward through the processed-route points from `fromIndex`
-    /// until we've covered `meters` of along-route distance, then linearly
-    /// interpolate between the bracketing points for a precise coordinate.
-    /// Clamps to the start of the route if `meters` exceeds available
-    /// distance.
-    private func walkBackAlongRoute(fromIndex: Int, meters: Double) -> CLLocationCoordinate2D? {
-        let pts = cachedProcessedPoints
-        guard !pts.isEmpty else { return nil }
-        let start = min(max(fromIndex, 0), pts.count - 1)
-        let target = pts[start].distanceFromStart - meters
-        if target <= pts[0].distanceFromStart { return pts[0].coordinate }
-        var i = start
-        while i > 0 && pts[i].distanceFromStart > target {
-            i -= 1
+    /// First tap on a stack selects its front cue. Tapping the selected front
+    /// again moves to the next cue, wrapping back around to the first.
+    private func handleCueStackTap(
+        _ stack: AnnotationCluster<CueEntryGroup>,
+        tapped: CueEntryID,
+        editor: CueEditorViewModel
+    ) {
+        let ids = stack.items.map(\.id)
+        let front = cueStackFront(stack, editor: editor)
+        var target = tapped
+        if tapped == front, selectedCueGroupID(editor) == front,
+           let i = ids.firstIndex(of: front) {
+            target = ids[(i + 1) % ids.count]
         }
-        let a = pts[i]
-        let b = i + 1 < pts.count ? pts[i + 1] : a
-        let segLen = b.distanceFromStart - a.distanceFromStart
-        let ratio = segLen > 0 ? (target - a.distanceFromStart) / segLen : 0
-        let lat = a.coordinate.latitude
-            + (b.coordinate.latitude - a.coordinate.latitude) * ratio
-        let lon = a.coordinate.longitude
-            + (b.coordinate.longitude - a.coordinate.longitude) * ratio
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        cueStackFronts[stack.id] = target
+        editor.select(target)
     }
 
     /// Tap target for a multi-item cluster — animates the camera to a region
@@ -778,35 +765,44 @@ struct RouteDetailView: View {
 
         // Iterate cue *groups* instead of raw entries — a loop hitting the
         // same intersection twice (same direction, same name) collapses to
-        // one group and one map pin with a "×N" badge. Across groups,
-        // zoomed-out levels still cluster into stacked icons; zoomed-in
-        // levels fan out cross-direction colocations via
-        // `computeColocatedTurnOffsets`.
-        let selectedGroupID: CueEntryID? = editor.selection.flatMap { sel in
-            editor.groupedEntries.first {
-                $0.id == sel || $0.members.contains(where: { $0.id == sel })
-            }?.id
-        }
+        // one group and one map pin with a "×N" badge. Zoomed out, nearby
+        // groups cluster into one icon that zooms in on tap. Zoomed in, pins
+        // that still overlap become one stack that cycles on tap, with the
+        // selected group included so it can sit on top of its stack.
+        let selectedGroupID = selectedCueGroupID(editor)
+        let stacking = isZoomedIn
         let visibleGroups = editor.groupedEntries.filter {
-            $0.id != selectedGroupID && inVisibleRegion($0.anchor.turn.coordinate)
+            (stacking || $0.id != selectedGroupID) && inVisibleRegion($0.anchor.turn.coordinate)
         }
-        // The offset helper still consumes [CueEntry]; group.anchor.id ==
-        // group.id, so the resulting offset map is also keyed by group id.
-        let turnOffsets = computeColocatedTurnOffsets(visibleGroups.map { $0.anchor })
-        let turnClusters = clusterAnnotations(
-            visibleGroups,
-            coordinate: { $0.anchor.turn.coordinate })
+        let turnClusters = stacking
+            ? stackOverlappingPins(visibleGroups, coordinate: { $0.anchor.turn.coordinate })
+            : clusterAnnotations(visibleGroups, coordinate: { $0.anchor.turn.coordinate })
+        let selectedIsStacked = turnClusters.contains { cluster in
+            cluster.items.count > 1 && cluster.items.contains { $0.id == selectedGroupID }
+        }
         ForEach(turnClusters) { cluster in
             if cluster.items.count == 1 {
                 let group = cluster.items[0]
-                let displayCoord = turnOffsets[group.id] ?? group.anchor.turn.coordinate
-                Annotation("", coordinate: displayCoord) {
-                    CueEditorTurnPin(
+                if group.id != selectedGroupID {
+                    Annotation("", coordinate: group.anchor.turn.coordinate) {
+                        CueEditorTurnPin(
+                            editor: editor,
+                            entry: group.anchor,
+                            countBadge: group.isMultiple ? group.members.count : nil
+                        )
+                        .onTapGesture { editor.select(group.id) }
+                    }
+                }
+            } else if stacking {
+                Annotation("", coordinate: cluster.center) {
+                    CueEditorTurnPinStack(
                         editor: editor,
-                        entry: group.anchor,
-                        countBadge: group.isMultiple ? group.members.count : nil
+                        groups: cluster.items,
+                        frontID: cueStackFront(cluster, editor: editor),
+                        onTap: { tapped in
+                            handleCueStackTap(cluster, tapped: tapped, editor: editor)
+                        }
                     )
-                    .onTapGesture { editor.select(group.id) }
                 }
             } else {
                 Annotation("", coordinate: cluster.center) {
@@ -823,12 +819,11 @@ struct RouteDetailView: View {
         }
         // Selected group pin is always rendered as an individual pin (never
         // clustered), even if off-screen — the user explicitly chose it and
-        // may pan back to it. Looked up by group identity so a list tap on a
-        // non-anchor member still highlights the right pin.
-        if let sel = editor.selection,
-           let selGroup = editor.groupedEntries.first(where: {
-               $0.id == sel || $0.members.contains(where: { $0.id == sel })
-           }) {
+        // may pan back to it. A selected group inside a stack is drawn by
+        // the stack instead.
+        if !selectedIsStacked,
+           let selID = selectedGroupID,
+           let selGroup = editor.groupedEntries.first(where: { $0.id == selID }) {
             Annotation("", coordinate: selGroup.anchor.turn.coordinate) {
                 CueEditorTurnPin(
                     editor: editor,
