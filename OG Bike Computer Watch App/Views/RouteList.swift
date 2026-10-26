@@ -21,12 +21,12 @@ struct RouteList: View {
     @State private var path: [Destination] = []
     @State private var showHeldRideAlert = false
     @State private var showDiscardConfirmation = false
+    #if DEBUG
+    @State private var showSimulator = false
+    #endif
 
     private enum Destination: Hashable {
         case start(Route?)
-        #if DEBUG
-        case simulate
-        #endif
     }
 
     var body: some View {
@@ -89,7 +89,9 @@ struct RouteList: View {
                         }
 
                         #if DEBUG
-                        NavigationLink(value: Destination.simulate) {
+                        Button {
+                            showSimulator = true
+                        } label: {
                             Label("Simulate", systemImage: "play.circle")
                         }
                         #endif
@@ -113,13 +115,18 @@ struct RouteList: View {
                 switch destination {
                 case .start(let route):
                     StartRideView(route: route, workout: workout, rideStore: rideStore)
-                #if DEBUG
-                case .simulate:
-                    SimulationView(store: store, workout: workout, simulator: simulator)
-                #endif
                 }
             }
         }
+        #if DEBUG
+        // A sheet, not a push, so its list isn't fighting the home page's
+        // vertical paging for scroll.
+        .sheet(isPresented: $showSimulator) {
+            NavigationStack {
+                SimulationView(store: store, workout: workout, simulator: simulator)
+            }
+        }
+        #endif
         .onChange(of: path) { _, newPath in
             isShowingDetail = !newPath.isEmpty
         }
