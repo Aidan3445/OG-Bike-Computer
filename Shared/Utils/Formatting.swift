@@ -102,6 +102,13 @@ func formatTime(_ interval: TimeInterval) -> String {
     return String(format: "%d:%02d", minutes, seconds)
 }
 
+/// Rounded to whole minutes: "12 min", "1h 05m".
+func formatETA(_ interval: TimeInterval) -> String {
+    let minutes = max(1, Int((interval / 60).rounded()))
+    if minutes < 60 { return "\(minutes) min" }
+    return String(format: "%dh %02dm", minutes / 60, minutes % 60)
+}
+
 func formattedStorageSize(_ bytes: Int64) -> String {
     if bytes < 1024 {
         return "\(bytes) B"

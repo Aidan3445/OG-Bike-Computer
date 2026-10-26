@@ -32,10 +32,6 @@ struct RideControlView: View {
     @State private var showRouteDetail = false
     @State private var activeRoute: Route?
     @State private var selectedPage = 0
-    /// Rolling (movingTime, totalDistance) samples used to derive a recent
-    /// split average speed for the ETA estimate. Trimmed to the last ~180s
-    /// of moving time on each telemetry update.
-    @State private var recentSpeedSamples: [(movingTime: TimeInterval, distance: Double)] = []
 
     /// Pending state is sourced from `session.pendingCommand` so it survives
     /// view rebuilds and stays consistent with Live Activity / widget intents
@@ -81,9 +77,6 @@ struct RideControlView: View {
         // Sync active route whenever the watch reports a different route ID
         .onChange(of: telemetry.activeRouteID, initial: true) { _, newID in
             activeRoute = newID.flatMap { id in routeStore.routes.first { $0.id == id } }
-        }
-        .onChange(of: telemetry.totalDistance, initial: false) { _, _ in
-            updateRecentSpeedSamples()
         }
         .background(telemetry.isOffRoute ? Color(red: 0.12, green: 0.02, blue: 0.02) : Color(.systemGroupedBackground))
         .navigationTitle(session.isPaused ? "Paused" : "Riding")
@@ -190,7 +183,7 @@ struct RideControlView: View {
                     Image(systemName: "clock")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    Text("~\(formatTime(eta))")
+                    Text("~\(formatETA(eta))")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -314,7 +307,7 @@ struct RideControlView: View {
                             Image(systemName: "clock")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text("~\(formatTime(eta)) left")
+                            Text("~\(formatETA(eta)) left")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
@@ -473,53 +466,12 @@ struct RideControlView: View {
 
     // MARK: - ETA estimation
 
-    /// Append the latest telemetry sample to the rolling buffer and trim old
-    /// entries. Only appends when moving time has actually advanced, so pauses
-    /// don't pollute the recent-split speed calculation.
-    private func updateRecentSpeedSamples() {
-        let sample = (movingTime: telemetry.movingTime, distance: telemetry.totalDistance)
-        if let last = recentSpeedSamples.last, sample.movingTime <= last.movingTime + 0.5 {
-            return
-        }
-        recentSpeedSamples.append(sample)
-        let cutoff = sample.movingTime - 180
-        recentSpeedSamples.removeAll { $0.movingTime < cutoff }
-    }
-
-    /// Recent split average speed (m/s) derived from the rolling buffer, or nil
-    /// if there isn't yet enough data (need at least ~20s of moving time).
-    private var recentAverageSpeed: Double? {
-        guard let first = recentSpeedSamples.first,
-              let last = recentSpeedSamples.last else { return nil }
-        let dt = last.movingTime - first.movingTime
-        let dd = last.distance - first.distance
-        guard dt >= 20, dd > 0 else { return nil }
-        return dd / dt
-    }
-
-    /// Weighted blend of total-ride avg speed and recent split speed, scaled by
-    /// the net climb/descent of the remaining route. Returns nil while we don't
-    /// have a route remaining distance or enough speed data to be meaningful.
+    /// Remaining route distance at the ride's average moving speed, scaled by
+    /// the net climb or descent ahead. Current speed swings too much to use.
     private var estimatedTimeRemaining: TimeInterval? {
-        guard let remaining = telemetry.routeDistanceRemaining, remaining > 0 else { return nil }
-
-        let totalAvg = telemetry.averageSpeed
-        let recentAvg = recentAverageSpeed
-        let hasTotal = totalAvg > 0.5
-        let hasRecent = (recentAvg ?? 0) > 0.5
-
-        let blendedSpeed: Double
-        if hasTotal, hasRecent, let recent = recentAvg {
-            blendedSpeed = 0.4 * totalAvg + 0.6 * recent
-        } else if hasTotal {
-            blendedSpeed = totalAvg
-        } else if hasRecent, let recent = recentAvg {
-            blendedSpeed = recent
-        } else {
-            return nil
-        }
-
-        let adjusted = blendedSpeed / elevationScalingFactor(remainingDistance: remaining)
+        guard let remaining = telemetry.routeDistanceRemaining, remaining > 0,
+              telemetry.averageSpeed > 0.5 else { return nil }
+        let adjusted = telemetry.averageSpeed / elevationScalingFactor(remainingDistance: remaining)
         guard adjusted > 0.1 else { return nil }
         return remaining / adjusted
     }
