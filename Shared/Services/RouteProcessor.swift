@@ -12,6 +12,10 @@ struct RouteProcessor {
     static let turnAngleThreshold: Double = 30
     static let minBearingDistance: Double = 5
     static let minTurnSpacing: Double = 50
+    static let waypointMatchRadius: Double = 200
+    static let waypointOrderTolerance: Double = 50
+    static let waypointOutOfOrderPenalty: Double = 300
+    static let waypointShapeMismatchPenalty: Double = 150
 
     static func process(_ route: Route) -> ProcessedRoute {
         let coords = route.points.map {
@@ -184,41 +188,89 @@ struct RouteProcessor {
         }
     }
 
-    /// Map GPX waypoints to the nearest processed route points, creating TurnPoints.
+    /// Map GPX waypoints to route points, creating TurnPoints.
+    ///
+    /// Waypoints carry no distance, and an out and back passes the same corner
+    /// twice, so the nearest point can land a return-leg cue on the way out.
+    /// Every pass within range is a candidate (the closest point of each), and
+    /// a pass scores worse when it comes before the previous cue (cues are
+    /// listed in ride order) or when the route turns the other way there.
     private static func mapWaypoints(_ waypoints: [Waypoint], to processedPoints: [ProcessedPoint]) -> [TurnPoint] {
-        return waypoints.compactMap { wpt in
+        var turns: [TurnPoint] = []
+        var previousDistance: Double = 0
+
+        for wpt in waypoints {
             let wptLoc = CLLocation(latitude: wpt.lat, longitude: wpt.lon)
+            let dists = processedPoints.map {
+                wptLoc.distance(from: CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude))
+            }
+            let direction = TurnDirection.from(waypointName: wpt.name)
 
-            var bestIndex = 0
-            var bestDist = Double.greatestFiniteMagnitude
+            var bestIndex: Int?
+            var bestScore = Double.greatestFiniteMagnitude
+            for i in dists.indices where dists[i] < waypointMatchRadius {
+                if i > 0, dists[i - 1] < dists[i] { continue }
+                if i < dists.count - 1, dists[i + 1] < dists[i] { continue }
 
-            for i in 0..<processedPoints.count {
-                let pt = processedPoints[i]
-                let ptLoc = CLLocation(latitude: pt.coordinate.latitude, longitude: pt.coordinate.longitude)
-                let dist = wptLoc.distance(from: ptLoc)
-                if dist < bestDist {
-                    bestDist = dist
+                var score = dists[i]
+                if processedPoints[i].distanceFromStart < previousDistance - waypointOrderTolerance {
+                    score += waypointOutOfOrderPenalty
+                }
+                if !turnShape(at: i, in: processedPoints, fits: direction) {
+                    score += waypointShapeMismatchPenalty
+                }
+                if score < bestScore {
+                    bestScore = score
                     bestIndex = i
                 }
             }
 
-            // Reject waypoints that are too far from the route
-            guard bestDist < 200 else { return nil }
+            guard let index = bestIndex else { continue }
+            previousDistance = processedPoints[index].distanceFromStart
 
-            let direction = TurnDirection.from(waypointName: wpt.name)
-
-            return TurnPoint(
-                index: bestIndex,
+            turns.append(TurnPoint(
+                index: index,
                 angle: 0,
                 direction: direction,
-                distanceFromStart: processedPoints[bestIndex].distanceFromStart,
-                coordinate: processedPoints[bestIndex].coordinate,
+                distanceFromStart: processedPoints[index].distanceFromStart,
+                coordinate: processedPoints[index].coordinate,
                 description: wpt.description,
                 isWaypoint: true,
                 waypointID: wpt.id
-            )
+            ))
         }
-        .sorted { $0.distanceFromStart < $1.distanceFromStart }
+
+        return turns.sorted { $0.distanceFromStart < $1.distanceFromStart }
+    }
+
+    /// Whether the route bends the way `direction` says at point `i`. Checked
+    /// over a tight and a wider window, since a cue can sit right on a sparse
+    /// track's corner or a few meters off a dense one. Straight and unknown
+    /// cues always fit.
+    private static func turnShape(at i: Int, in points: [ProcessedPoint], fits direction: TurnDirection) -> Bool {
+        let wantsLeft: Bool
+        switch direction {
+        case .left, .slightLeft, .sharpLeft: wantsLeft = true
+        case .right, .slightRight, .sharpRight: wantsLeft = false
+        case .straight, .uTurn: return true
+        }
+
+        var measured = false
+        for window in [5.0, 25.0] {
+            var before = i
+            while before > 0, points[i].distanceFromStart - points[before].distanceFromStart < window { before -= 1 }
+            var after = i
+            while after < points.count - 1, points[after].distanceFromStart - points[i].distanceFromStart < window { after += 1 }
+            guard before < i, after > i else { continue }
+
+            let angle = angleDelta(
+                from: bearing(from: points[before].coordinate, to: points[i].coordinate),
+                to: bearing(from: points[i].coordinate, to: points[after].coordinate))
+            measured = true
+            if wantsLeft ? angle < -10 : angle > 10 { return true }
+        }
+        // No shape to judge at the very ends of the route.
+        return !measured
     }
 
     nonisolated static func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
