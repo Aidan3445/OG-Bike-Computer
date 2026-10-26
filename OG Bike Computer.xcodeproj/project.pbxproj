@@ -87,7 +87,7 @@
 				Intents/RideIntents.swift,
 				Models/SampleProcessedRoute.swift,
 				Models/SettingsPreset.swift,
-				"Services/Connectivity/ConnectivityManager.swift",
+				Services/Connectivity/ConnectivityManager.swift,
 				"Services/Connectivity/ConnectivityManager+HeldRides.swift",
 				"Services/Connectivity/ConnectivityManager+RideCommands.swift",
 				"Services/Connectivity/ConnectivityManager+RideTransfer.swift",
