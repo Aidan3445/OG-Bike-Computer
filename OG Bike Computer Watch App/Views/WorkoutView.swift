@@ -77,8 +77,8 @@ struct WorkoutView<ExtraTab: View>: View {
             .tabViewStyle(.verticalPage)
             .scrollIndicators(.visible)
             .overlay(alignment: .topLeading) {
-                if workout.isAutoPaused {
-                    Text("AUTO-PAUSED")
+                if workout.isAutoPaused || workout.isPaused {
+                    Text(workout.isAutoPaused ? "AUTO-PAUSED" : "PAUSED")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.yellow)
                         .padding(.horizontal, 8)
