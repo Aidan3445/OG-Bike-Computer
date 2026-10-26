@@ -40,6 +40,19 @@ extension ConnectivityManager {
             errorHandler: { _ in }
         )
     }
+
+    /// Tells the watch the phone dropped `id` without speaking it. Used when
+    /// the mirrored workout channel is gone. If it never lands, the watch's
+    /// post-receipt backstop speaks it instead.
+    func sendAlertNack(id: UUID) {
+        guard WCSession.default.activationState == .activated,
+              WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(
+            AlertNack(id: id).toDict(),
+            replyHandler: { _ in },
+            errorHandler: { _ in }
+        )
+    }
 }
 #endif
 

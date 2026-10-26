@@ -214,6 +214,13 @@ extension ConnectivityManager: WCSessionDelegate {
             replyHandler(["received": true])
             return
         }
+        if let nack = AlertNack.fromDict(message) {
+            DispatchQueue.main.async {
+                self.onAlertNackReceived?(nack.id)
+            }
+            replyHandler(["received": true])
+            return
+        }
         #endif
 
         guard let type = message["type"] as? String else {

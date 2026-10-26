@@ -67,6 +67,8 @@ final class ConnectivityManager: NSObject, ObservableObject {
     var onAlertAckReceived: ((UUID) -> Void)?
     /// The phone finished speaking this alert, so the next queued line can play.
     var onAlertFinishReceived: ((UUID) -> Void)?
+    /// The phone dropped this alert without speaking it, so the watch should.
+    var onAlertNackReceived: ((UUID) -> Void)?
     #endif
 
     // Commands from the phone, handled on the watch.

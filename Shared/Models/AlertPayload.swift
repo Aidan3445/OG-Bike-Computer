@@ -200,3 +200,31 @@ struct AlertFinish {
         return AlertFinish(id: id)
     }
 }
+
+/// Phone → watch "won't speak this" signal, sent when the phone drops an
+/// alert it already received without ever starting it (wedged synthesizer,
+/// session reset). Once the phone has confirmed receipt the watch waits for
+/// this or the didStart ack instead of a short timer, so a slow ack can't
+/// make both devices speak.
+struct AlertNack {
+    static let messageType = "voiceAlertNack"
+
+    let id: UUID
+
+    func toDict() -> [String: Any] {
+        [
+            "type": Self.messageType,
+            "id": id.uuidString,
+            "ts": Date()
+        ]
+    }
+
+    static func fromDict(_ dict: [String: Any]) -> AlertNack? {
+        guard
+            (dict["type"] as? String) == messageType,
+            let idStr = dict["id"] as? String,
+            let id = UUID(uuidString: idStr)
+        else { return nil }
+        return AlertNack(id: id)
+    }
+}

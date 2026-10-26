@@ -29,6 +29,10 @@ final class PhoneAlertReceiver: @unchecked Sendable {
     private var seenIDs: [UUID] = []
     private let dedupeCapacity = 64
 
+    /// Comfortably under the watch's 2.5 s pre-receipt fallback, leaving room
+    /// for the receipt reply to get back before that timer fires.
+    private static let immediateMaxAge: TimeInterval = 1.5
+
     private init() {}
 
     /// Install the receiver on ConnectivityManager. Idempotent — safe to
@@ -60,6 +64,14 @@ final class PhoneAlertReceiver: @unchecked Sendable {
         }
         markSeen(payload.id)
 
+        // An immediate alert this old may already be spoken by the watch's
+        // own fallback timer, so hand it back instead of doubling up.
+        if payload.priority == .immediate, age > Self.immediateMaxAge {
+            logger.info("[AlertRecv] DROP id=\(logID) — immediate arrived late (age=\(String(format: "%.2f", age))s)")
+            sendNack(id: payload.id)
+            return
+        }
+
         // Hand to the speech player. The onStart callback fires when
         // AVSpeechSynthesizer reports the utterance has actually begun —
         // that's when we ack back so the watch cancels its FallbackTimer.
@@ -73,6 +85,9 @@ final class PhoneAlertReceiver: @unchecked Sendable {
             },
             onFinish: { [weak self] finishedID in
                 self?.sendFinish(id: finishedID)
+            },
+            onDrop: { [weak self] droppedID in
+                self?.sendNack(id: droppedID)
             }
         )
 
@@ -110,7 +125,9 @@ final class PhoneAlertReceiver: @unchecked Sendable {
             ConnectivityManager.shared.sendAlertAck(id: id)
             return
         }
-        sendMirrorSignal(session: session, type: "alertAck", id: id, logLabel: "ack")
+        sendMirrorSignal(session: session, type: "alertAck", id: id, logLabel: "ack") {
+            ConnectivityManager.shared.sendAlertAck(id: id)
+        }
     }
 
     /// Phone finished speaking `id`. Same transport rules as the didStart
@@ -123,10 +140,29 @@ final class PhoneAlertReceiver: @unchecked Sendable {
             ConnectivityManager.shared.sendAlertFinish(id: id)
             return
         }
-        sendMirrorSignal(session: session, type: "alertFinish", id: id, logLabel: "finish")
+        sendMirrorSignal(session: session, type: "alertFinish", id: id, logLabel: "finish") {
+            ConnectivityManager.shared.sendAlertFinish(id: id)
+        }
     }
 
-    private func sendMirrorSignal(session: HKWorkoutSession, type: String, id: UUID, logLabel: String) {
+    /// Phone dropped `id` before speaking it, so the watch should speak it.
+    /// Same transport rules as the ack.
+    private func sendNack(id: UUID) {
+        logger.notice("[AlertRecv] NACK id=\(id.uuidString.prefix(8))")
+        guard let session = RideSessionManager.shared.mirroredSession else {
+            ConnectivityManager.shared.sendAlertNack(id: id)
+            return
+        }
+        sendMirrorSignal(session: session, type: "alertNack", id: id, logLabel: "nack") {
+            ConnectivityManager.shared.sendAlertNack(id: id)
+        }
+    }
+
+    /// `onFailure` resends over WCSession when the mirror channel drops the
+    /// signal. A duplicate is harmless since the watch ignores ids it
+    /// already resolved.
+    private func sendMirrorSignal(session: HKWorkoutSession, type: String, id: UUID, logLabel: String,
+                                  onFailure: @escaping () -> Void) {
         let logID = id.uuidString.prefix(8)
         let payload: [String: String] = [
             "type": type,
@@ -136,9 +172,11 @@ final class PhoneAlertReceiver: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(payload) else { return }
         session.sendToRemoteWorkoutSession(data: data) { success, error in
             if let error {
-                logger.error("[AlertRecv] HK mirror \(logLabel) send error id=\(logID): \(error.localizedDescription)")
+                logger.error("[AlertRecv] HK mirror \(logLabel) send error id=\(logID): \(error.localizedDescription), retrying over WCSession")
+                onFailure()
             } else if !success {
-                logger.error("[AlertRecv] HK mirror \(logLabel) reported failure id=\(logID)")
+                logger.error("[AlertRecv] HK mirror \(logLabel) reported failure id=\(logID), retrying over WCSession")
+                onFailure()
             }
         }
     }
