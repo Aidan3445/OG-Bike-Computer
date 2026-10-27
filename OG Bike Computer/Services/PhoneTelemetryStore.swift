@@ -101,6 +101,7 @@ class PhoneTelemetryStore: ObservableObject {
             heartRate = Double(telemetry["heartRate"] ?? "") ?? heartRate
             isPaused = telemetry["isPaused"] == "true"
             isAutoPaused = telemetry["isAutoPaused"] == "true"
+            RideSessionManager.shared.syncPaused(fromWatch: isPaused)
 
             // Extended stats
             maxSpeed = Double(telemetry["maxSpeed"] ?? "") ?? maxSpeed

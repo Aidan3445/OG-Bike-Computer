@@ -61,9 +61,16 @@ class WorkoutManager: NSObject, ObservableObject {
     var hasRoute: Bool { navigation.processedRoute != nil }
     private var needsAnchor = false
 
-    /// Guards against the HK delegate double-handling local pause/resume/stop actions.
-    /// Set true before local session control calls, reset in the delegate callback.
-    private var isLocalStateChange = false
+    /// Session states this device just asked for, so the delegate can tell
+    /// them apart from changes made on the phone. They expire so a call that
+    /// changed nothing can't hide the phone's next command.
+    private var expectedSessionStates: Set<HKWorkoutSessionState> = []
+    private var expectedSessionStatesAt = Date.distantPast
+
+    private func expectSessionStates(_ states: Set<HKWorkoutSessionState>) {
+        expectedSessionStates = states
+        expectedSessionStatesAt = Date()
+    }
 
     // Extended metrics
     @Published var maxSpeed: Double = 0
@@ -753,7 +760,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func pauseSession() {
-        isLocalStateChange = true
+        expectSessionStates([.paused])
         session?.pause()
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
@@ -777,7 +784,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
     
     func resumeSession() {
-        isLocalStateChange = true
+        expectSessionStates([.running])
         session?.resume()
         timerStart = Date()
         startDisplayTimer()
@@ -892,7 +899,7 @@ class WorkoutManager: NSObject, ObservableObject {
         // Wake HK (and indirectly CL) without going through resumeSession() —
         // that flips isPaused / autoPauseState and announces an auto-resume.
         // We want the ride to look paused while we sample underneath.
-        isLocalStateChange = true
+        expectSessionStates([.running])
         session?.resume()
         locationManager.startUpdatingLocation()
 
@@ -919,7 +926,7 @@ class WorkoutManager: NSObject, ObservableObject {
 
         discardTentativeBuffer()
 
-        isLocalStateChange = true
+        expectSessionStates([.paused])
         session?.pause()
 
         isSilentProbe = false
@@ -1042,7 +1049,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func stop(save: Bool) {
-        isLocalStateChange = true
+        expectSessionStates([.stopped, .ended])
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
         }
@@ -2034,7 +2041,7 @@ class WorkoutManager: NSObject, ObservableObject {
         mirroringRetryWorkItem?.cancel()
         mirroringRetryWorkItem = nil
 
-        isLocalStateChange = true
+        expectSessionStates([.stopped, .ended])
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
         }
@@ -2351,17 +2358,19 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                         date: Date) {
         print("Workout state: \(fromState.rawValue) → \(toState.rawValue)")
 
-        if isLocalStateChange {
-            // Local action (pause/resume/stop called on this device) —
-            // internal state is already synced, just reset the guard.
-            isLocalStateChange = false
-            return
-        }
-
-        // Remote state change (initiated from phone via mirrored session).
-        // Sync internal WorkoutManager state to match.
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.isActive else { return }
+            guard let self = self else { return }
+
+            // A change this device asked for. Internal state is already in sync.
+            if self.expectedSessionStates.contains(toState),
+               Date().timeIntervalSince(self.expectedSessionStatesAt) < 30 {
+                self.expectedSessionStates.remove(toState)
+                return
+            }
+            self.expectedSessionStates = []
+
+            // Anything else came from the phone through the mirrored session.
+            guard self.isActive else { return }
 
             switch toState {
             case .paused where fromState == .running:
@@ -2416,9 +2425,11 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
     }
 
     /// Receive messages from the phone (ack channel for mirrored speech):
-    /// "alertAck" when the phone's synthesizer starts an utterance and
+    /// "alertAck" when the phone's synthesizer starts an utterance,
     /// "alertFinish" when it completes one, so the watch can advance its
-    /// alert queue based on real completion instead of a duration estimate.
+    /// alert queue based on real completion instead of a duration estimate,
+    /// and "alertNack" when the phone dropped one unspoken. "resumeRide" is a
+    /// resume the phone couldn't send as a session state change.
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didReceiveDataFromRemoteWorkoutSession data: [Data]) {
         let now = Date().timeIntervalSince1970
@@ -2444,6 +2455,17 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
                 DispatchQueue.main.async {
                     ConnectivityManager.shared.onAlertFinishReceived?(id)
+                }
+            case "alertNack":
+                guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
+                DispatchQueue.main.async {
+                    ConnectivityManager.shared.onAlertNackReceived?(id)
+                }
+            case "resumeRide":
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isActive, self.isPaused else { return }
+                    print("[Remote] Resume received from phone during auto-pause")
+                    self.resume()
                 }
             default:
                 break

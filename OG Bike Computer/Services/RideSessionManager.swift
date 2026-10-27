@@ -85,9 +85,16 @@ class RideSessionManager: ObservableObject {
     }
 
     func resumeRide() {
-        guard let session = mirroredSession,
-              session.state == .paused else { return }
-        session.resume()
+        guard let session = mirroredSession else { return }
+        if session.state == .paused {
+            session.resume()
+            return
+        }
+        // While auto-paused the watch briefly runs the session to check for
+        // movement, so there's no paused state to flip. Ask the watch directly.
+        let payload = ["type": "resumeRide", "ts": String(Date().timeIntervalSince1970)]
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        session.sendToRemoteWorkoutSession(data: data) { _, _ in }
     }
 
     func endRide() {
@@ -245,7 +252,11 @@ class RideSessionManager: ObservableObject {
             switch state {
             case .running:
                 self.isRideActive = true
-                self.isPaused = false
+                // The watch also runs the session while auto-paused to check
+                // for movement. Telemetry says when the ride really resumed.
+                if !PhoneTelemetryStore.shared.isAutoPaused {
+                    self.isPaused = false
+                }
             case .paused:
                 self.isRideActive = true
                 self.isPaused = true
@@ -258,6 +269,15 @@ class RideSessionManager: ObservableObject {
             }
             self.writeStateToAppGroup()
         }
+    }
+
+    /// Follows the watch's own paused flag from telemetry. Session state alone
+    /// reads as running during auto-pause movement checks, which flipped the
+    /// phone and the Live Activity toggle to "Riding" mid auto-pause.
+    func syncPaused(fromWatch watchPaused: Bool) {
+        guard isRideActive, pendingCommand == nil, isPaused != watchPaused else { return }
+        isPaused = watchPaused
+        writeStateToAppGroup()
     }
 
     // MARK: - App Group Shared State
