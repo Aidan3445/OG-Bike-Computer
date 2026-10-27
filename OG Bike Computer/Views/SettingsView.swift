@@ -48,7 +48,18 @@ struct SettingsView: View {
         var parts: [String] = [mode.label]
         if alerts.splitAlerts.enabled { parts.append("Splits") }
         if alerts.waypointAlerts.enabled { parts.append("Waypoints") }
-        return parts.joined(separator: " \u{2022} ")
+        return bulletJoined(parts)
+    }
+
+    /// Joins summary parts with bullets. Each part's spaces and hyphens are
+    /// made non-breaking so a long summary only wraps at the bullets.
+    private func bulletJoined(_ parts: [String]) -> String {
+        parts
+            .map {
+                $0.replacingOccurrences(of: " ", with: "\u{00A0}")
+                    .replacingOccurrences(of: "-", with: "\u{2011}")
+            }
+            .joined(separator: " \u{2022} ")
     }
 
     private var integrationsSummary: String {
@@ -66,7 +77,7 @@ struct SettingsView: View {
         parts.append(map.routeAheadColor.label)
         parts.append("\(zoomLabel(map.defaultZoom)) zoom")
         if !map.showTurnOverlay { parts.append("Overlay off") }
-        return parts.joined(separator: " \u{2022} ")
+        return bulletJoined(parts)
     }
 
     private var isImperial: Bool { currentUnits.distance == .miles }
@@ -79,7 +90,7 @@ struct SettingsView: View {
         )
         parts.append("GPS \(ride.gpsAccuracyFloor.label)")
         parts.append(ride.mapRotation.label)
-        return parts.joined(separator: " \u{2022} ")
+        return bulletJoined(parts)
     }
 
     var body: some View {
@@ -918,4 +929,31 @@ extension View {
             )
         }
     }
+}
+
+// Summaries under Route Screens, Alerts and Ride Settings should only break at
+// the bullets, never inside "Auto-Pause On" or "GPS High".
+private func previewSettings(_ size: DynamicTypeSize) -> some View {
+    NavigationStack {
+        SettingsView(
+            metricConfig: MetricConfigStore(),
+            userSettings: UserSettingsStore(),
+            integrationSettings: IntegrationSettingsStore(),
+            rideStore: RideStore(),
+            routeStore: RouteStore()
+        )
+    }
+    .environment(\.dynamicTypeSize, size)
+}
+
+#Preview("Settings, XL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewSettings(.xLarge)
+}
+
+#Preview("Settings, XXL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewSettings(.xxLarge)
+}
+
+#Preview("Settings, XXXL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewSettings(.xxxLarge)
 }
