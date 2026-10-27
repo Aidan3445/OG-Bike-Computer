@@ -77,6 +77,10 @@ class NavigationTracker: ObservableObject {
     private static let startProximityThreshold: Double = 402   // 1/4 mile in metres
     private static let startBiasDistance: Double = 8047        // 5 miles in metres
     private static let startBiasDuration: Double = 60          // seconds
+    private static let wrongWayMinSpeed: Double = 2            // m/s, course is noise below this
+    private static let wrongWayHeading: Double = 135           // degrees off the current leg
+    private static let rightWayHeading: Double = 45            // degrees off the other leg
+    private static let wrongWayMaxLegGap: Double = 60          // metres between the two legs
     private var rideStartTime: Date?
     private var startedNearRouteStart = false
 
@@ -508,6 +512,7 @@ class NavigationTracker: ObservableObject {
 
         scored.sort { $0.score < $1.score }
         let winner = scored[0]
+        let sections = scored.map { (index: $0.index, gpsDist: $0.gpsDist, routeDist: $0.routeDist) }
 
         // Pre-join: accept immediately
         if !hasJoinedRoute {
@@ -516,6 +521,13 @@ class NavigationTracker: ObservableObject {
             }
             jumpCandidate = nil
             return (winner.index, refine(winner.index, winner.gpsDist))
+        }
+
+        if let flip = wrongWayCorrection(location: location, sections: sections, currentRouteDist: currentRouteDist, in: route) {
+            jumpCandidate = nil
+            print("[Nav] Wrong way on index \(currentSegmentIndex), "
+                + "snapped to opposite leg at index \(flip.index) (dist=\(Int(flip.routeDist))m)")
+            return (flip.index, refine(flip.index, flip.gpsDist))
         }
 
         // Phase 4: Section jump confirmation
@@ -559,6 +571,35 @@ class NavigationTracker: ObservableObject {
         // No current-section cluster (drifted away) — accept jump immediately
         jumpCandidate = nil
         return (winner.index, refine(winner.index, winner.gpsDist))
+    }
+
+    // On out and back routes the rider can get matched to the leg going the
+    // other way. If they're riding against the leg they're on and another
+    // leg right here points their way, move to it without waiting for the
+    // usual backward jump confirmation.
+    private func wrongWayCorrection(
+        location: CLLocation,
+        sections: [(index: Int, gpsDist: Double, routeDist: Double)],
+        currentRouteDist: Double,
+        in route: ProcessedRoute
+    ) -> (index: Int, gpsDist: Double, routeDist: Double)? {
+        let course = location.course
+        guard course >= 0, location.speed >= NavigationTracker.wrongWayMinSpeed else { return nil }
+
+        let onCurrent = sections
+            .filter { abs($0.routeDist - currentRouteDist) < clusterGap }
+            .min(by: { $0.gpsDist < $1.gpsDist })
+        guard let current = onCurrent,
+              abs(headingDelta(course, route.points[current.index].bearingToNext)) > NavigationTracker.wrongWayHeading
+        else { return nil }
+
+        return sections
+            .filter {
+                abs($0.routeDist - currentRouteDist) >= clusterGap
+                    && $0.gpsDist <= NavigationTracker.wrongWayMaxLegGap
+                    && abs(headingDelta(course, route.points[$0.index].bearingToNext)) < NavigationTracker.rightWayHeading
+            }
+            .min(by: { $0.gpsDist < $1.gpsDist })
     }
 
     // Compute clustered rejoin candidates when off-route
