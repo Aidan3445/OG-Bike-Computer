@@ -25,11 +25,13 @@ struct OffRouteView: View {
             Text("OFF ROUTE")
                 .font(.system(size: 14, weight: .heavy))
                 .foregroundStyle(.red)
+                .lineLimit(1)
 
             Text(formatTurnDistance(workout.navigation.nearestRouteDistance))
                 .font(.system(size: 18, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.red.opacity(0.8))
+                .lineLimit(1)
 
             if let missed = workout.navigation.missedTurn {
                 HStack(spacing: 6) {
@@ -39,6 +41,8 @@ struct OffRouteView: View {
                     Text("Missed \(missed.direction.label)")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.yellow)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
             }
 
@@ -79,6 +83,8 @@ struct OffRouteView: View {
                         .font(.system(size: index == mapConfig.secondaryStats.count - 1 ? 9 : 11,
                                       weight: .semibold, design: .rounded))
                         .foregroundStyle(index == mapConfig.secondaryStats.count - 1 ? .secondary : .primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
             }
         }
@@ -141,9 +147,22 @@ struct OffRouteBanner: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.red.opacity(0.7))
         }
+        .lineLimit(1)
+        .fixedSize()
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(.red.opacity(0.15))
         .clipShape(Capsule())
     }
 }
+
+#if DEBUG
+#Preview("Off route, 41 mm", traits: .fixedLayout(width: 176, height: 215)) {
+    OffRouteView(workout: .preview(offRoute: true))
+}
+
+#Preview("Off route banner, 41 mm", traits: .sizeThatFitsLayout) {
+    OffRouteBanner(workout: .preview(offRoute: true))
+        .frame(width: 176)
+}
+#endif

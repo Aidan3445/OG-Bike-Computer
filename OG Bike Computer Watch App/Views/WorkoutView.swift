@@ -78,13 +78,7 @@ struct WorkoutView<ExtraTab: View>: View {
             .scrollIndicators(.visible)
             .overlay(alignment: .topLeading) {
                 if workout.isAutoPaused || workout.isPaused {
-                    Text(workout.isAutoPaused ? "AUTO-PAUSED" : "PAUSED")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.yellow)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(.yellow.opacity(0.2))
-                        .clipShape(Capsule())
+                    PausedPill(isAutoPaused: workout.isAutoPaused)
                         .padding(.top, 20)
                         .padding(.leading, 12)
                         .ignoresSafeArea(edges: .top)
@@ -480,10 +474,14 @@ struct DynamicMetricsPage: View {
                     Text("in \(formatTurnDistance(workout.navigation.distanceToNextTurn))")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                     Spacer()
                     Text(formatDistance(workout.navigation.distanceRemaining) + " to end")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
             }
         }
@@ -493,3 +491,71 @@ struct DynamicMetricsPage: View {
         .safeAreaPadding(.top)
     }
 }
+
+private struct PausedPill: View {
+    let isAutoPaused: Bool
+
+    var body: some View {
+        Text(isAutoPaused ? "AUTO-PAUSED" : "PAUSED")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.yellow)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(.yellow.opacity(0.2))
+            .clipShape(Capsule())
+    }
+}
+
+// MARK: - Previews
+
+#if DEBUG
+extension WorkoutManager {
+    /// Long auto-paused ride for layout previews, either off route after a
+    /// missed turn or approaching the next one.
+    static func preview(offRoute: Bool) -> WorkoutManager {
+        let w = WorkoutManager()
+        w.isActive = true
+        w.elapsedTime = 40_357
+        w.movingTime = 38_712
+        w.totalDistance = 181_000
+        w.speed = 9.8
+        w.heartRate = 152
+        w.autoPauseState = .paused
+        let turn = TurnPoint(
+            index: 0, angle: 30, direction: offRoute ? .slightLeft : .slightRight,
+            distanceFromStart: 0, coordinate: .init(latitude: 0, longitude: 0))
+        w.navigation.isOffRoute = offRoute
+        w.navigation.nearestRouteDistance = 1_840
+        w.navigation.missedTurn = offRoute ? turn : nil
+        w.navigation.nextTurn = offRoute ? nil : turn
+        w.navigation.distanceToNextTurn = 480
+        w.navigation.distanceRemaining = 154_300
+        return w
+    }
+}
+
+private let previewMetricPage = MetricPage(name: "Ride", slots: [
+    MetricSlot(type: .movingTime), MetricSlot(type: .elapsedTime),
+    MetricSlot(type: .averageSpeed), MetricSlot(type: .distance),
+    MetricSlot(type: .speed), MetricSlot(type: .heartRate),
+])
+
+#Preview("Metrics, 41 mm", traits: .fixedLayout(width: 176, height: 215)) {
+    DynamicMetricsPage(workout: .preview(offRoute: false), metricPage: previewMetricPage, showOffRouteBanner: true)
+}
+
+#Preview("Metrics off route, 41 mm", traits: .fixedLayout(width: 176, height: 215)) {
+    DynamicMetricsPage(workout: .preview(offRoute: true), metricPage: previewMetricPage, showOffRouteBanner: true)
+}
+
+#Preview("Paused pills", traits: .sizeThatFitsLayout) {
+    VStack(spacing: 8) {
+        PausedPill(isAutoPaused: true)
+        PausedPill(isAutoPaused: false)
+    }
+    .padding()
+    .frame(width: 176, alignment: .leading)
+}
+#endif
