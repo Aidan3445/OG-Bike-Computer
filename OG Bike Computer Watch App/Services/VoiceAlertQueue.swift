@@ -37,6 +37,9 @@ struct VoiceAlert {
     /// by the time the queue gets around to them.
     let relevanceCheck: (() -> Bool)?
 
+    /// Plays even with voice turned off, for alerts the rider asked for by hand.
+    let ignoresVoiceToggle: Bool
+
     init(
         priority: AlertPriority,
         text: String,
@@ -45,7 +48,8 @@ struct VoiceAlert {
         alertKey: String? = nil,
         mutualCancelKey: String? = nil,
         replacesKey: String? = nil,
-        relevanceCheck: (() -> Bool)? = nil
+        relevanceCheck: (() -> Bool)? = nil,
+        ignoresVoiceToggle: Bool = false
     ) {
         self.id = UUID()
         self.priority = priority
@@ -56,6 +60,7 @@ struct VoiceAlert {
         self.mutualCancelKey = mutualCancelKey
         self.replacesKey = replacesKey
         self.relevanceCheck = relevanceCheck
+        self.ignoresVoiceToggle = ignoresVoiceToggle
     }
 }
 

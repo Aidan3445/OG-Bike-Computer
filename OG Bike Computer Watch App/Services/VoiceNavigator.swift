@@ -8,12 +8,18 @@
 import AVFoundation
 import CoreLocation
 import Combine
+import os
 import UserNotifications
+
+private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "VoiceNavigator")
 
 class VoiceNavigator: NSObject, ObservableObject {
     static let shared = VoiceNavigator()
 
-    @Published var isEnabled = true
+    /// Kept between rides and app launches.
+    @Published var isEnabled = UserDefaults.standard.object(forKey: "voiceEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(isEnabled, forKey: "voiceEnabled") }
+    }
 
     var preferences: NavigationAlertPreferences = .default
 
@@ -72,6 +78,11 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     // Recreated each ride to avoid AVSpeechSynthesizer silent-death bug
     private var synthesizer: AVSpeechSynthesizer
+
+    // The watch utterance the queue is waiting on, plus a backstop in case
+    // the synthesizer never reports back for it.
+    private var currentLocalUtterance: AVSpeechUtterance?
+    private var localSpeechTimeout: DispatchWorkItem?
     weak var workoutManager: WorkoutManager?
 
     private override init() {
@@ -105,6 +116,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         alertQueue.cancelAll()
         isProcessingAlert = false
         clearInFlight()
+        clearLocalSpeech()
 
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -708,8 +720,9 @@ class VoiceNavigator: NSObject, ObservableObject {
     /// Re-announce the upcoming turn with the current distance. Driven by the
     /// watch map's repeat-alert button so the rider can ask for the cue again
     /// after missing it (headphones disconnected, music too loud, etc.).
+    /// Plays even with voice off, since the rider asked for it.
     func repeatUpcomingTurnAlert() {
-        guard isEnabled, !isStopped else { return }
+        guard !isStopped else { return }
         guard let nav = workoutManager?.navigation, let turn = nav.nextTurn else { return }
         let dist = nav.distanceToNextTurn
         let followingTurn = nav.nearbyFollowingTurn(after: turn, threshold: groupTurnThreshold)
@@ -736,7 +749,8 @@ class VoiceNavigator: NSObject, ObservableObject {
             alertKey: "turn-repeat-\(turnIndex)",
             relevanceCheck: { [weak self] in
                 self?.workoutManager?.navigation.nextTurn?.index == turnIndex
-            }
+            },
+            ignoresVoiceToggle: true
         ))
     }
 
@@ -925,7 +939,8 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
 
         isProcessingAlert = true
-        audioSpeak(alert.text, mode: alert.mode, category: alert.category, priority: alert.priority)
+        audioSpeak(alert.text, mode: alert.mode, category: alert.category, priority: alert.priority,
+                   ignoresVoiceToggle: alert.ignoresVoiceToggle)
     }
 
     fileprivate func finishCurrentAlert() {
@@ -941,8 +956,9 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     // MARK: - Audio Routing
 
-    private func audioSpeak(_ text: String, mode: AlertMode, category: String?, priority: AlertPriority) {
-        guard isEnabled, !isStopped else {
+    private func audioSpeak(_ text: String, mode: AlertMode, category: String?, priority: AlertPriority,
+                            ignoresVoiceToggle: Bool = false) {
+        guard isEnabled || ignoresVoiceToggle, !isStopped else {
             finishCurrentAlert()
             return
         }
@@ -1128,7 +1144,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            print("VoiceNavigator activate error: \(error)")
+            logger.error("Audio session activation failed: \(error.localizedDescription, privacy: .public)")
         }
 
         let utterance = AVSpeechUtterance(string: text)
@@ -1136,7 +1152,50 @@ class VoiceNavigator: NSObject, ObservableObject {
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
         utterance.pitchMultiplier = 1.05
         utterance.volume = 1.0
+        currentLocalUtterance = utterance
+        let estimate = max(2, Double(text.count) / 14)
+        scheduleLocalSpeechTimeout(for: utterance, after: estimate + 3,
+                                   giveUpAt: Date().addingTimeInterval(estimate * 2 + 10))
         synthesizer.speak(utterance)
+    }
+
+    /// Releases the queue if the synthesizer never reports back for an
+    /// utterance, which otherwise blocks every alert behind it. While it's
+    /// still talking the check waits longer instead of cutting it off.
+    private func scheduleLocalSpeechTimeout(for utterance: AVSpeechUtterance,
+                                            after delay: TimeInterval,
+                                            giveUpAt deadline: Date) {
+        localSpeechTimeout?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.currentLocalUtterance === utterance else { return }
+            if self.synthesizer.isSpeaking, Date() < deadline {
+                self.scheduleLocalSpeechTimeout(for: utterance, after: 2, giveUpAt: deadline)
+                return
+            }
+            if !self.synthesizer.isSpeaking {
+                // Nothing came out. Swap in a fresh synthesizer so the next alert isn't lost too.
+                logger.warning("Watch speech never finished, replacing synthesizer")
+                self.synthesizer = AVSpeechSynthesizer()
+                self.synthesizer.delegate = self
+            } else {
+                logger.warning("Watch speech ran past its limit, releasing the queue")
+            }
+            self.finishLocalSpeech(utterance)
+        }
+        localSpeechTimeout = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func finishLocalSpeech(_ utterance: AVSpeechUtterance) {
+        guard currentLocalUtterance === utterance else { return }
+        clearLocalSpeech()
+        finishCurrentAlert()
+    }
+
+    private func clearLocalSpeech() {
+        currentLocalUtterance = nil
+        localSpeechTimeout?.cancel()
+        localSpeechTimeout = nil
     }
 }
 
@@ -1185,7 +1244,10 @@ extension TurnDirection {
 
 extension VoiceNavigator: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        guard !synthesizer.isSpeaking else { return }
-        finishCurrentAlert()
+        finishLocalSpeech(utterance)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        finishLocalSpeech(utterance)
     }
 }
