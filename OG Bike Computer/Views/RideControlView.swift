@@ -629,10 +629,21 @@ private struct RoutePickerSheet: View {
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
+    /// Skips phone copies of a route that's already on the watch, like the
+    /// same route imported twice under different IDs.
     private var phoneOnly: [Route] {
-        routes
-            .filter { !routeIDsOnWatch.contains($0.id) }
+        let watchKeys = Set(onWatch.map(Self.matchKey))
+        return routes
+            .filter { !routeIDsOnWatch.contains($0.id) && !watchKeys.contains(Self.matchKey($0)) }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    /// Imported routes match on their service ID, GPX files on name and point count.
+    private static func matchKey(_ route: Route) -> String {
+        if let source = route.source {
+            return "\(source.service.rawValue):\(source.remoteID)"
+        }
+        return "\(route.name)|\(route.points.count)"
     }
 
     var body: some View {
