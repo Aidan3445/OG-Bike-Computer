@@ -1162,9 +1162,13 @@ private struct StatItem: View {
         VStack(spacing: 2) {
             Text(value)
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
     }
 }
@@ -1178,4 +1182,21 @@ final class CueFramingMetrics {
     /// Camera distance divided by meters per point at pitch 0, measured from
     /// the live map. Nil until the map has drawn a frame.
     var cameraDistanceScale: Double?
+}
+
+#Preview("Stat cells, long values", traits: .sizeThatFitsLayout) {
+    let stats: [(label: String, value: String)] = [
+        ("Distance", "181.4 mi"), ("Elev Gain", "12,480 ft"), ("Elev Loss", "12,395 ft"),
+    ]
+    VStack(spacing: 16) {
+        ForEach([DynamicTypeSize.large, .xLarge, .xxLarge], id: \.self) { size in
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
+                ForEach(stats, id: \.label) { StatItem(label: $0.label, value: $0.value) }
+            }
+            .environment(\.dynamicTypeSize, size)
+            Divider()
+        }
+    }
+    .padding()
+    .frame(width: 375)
 }

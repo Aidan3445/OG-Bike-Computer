@@ -1091,9 +1091,13 @@ private struct StatItem: View {
         VStack(spacing: 2) {
             Text(value)
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
     }
 }
@@ -1103,4 +1107,20 @@ struct ElevPoint {
     let elevation: Double
 }
 
-
+#Preview("Stat cells, long values", traits: .sizeThatFitsLayout) {
+    let stats: [(label: String, value: String)] = [
+        ("Distance", "181.4 mi"), ("Moving Time", "10:45:12"), ("Avg Speed", "18.7 mph"),
+        ("Elapsed", "11:02:37"), ("Elev Gain", "12,480 ft"), ("Max Power", "1,184 W"),
+    ]
+    VStack(spacing: 16) {
+        ForEach([DynamicTypeSize.large, .xLarge, .xxLarge], id: \.self) { size in
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
+                ForEach(stats, id: \.label) { StatItem(label: $0.label, value: $0.value) }
+            }
+            .environment(\.dynamicTypeSize, size)
+            Divider()
+        }
+    }
+    .padding()
+    .frame(width: 375)
+}
