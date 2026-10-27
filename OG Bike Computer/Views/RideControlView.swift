@@ -433,9 +433,15 @@ struct RideControlView: View {
         }
     }
 
-    private func switchRoute(_ route: Route) {
+    private func switchRoute(_ route: Route?) {
         activeRoute = route
         showRoutePicker = false
+
+        guard let route else {
+            // No routeID tells the watch to drop the route and keep recording.
+            ConnectivityManager.shared.sendRideCommand(["type": "changeRoute"])
+            return
+        }
 
         let message: [String: Any] = [
             "type": "changeRoute",
@@ -573,9 +579,10 @@ private struct RoutePickerSheet: View {
     let routes: [Route]
     let routeIDsOnWatch: Set<UUID>
     let activeRoute: Route?
-    let onSelect: (Route) -> Void
+    let onSelect: (Route?) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var showFreeRideConfirmation = false
 
     private var onWatch: [Route] {
         routes
@@ -592,6 +599,17 @@ private struct RoutePickerSheet: View {
     var body: some View {
         NavigationView {
             List {
+                if activeRoute != nil {
+                    Section {
+                        Button {
+                            showFreeRideConfirmation = true
+                        } label: {
+                            Label("Free Ride", systemImage: "bicycle")
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+
                 if !onWatch.isEmpty {
                     Section("On Watch") {
                         ForEach(onWatch) { route in
@@ -618,6 +636,12 @@ private struct RoutePickerSheet: View {
             }
             .navigationTitle("Switch Route")
             .navigationBarTitleDisplayMode(.inline)
+            .confirmationDialog("Switch to Free Ride?", isPresented: $showFreeRideConfirmation, titleVisibility: .visible) {
+                Button("Free Ride") { onSelect(nil) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Turn-by-turn navigation will stop.")
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Cancel") { dismiss() }
