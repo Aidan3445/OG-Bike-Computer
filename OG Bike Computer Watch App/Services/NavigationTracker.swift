@@ -633,15 +633,16 @@ class NavigationTracker: ObservableObject {
         return delta
     }
 
+    /// Straight cues are skipped. Leaving the route there is just "off route".
     private func findMissedTurn(at location: CLLocation, in route: ProcessedRoute) -> TurnPoint? {
-        if let turn = lastPassedTurn {
+        if let turn = lastPassedTurn, turn.direction != .straight {
             let turnLoc = CLLocation(latitude: turn.coordinate.latitude, longitude: turn.coordinate.longitude)
             if location.distance(from: turnLoc) < missedTurnProximity {
                 return turn
             }
         }
 
-        if let turn = nextTurn {
+        if let turn = nextTurn, turn.direction != .straight {
             let turnLoc = CLLocation(latitude: turn.coordinate.latitude, longitude: turn.coordinate.longitude)
             if location.distance(from: turnLoc) < missedTurnProximity {
                 return turn
