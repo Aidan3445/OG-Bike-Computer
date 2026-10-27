@@ -626,7 +626,27 @@ private struct MultiStatItem: View {
     var body: some View {
         VStack(spacing: 2) {
             Text(value).font(.subheadline.weight(.semibold))
+                .lineLimit(1).minimumScaleFactor(0.7)
             Text(label).font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
     }
+}
+
+#Preview("Stat cells, long values", traits: .sizeThatFitsLayout) {
+    let stats: [(label: String, value: String)] = [
+        ("Distance", "1,842.6 mi"), ("Moving Time", "104:45:12"), ("Avg Speed", "17.9 mph"),
+        ("Avg Elev Gain", "3,480 ft"), ("Longest", "181.4 mi"), ("Shortest", "12.3 mi"),
+    ]
+    VStack(spacing: 16) {
+        ForEach([DynamicTypeSize.large, .xLarge, .xxLarge], id: \.self) { size in
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
+                ForEach(stats, id: \.label) { MultiStatItem(label: $0.label, value: $0.value) }
+            }
+            .environment(\.dynamicTypeSize, size)
+            Divider()
+        }
+    }
+    .padding()
+    .frame(width: 375)
 }
