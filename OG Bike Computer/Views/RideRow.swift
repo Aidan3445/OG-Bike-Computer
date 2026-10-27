@@ -79,6 +79,7 @@ struct RideRow: View {
             }
             .tint(.orange)
         }
+        .selectAllOnEdit(when: showRenameSheet)
         .alert("Rename Ride", isPresented: $showRenameSheet) {
             TextField("Ride name", text: $editedName)
             Button("Save") {

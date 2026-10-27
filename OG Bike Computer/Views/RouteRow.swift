@@ -93,6 +93,7 @@ struct RouteRow: View {
         } message: {
             Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
         }
+        .selectAllOnEdit(when: showRenameSheet)
         .alert("Rename Route", isPresented: $showRenameSheet) {
             TextField("Route name", text: $editedName)
             Button("Save") {

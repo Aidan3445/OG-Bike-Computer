@@ -123,6 +123,7 @@ struct SettingsPresetsView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .selectAllOnEdit(when: showRenameAlert)
         .alert("Rename Preset", isPresented: $showRenameAlert) {
             TextField("New name", text: $newPresetName)
             Button("Rename") {
