@@ -53,7 +53,8 @@ private func optimisticallyUpdateLiveActivity(isPaused: Bool) async {
     guard let activity = Activity<RideActivityAttributes>.activities.first else { return }
     var newState = activity.content.state
     newState.isPaused = isPaused
-    await activity.update(ActivityContent(state: newState, staleDate: nil))
+    // Same 60 s stale window as LiveActivityManager, so NO SIGNAL can still show.
+    await activity.update(ActivityContent(state: newState, staleDate: Date().addingTimeInterval(60)))
 }
 
 // MARK: - Pause / Resume Toggle
