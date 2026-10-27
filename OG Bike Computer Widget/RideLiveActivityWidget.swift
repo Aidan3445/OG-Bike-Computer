@@ -113,99 +113,47 @@ struct RideLiveActivity: Widget {
             DynamicIsland {
                 // Expanded
                 DynamicIslandExpandedRegion(.leading) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 5) {
-                            ZStack {
-                                Circle()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [Theme.primaryLight, Theme.primary],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
+                    HStack(spacing: 5) {
+                        ZStack {
+                            Circle()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Theme.primaryLight, Theme.primary],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
                                     )
-                                    .frame(width: 20, height: 20)
-                                    .shadow(color: Theme.primary.opacity(0.6), radius: 3, y: 1)
-                                Image(systemName: "bicycle")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(.white)
-                            }
-                            Text(context.attributes.routeName ?? "Riding")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.95))
-                                .lineLimit(1)
-                        }
-                        HStack(spacing: 5) {
-                            Image(systemName: "timer")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(Theme.primaryLight)
-                            Text(formatDuration(context.state.movingTime, hideSeconds: false))
-                                .font(.body.weight(.semibold))
-                                .monospacedDigit()
+                                )
+                                .frame(width: 20, height: 20)
+                                .shadow(color: Theme.primary.opacity(0.6), radius: 3, y: 1)
+                            Image(systemName: "bicycle")
+                                .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.white)
                         }
+                        // No route name here, the corner is too small to show it in full.
+                        Text(metricLabel(islandCornerMetric(context)))
+                            .font(.caption.weight(.semibold))
+                            .tracking(0.4)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .lineLimit(1)
+                            .fixedSize()
                     }
                     .padding(.leading, 6)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    VStack(alignment: .trailing, spacing: 4) {
-                        StatusPillView(
-                            isPaused: context.state.isPaused,
-                            isAutoPaused: context.state.isAutoPaused,
-                            isStale: context.isStale
-                        )
-                        if let hr = context.state.heartRate, hr > 0 {
-                            HStack(spacing: 4) {
-                                Text("\(Int(hr))")
-                                    .font(.subheadline.weight(.medium))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.white.opacity(0.9))
-                                Image(systemName: "heart.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(.pink)
-                            }
-                        }
-                    }
+                    StatusPillView(
+                        isPaused: context.state.isPaused,
+                        isAutoPaused: context.state.isAutoPaused,
+                        isStale: context.isStale,
+                        compact: true
+                    )
                     .padding(.trailing, 6)
-                }
-                DynamicIslandExpandedRegion(.center) {
-                    if context.state.isOffRoute {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(.orange)
-                            Text(context.state.missedTurnLabel ?? "Off Route")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.orange)
-                            if context.state.missedTurnLabel == nil,
-                               let dist = context.state.distanceOffRoute {
-                                Text("+\(formatTurnDistance(dist, imperial: context.attributes.isImperial))")
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(.orange.opacity(0.85))
-                                    .monospacedDigit()
-                            }
-                        }
-                    } else if let dir = context.state.nextTurnDirection {
-                        HStack(spacing: 6) {
-                            Image(systemName: context.state.nextTurnIcon ?? turnIcon(dir))
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(Theme.primaryLight)
-                            Text(dir.capitalized)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                            if let dist = context.state.distanceToNextTurn {
-                                Text("· \(formatTurnDistance(dist, imperial: context.attributes.isImperial))")
-                                    .font(.footnote)
-                                    .foregroundStyle(Theme.primaryLight.opacity(0.85))
-                                    .monospacedDigit()
-                            }
-                        }
-                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     let status = context.state.status
                     if status == .active {
                         VStack(spacing: 5) {
+                            IslandValueRow(context: context)
+                                .padding(.horizontal, 6)
                             // Same top-row stats the user picked for the lock
                             // screen, when enabled in settings.
                             if context.attributes.showStatsInIsland ?? true {
@@ -215,20 +163,43 @@ struct RideLiveActivity: Widget {
                                             slot: slot,
                                             state: context.state,
                                             attributes: context.attributes,
-                                            hideSeconds: false
+                                            hideSeconds: false,
+                                            tinted: true
                                         )
                                     }
                                 }
                                 .padding(.horizontal, 4)
                             }
-                            let cue = context.state.isOffRoute
+                            let rawCue = context.state.isOffRoute
                                 ? context.state.missedTurnCue
                                 : context.state.nextTurnCue
-                            if let cue, !cue.isEmpty {
-                                MarqueeText(text: cue, font: .footnote, padding: 2, paged: true)
-                                    .foregroundStyle(context.state.isOffRoute ? .orange.opacity(0.85) : .white.opacity(0.7))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.horizontal, 12)
+                            let cue = rawCue?.isEmpty == false ? rawCue : nil
+                            let remaining = islandRemainingDistance(context)
+                            if cue != nil || remaining != nil {
+                                // Remaining distance stays pinned at the end while the cue scrolls.
+                                HStack(spacing: 8) {
+                                    if let cue {
+                                        MarqueeText(text: cue, font: .footnote, padding: 2, paged: true)
+                                            .foregroundStyle(context.state.isOffRoute ? .orange.opacity(0.85) : .white.opacity(0.7))
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    if let remaining {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "flag.checkered")
+                                                .font(.caption2)
+                                                .foregroundStyle(Theme.primaryLight.opacity(0.8))
+                                            Text(formatDistance(remaining, imperial: context.attributes.isImperial)
+                                                 + (cue == nil ? " to finish" : ""))
+                                                .font(.footnote)
+                                                .foregroundStyle(.white.opacity(0.7))
+                                                .monospacedDigit()
+                                                .lineLimit(1)
+                                        }
+                                        .fixedSize()
+                                    }
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 12)
                             }
                         }
                         .padding(.bottom, 2)
@@ -255,6 +226,7 @@ struct RideLiveActivity: Widget {
                     Text(badge.label)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(badge.tint)
+                        .lineLimit(1)
                 } else if let dist = context.state.distanceToNextTurn {
                     Text(formatTurnDistance(dist, imperial: context.attributes.isImperial))
                         .font(.caption.weight(.semibold))
@@ -289,6 +261,12 @@ private struct LockScreenView: View {
     private var isImperial: Bool { context.attributes.isImperial }
     private var statSlots: [String] { context.attributes.statSlots }
     private var hasNav: Bool { state.nextTurnDirection != nil || state.isOffRoute }
+    /// Route distance left, unless one of the six stat cells already shows it.
+    private var remainingDistance: Double? {
+        guard let remaining = state.routeDistanceRemaining,
+              !statSlots.prefix(6).contains("distanceRemaining") else { return nil }
+        return remaining
+    }
     private var isActive: Bool { state.status == .active }
     private var isCompleted: Bool { state.status == .completed }
     private var isHeld: Bool { state.status == .held }
@@ -415,8 +393,8 @@ private struct LockScreenView: View {
             // Stats grid — configurable 2 rows of 3
             statsGrid
 
-            // Route remaining row (only when no nav banner showing — nav banner has its own context)
-            if !isLuminanceReduced, !hasNav, let remaining = state.routeDistanceRemaining {
+            // With nav showing, remaining distance sits under the banner's pill instead.
+            if !isLuminanceReduced, !hasNav, let remaining = remainingDistance {
                 HStack(spacing: 6) {
                     Image(systemName: "flag.checkered")
                         .font(.caption2)
@@ -425,6 +403,8 @@ private struct LockScreenView: View {
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.7))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                     Spacer()
                 }
                 .padding(.horizontal, 2)
@@ -469,6 +449,33 @@ private struct LockScreenView: View {
         )
     }
 
+    /// Slimmer pill with remaining distance under it, sized to the banner's
+    /// two text lines so the banner doesn't grow.
+    private var bannerTrailing: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            StatusPillView(
+                isPaused: state.isPaused,
+                isAutoPaused: state.isAutoPaused,
+                isStale: context.isStale,
+                dense: true
+            )
+            if let remaining = remainingDistance {
+                HStack(spacing: 3) {
+                    Image(systemName: "flag.checkered")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.primaryLight.opacity(0.8))
+                    Text(formatDistance(remaining, imperial: isImperial))
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
+        }
+        .fixedSize()
+        .layoutPriority(1)
+    }
+
     // MARK: - Nav Banner
 
     @ViewBuilder
@@ -487,6 +494,8 @@ private struct LockScreenView: View {
                     Text(state.missedTurnLabel ?? "Off Route")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                     if let cue = state.missedTurnCue, !cue.isEmpty {
                         MarqueeText(text: cue, font: .caption2, padding: 2, paged: true)
                             .foregroundStyle(.orange.opacity(0.8))
@@ -494,10 +503,12 @@ private struct LockScreenView: View {
                         Text("+\(formatTurnDistance(dist, imperial: isImperial)) from route")
                             .font(.caption2)
                             .foregroundStyle(.orange.opacity(0.8))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
                 }
                 Spacer()
-                statusPill
+                bannerTrailing
             } else if let dir = state.nextTurnDirection {
                 ZStack {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -518,11 +529,15 @@ private struct LockScreenView: View {
                         Text(dir.capitalized)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                         if let dist = state.distanceToNextTurn {
                             Text("· \(formatTurnDistance(dist, imperial: isImperial))")
                                 .font(.caption)
                                 .foregroundStyle(Theme.primaryLight)
                                 .monospacedDigit()
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                     }
                     if let cue = state.nextTurnCue, !cue.isEmpty {
@@ -531,7 +546,7 @@ private struct LockScreenView: View {
                     }
                 }
                 Spacer()
-                statusPill
+                bannerTrailing
             }
         }
         .padding(.horizontal, 8)
@@ -579,6 +594,11 @@ private struct StatusPillView: View {
     let isPaused: Bool
     let isAutoPaused: Bool
     let isStale: Bool
+    /// Narrow spots like the expanded island's trailing region show
+    /// auto-pause as plain PAUSED.
+    var compact = false
+    /// Tighter padding, for stacking something under the pill.
+    var dense = false
 
     var body: some View {
         if isStale {
@@ -586,7 +606,7 @@ private struct StatusPillView: View {
         } else if isPaused {
             pill(text: "PAUSED", icon: "pause.fill", color: .yellow)
         } else if isAutoPaused {
-            pill(text: "AUTO PAUSED", icon: "pause.circle.fill", color: .yellow)
+            pill(text: compact ? "PAUSED" : "AUTO PAUSED", icon: "pause.circle.fill", color: .yellow)
         } else {
             HStack(spacing: 5) {
                 Circle()
@@ -597,9 +617,11 @@ private struct StatusPillView: View {
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.white.opacity(0.9))
                     .tracking(0.5)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+            .fixedSize()
+            .padding(.horizontal, dense ? 6 : 8)
+            .padding(.vertical, dense ? 1.5 : 3)
             .background(
                 Capsule()
                     .fill(.white.opacity(0.08))
@@ -615,15 +637,105 @@ private struct StatusPillView: View {
             Text(text)
                 .font(.caption2.weight(.bold))
                 .tracking(0.5)
+                .lineLimit(1)
         }
+        .fixedSize()
         .foregroundStyle(color)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.horizontal, dense ? 6 : 8)
+        .padding(.vertical, dense ? 1.5 : 3)
         .background(
             Capsule()
                 .fill(color.opacity(0.15))
                 .overlay(Capsule().stroke(color.opacity(0.4), lineWidth: 0.5))
         )
+    }
+}
+
+/// Corner stat, turn or off-route line, and heart rate (or calories) in the
+/// expanded island. One row so their baselines line up, which separate
+/// island regions can't do.
+private struct IslandValueRow: View {
+    let context: ActivityViewContext<RideActivityAttributes>
+
+    var body: some View {
+        let state = context.state
+        let imperial = context.attributes.isImperial
+        let cornerMetric = islandCornerMetric(context)
+        let trailingMetric = islandMetric(preferring: ["heartRate", "calories"], context)
+        let trailingValue = resolveMetricValue(trailingMetric, state: state, imperial: imperial, hideSeconds: false)
+
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Image(systemName: metricIcon(cornerMetric))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(metricTint(cornerMetric))
+                Text(resolveMetricValue(cornerMetric, state: state, imperial: imperial, hideSeconds: false))
+                    .font(.body.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 8)
+
+            if state.isOffRoute {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.orange)
+                    Text(state.missedTurnLabel ?? "Off Route")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    if state.missedTurnLabel == nil, let dist = state.distanceOffRoute {
+                        Text("+\(formatTurnDistance(dist, imperial: imperial))")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.orange.opacity(0.85))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+            } else if let dir = state.nextTurnDirection {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: state.nextTurnIcon ?? turnIcon(dir))
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(Theme.primaryLight)
+                    Text(dir.capitalized)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    if let dist = state.distanceToNextTurn {
+                        Text("· \(formatTurnDistance(dist, imperial: imperial))")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.primaryLight.opacity(0.85))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if trailingValue != "--" {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(trailingValue)
+                        .font(.subheadline.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+                    Image(systemName: metricIcon(trailingMetric))
+                        .font(.caption2)
+                        .foregroundStyle(metricTint(trailingMetric))
+                }
+                .fixedSize()
+            }
+        }
     }
 }
 
@@ -634,6 +746,8 @@ private struct MetricStatCell: View {
     let state: RideActivityAttributes.ContentState
     let attributes: RideActivityAttributes
     let hideSeconds: Bool
+    /// Purple cell boxes, used in the island where the background is black.
+    var tinted = false
 
     var body: some View {
         let raw = resolveSlot(slot, state: state, attributes: attributes)
@@ -648,6 +762,8 @@ private struct MetricStatCell: View {
                     .font(.system(size: 8, weight: .bold))
                     .tracking(0.4)
                     .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
             Text(resolveMetricValue(raw, state: state, imperial: attributes.isImperial, hideSeconds: hideSeconds))
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -660,13 +776,39 @@ private struct MetricStatCell: View {
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.white.opacity(0.06))
+                .fill(tinted ? Theme.primary.opacity(0.18) : .white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(.white.opacity(0.08), lineWidth: 0.5)
+                        .stroke(tinted ? Theme.primary.opacity(0.35) : .white.opacity(0.08), lineWidth: 0.5)
                 )
         )
     }
+}
+
+/// Route distance left for the island's bottom line, nil on a free ride or
+/// when the island stat row already shows it.
+private func islandRemainingDistance(_ context: ActivityViewContext<RideActivityAttributes>) -> Double? {
+    guard let remaining = context.state.routeDistanceRemaining else { return nil }
+    let rowShown = context.attributes.showStatsInIsland ?? true
+    let rowHasRemaining = rowShown && context.attributes.statSlots.prefix(3).contains("distanceRemaining")
+    return rowHasRemaining ? nil : remaining
+}
+
+private func islandCornerMetric(_ context: ActivityViewContext<RideActivityAttributes>) -> String {
+    islandMetric(preferring: ["movingTime", "elapsedTime", "distance", "averageSpeed"], context)
+}
+
+/// First of `candidates` the island stat row doesn't already show, so the
+/// expanded island's corners don't repeat a stat. Falls back to the first.
+private func islandMetric(
+    preferring candidates: [String],
+    _ context: ActivityViewContext<RideActivityAttributes>
+) -> String {
+    let rowShown = context.attributes.showStatsInIsland ?? true
+    let row = rowShown
+        ? context.attributes.statSlots.prefix(3).map { resolveSlot($0, state: context.state, attributes: context.attributes) }
+        : []
+    return candidates.first { !row.contains($0) } ?? candidates[0]
 }
 
 /// Remaining distance only exists on routed rides — on a free ride the slot
@@ -939,5 +1081,113 @@ private func turnIcon(_ direction: String) -> String {
     if lower.contains("u-turn") || lower.contains("u turn") { return "arrow.uturn.down" }
     if lower.contains("straight") || lower.contains("continue") { return "arrow.up" }
     return "arrow.triangle.turn.up.right.diamond"
+}
+// MARK: - Previews
+
+extension RideActivityAttributes {
+    fileprivate static let preview = RideActivityAttributes(
+        routeName: "Saturday Long Loop Through the Blue Hills",
+        startTime: .now,
+        isImperial: true
+    )
+
+    /// Remaining in the bottom row of the grid, so the Lock Screen and island
+    /// skip their own remaining distance.
+    fileprivate static let previewRemainingInGrid = RideActivityAttributes(
+        routeName: "Saturday Long Loop Through the Blue Hills",
+        startTime: .now,
+        isImperial: true,
+        statSlots: ["distance", "movingTime", "averageSpeed", "distanceRemaining", "elevationGain", "speed"]
+    )
+
+    /// Top row without Moving but with HR, so the island corners show
+    /// moving time and calories.
+    fileprivate static let previewNoMovingInRow = RideActivityAttributes(
+        routeName: "Saturday Long Loop Through the Blue Hills",
+        startTime: .now,
+        isImperial: true,
+        statSlots: ["distance", "speed", "heartRate", "movingTime", "elevationGain", "averageSpeed"]
+    )
+}
+
+extension RideActivityAttributes.ContentState {
+    /// Long ride, auto-paused and off route after a missed turn.
+    fileprivate static let autoPausedMissedTurn = Self(
+        elapsedTime: 40_357, movingTime: 38_712, totalDistance: 181_000,
+        averageSpeed: 8.4, currentSpeed: 0, heartRate: 152,
+        elevationGain: 3_804, routeDistanceRemaining: 154_300,
+        isPaused: false, isAutoPaused: true,
+        isOffRoute: true, distanceOffRoute: 1_840,
+        missedTurnLabel: "Missed Slight Left", missedTurnCue: "onto Old Colony Boulevard"
+    )
+
+    /// Auto-paused and off route with no missed turn, so the distance shows.
+    fileprivate static let autoPausedOffRoute = Self(
+        elapsedTime: 40_357, movingTime: 38_712, totalDistance: 181_000,
+        averageSpeed: 8.4, currentSpeed: 0, heartRate: 152,
+        activeCalories: 4_812, elevationGain: 3_804, routeDistanceRemaining: 154_300,
+        isPaused: false, isAutoPaused: true,
+        isOffRoute: true, distanceOffRoute: 1_840
+    )
+
+    /// Auto-paused with a turn coming up.
+    fileprivate static let autoPausedTurn = Self(
+        elapsedTime: 40_357, movingTime: 38_712, totalDistance: 181_000,
+        averageSpeed: 8.4, currentSpeed: 0, heartRate: 152,
+        activeCalories: 4_812, elevationGain: 3_804,
+        distanceToNextTurn: 480, nextTurnDirection: "Slight Right",
+        nextTurnIcon: "arrow.up.right", nextTurnCue: "onto Old Colony Boulevard",
+        routeDistanceRemaining: 154_300,
+        isPaused: false, isAutoPaused: true, isOffRoute: false
+    )
+
+    /// Live, no turn queued, so the "to finish" row shows.
+    fileprivate static let liveToFinish = Self(
+        elapsedTime: 40_357, movingTime: 38_712, totalDistance: 181_000,
+        averageSpeed: 8.4, currentSpeed: 9.8, heartRate: 152,
+        activeCalories: 4_812, elevationGain: 3_804, routeDistanceRemaining: 154_300,
+        isPaused: false, isAutoPaused: false, isOffRoute: false
+    )
+}
+
+#Preview("Lock Screen", as: .content, using: RideActivityAttributes.preview) {
+    RideLiveActivity()
+} contentStates: {
+    RideActivityAttributes.ContentState.autoPausedMissedTurn
+    RideActivityAttributes.ContentState.autoPausedOffRoute
+    RideActivityAttributes.ContentState.autoPausedTurn
+    RideActivityAttributes.ContentState.liveToFinish
+}
+
+#Preview("Lock Screen, Remaining in grid", as: .content, using: RideActivityAttributes.previewRemainingInGrid) {
+    RideLiveActivity()
+} contentStates: {
+    RideActivityAttributes.ContentState.autoPausedTurn
+    RideActivityAttributes.ContentState.liveToFinish
+}
+
+#Preview("Island expanded", as: .dynamicIsland(.expanded), using: RideActivityAttributes.preview) {
+    RideLiveActivity()
+} contentStates: {
+    RideActivityAttributes.ContentState.autoPausedMissedTurn
+    RideActivityAttributes.ContentState.autoPausedOffRoute
+    RideActivityAttributes.ContentState.autoPausedTurn
+    RideActivityAttributes.ContentState.liveToFinish
+}
+
+#Preview("Island expanded, no Moving in row", as: .dynamicIsland(.expanded), using: RideActivityAttributes.previewNoMovingInRow) {
+    RideLiveActivity()
+} contentStates: {
+    RideActivityAttributes.ContentState.autoPausedOffRoute
+    RideActivityAttributes.ContentState.autoPausedTurn
+    RideActivityAttributes.ContentState.liveToFinish
+}
+
+#Preview("Island compact", as: .dynamicIsland(.compact), using: RideActivityAttributes.preview) {
+    RideLiveActivity()
+} contentStates: {
+    RideActivityAttributes.ContentState.autoPausedOffRoute
+    RideActivityAttributes.ContentState.autoPausedTurn
+    RideActivityAttributes.ContentState.liveToFinish
 }
 #endif
