@@ -256,6 +256,7 @@ struct RideChartsView: View {
 
     @State private var selected: RideChartMetric = .elevation
     @State private var scrubActive = false
+    @ObservedObject private var unitState = UnitState.shared
 
     private var availableMetrics: [RideChartMetric] {
         var metrics: [RideChartMetric] = [.elevation, .speed]
@@ -265,6 +266,7 @@ struct RideChartsView: View {
     }
 
     var body: some View {
+        let _ = unitState.preferences
         VStack(spacing: 8) {
             chart
                 .frame(height: 140)
@@ -324,6 +326,7 @@ struct RideChartsView: View {
         let unitLabel = currentUnits.distance.label
         let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
         let maxDist = (dataPoints.last?.distance ?? 0) / metersPerUnit
+        let xTicks = chartDistanceTicks(in: 0...maxDist)
         let baseline = yDomain.lowerBound
 
         Chart {
@@ -409,13 +412,11 @@ struct RideChartsView: View {
         }
         .chartXScale(domain: 0...maxDist)
         .chartXAxis {
-            // Anchor labels to the leading edge of their tick so the rightmost
-            // label doesn't get clipped at the chart edge.
-            AxisMarks(values: .automatic(desiredCount: 5)) { value in
+            AxisMarks(preset: .aligned, values: xTicks) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                AxisValueLabel(anchor: .topLeading) {
-                    if let v = value.as(Double.self) {
-                        Text("\(Int(v)) \(unitLabel)")
+                if let v = value.as(Double.self) {
+                    AxisValueLabel(anchor: chartDistanceLabelAnchor(for: v, in: 0...maxDist)) {
+                        Text("\(chartDistanceLabel(v)) \(unitLabel)")
                             .font(.system(size: 9))
                     }
                 }
@@ -424,8 +425,8 @@ struct RideChartsView: View {
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                AxisValueLabel {
-                    if let v = value.as(Double.self) {
+                if let v = value.as(Double.self) {
+                    AxisValueLabel(anchor: chartYLabelAnchor(for: v, in: yDomain)) {
                         Text(yAxisLabel(v))
                             .font(.system(size: 9))
                     }
@@ -434,7 +435,7 @@ struct RideChartsView: View {
         }
         .chartYScale(domain: yDomain)
         .chartLegend(.hidden)
-        .clipped()
+        .chartPlotStyle { $0.clipped() }
     }
 
     private var toggleBar: some View {
@@ -575,13 +576,17 @@ struct RouteElevationChartView: View {
     /// Written from the gesture only — observed by the scrub leaf views.
     let scrub: ChartScrubState
     @State private var scrubActive = false
+    @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
+        let _ = unitState.preferences
         let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
         let unitLabel = currentUnits.distance.label
         let elevPoints = points.filter { $0.elevation != nil }
         let maxDist = (points.last?.distanceFromStart ?? 0) / metersPerUnit
-        let baseline = elevationDomain(elevPoints).lowerBound
+        let xTicks = chartDistanceTicks(in: 0...maxDist)
+        let yDomain = elevationDomain(elevPoints)
+        let baseline = yDomain.lowerBound
 
         Chart {
             ForEach(Array(elevPoints.enumerated()), id: \.offset) { _, pt in
@@ -608,31 +613,20 @@ struct RouteElevationChartView: View {
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
             }
 
-            // Mile marker rule lines
-            let totalDist = points.last?.distanceFromStart ?? 0
-            let interval = distanceMarkerInterval
-            let markerCount = Int(totalDist / (interval * metersPerUnit))
-            ForEach(1...max(1, markerCount), id: \.self) { i in
-                RuleMark(x: .value("Marker", Double(i) * interval))
+            ForEach(xTicks.filter { $0 > 0 }, id: \.self) { tick in
+                RuleMark(x: .value("Marker", tick))
                     .foregroundStyle(.secondary.opacity(0.4))
                     .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
-                    .annotation(position: .top, alignment: .center) {
-                        Text("\(Int(Double(i) * interval)) \(unitLabel)")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
-                    }
             }
 
         }
         .chartXScale(domain: 0...maxDist)
         .chartXAxis {
-            // Anchor labels to the leading edge of their tick so the rightmost
-            // label doesn't get clipped at the chart edge.
-            AxisMarks(values: .automatic(desiredCount: 5)) { value in
+            AxisMarks(preset: .aligned, values: xTicks) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                AxisValueLabel(anchor: .topLeading) {
-                    if let v = value.as(Double.self) {
-                        Text("\(Int(v)) \(unitLabel)")
+                if let v = value.as(Double.self) {
+                    AxisValueLabel(anchor: chartDistanceLabelAnchor(for: v, in: 0...maxDist)) {
+                        Text("\(chartDistanceLabel(v)) \(unitLabel)")
                             .font(.system(size: 9))
                     }
                 }
@@ -641,17 +635,17 @@ struct RouteElevationChartView: View {
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                AxisValueLabel {
-                    if let v = value.as(Double.self) {
+                if let v = value.as(Double.self) {
+                    AxisValueLabel(anchor: chartYLabelAnchor(for: v, in: yDomain)) {
                         Text("\(Int(v)) \(currentUnits.elevation == .feet ? "ft" : "m")")
                             .font(.system(size: 9))
                     }
                 }
             }
         }
-        .chartYScale(domain: elevationDomain(elevPoints))
+        .chartYScale(domain: yDomain)
         .chartLegend(.hidden)
-        .clipped()
+        .chartPlotStyle { $0.clipped() }
         .frame(height: 140)
         .chartOverlay { proxy in
             GeometryReader { geo in
@@ -702,10 +696,6 @@ struct RouteElevationChartView: View {
         let hi = vals.max() ?? 100
         let pad = max((hi - lo) * 0.1, 1)
         return (lo - pad)...(hi + pad)
-    }
-
-    private var distanceMarkerInterval: Double {
-        currentUnits.distance == .miles ? 5 : 5
     }
 }
 
