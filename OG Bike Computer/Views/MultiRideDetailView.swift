@@ -81,7 +81,7 @@ struct MultiRideDetailView: View {
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             if isOnScreen {
-            Map(position: $mapPosition) {
+            Map(position: $mapPosition, bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)) {
                 ForEach(renders) { r in
                     MapPolyline(coordinates: r.coords)
                         .stroke(r.color, lineWidth: 4)
@@ -113,7 +113,7 @@ struct MultiRideDetailView: View {
                     }
                 }
             }
-            .mapStyle(.standard(elevation: .realistic))
+            .mapStyle(.standard(elevation: .flat))
             .mapControls {
                 MapCompass()
                 MapScaleView()

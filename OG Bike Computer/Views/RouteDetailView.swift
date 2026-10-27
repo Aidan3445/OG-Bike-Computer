@@ -94,7 +94,7 @@ struct RouteDetailView: View {
         ZStack(alignment: .bottom) {
             if isOnScreen {
             MapReader { mapProxy in
-            Map(position: $mapPosition) {
+            Map(position: $mapPosition, bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)) {
                 // Route polyline
                 MapPolyline(coordinates: cachedCoordinates)
                     .stroke(.blue, lineWidth: 4)
@@ -211,6 +211,7 @@ struct RouteDetailView: View {
                         let poi = cluster.items[0]
                         Annotation(poi.name, coordinate: poi.coordinate) {
                             WaypointPin()
+                                .onTapGesture { zoomMapToPOI(poi.coordinate) }
                         }
                     } else {
                         Annotation("", coordinate: cluster.center) {
@@ -225,7 +226,7 @@ struct RouteDetailView: View {
                 // Current location
                 UserAnnotation()
             }
-            .mapStyle(.standard(elevation: .realistic))
+            .mapStyle(.standard(elevation: .flat))
             .mapControls {
                 MapUserLocationButton()
                 MapCompass()
@@ -522,6 +523,21 @@ struct RouteDetailView: View {
             centerCoordinate: target,
             distance: 700,
             heading: heading,
+            pitch: 0
+        )
+        withAnimation(.easeInOut(duration: 0.4)) {
+            mapPosition = .camera(camera)
+        }
+    }
+
+    /// Center on a tapped waypoint and zoom in, keeping the heading. Never
+    /// zooms out if the map is already closer than that.
+    private func zoomMapToPOI(_ coordinate: CLLocationCoordinate2D) {
+        let currentDistance = MapCameraCache.shared.camera(for: cameraCacheKey)?.distance ?? .infinity
+        let camera = MapCamera(
+            centerCoordinate: coordinate,
+            distance: min(currentDistance, 700),
+            heading: cameraState.heading,
             pitch: 0
         )
         withAnimation(.easeInOut(duration: 0.4)) {

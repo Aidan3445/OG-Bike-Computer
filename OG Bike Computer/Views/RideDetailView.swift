@@ -94,7 +94,7 @@ struct RideDetailView: View {
         ZStack(alignment: .bottom) {
             if isOnScreen {
             MapReader { mapProxy in
-            Map(position: $mapPosition) {
+            Map(position: $mapPosition, bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)) {
                 // Plain line until the colored segments finish building, then
                 // colored polylines filtered to the visible region (with a
                 // 50% pad so small pans mid-gesture don't drop edge segments).
@@ -173,7 +173,7 @@ struct RideDetailView: View {
                 // Mile markers
                 mileMarkerAnnotations()
             }
-            .mapStyle(.standard(elevation: .realistic))
+            .mapStyle(.standard(elevation: .flat))
             .mapControls {
                 MapCompass()
                 MapScaleView()

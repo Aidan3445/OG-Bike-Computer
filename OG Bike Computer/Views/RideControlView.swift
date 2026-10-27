@@ -550,7 +550,7 @@ private struct FreeRideMapSheet: View {
 
                 UserAnnotation()
             }
-            .mapStyle(.standard(elevation: .realistic))
+            .mapStyle(.standard(elevation: .flat))
             .mapControls {
                 MapUserLocationButton()
                 MapCompass()
