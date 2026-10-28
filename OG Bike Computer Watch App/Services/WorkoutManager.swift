@@ -342,7 +342,11 @@ class WorkoutManager: NSObject, ObservableObject {
         }
 
         isMirroringReady = false
+        let mirrorRequested = Date()
+        DiagnosticsLog.event("Mirroring", "sim start requested")
         session?.startMirroringToCompanionDevice { [weak self] success, error in
+            let wait = String(format: "%.1f", Date().timeIntervalSince(mirrorRequested))
+            DiagnosticsLog.event("Mirroring", "sim start result success=\(success) after=\(wait)s")
             if let error = error {
                 print("[Sim] Mirroring failed: \(error)")
             } else {
@@ -671,8 +675,11 @@ class WorkoutManager: NSObject, ObservableObject {
 
         // Watch-initiated ride → mirror to phone for telemetry/speech
         isMirroringReady = false
+        let mirrorRequested = Date()
+        DiagnosticsLog.event("Mirroring", "start requested")
         session?.startMirroringToCompanionDevice { [weak self] success, error in
-            print("[Mirroring] Start mirroring result: success=\(success), error=\(String(describing: error))")
+            let wait = String(format: "%.1f", Date().timeIntervalSince(mirrorRequested))
+            DiagnosticsLog.event("Mirroring", "start result success=\(success) after=\(wait)s error=\(error?.localizedDescription ?? "none")")
             if success {
                 DispatchQueue.main.async {
                     // Mirroring is what launches and keeps the phone app alive.
@@ -1049,6 +1056,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func stop(save: Bool) {
+        DiagnosticsLog.event("Mirroring", "stop save=\(save) sim=\(isSimulating)")
         expectSessionStates([.stopped, .ended])
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
@@ -2356,7 +2364,7 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                         didChangeTo toState: HKWorkoutSessionState,
                         from fromState: HKWorkoutSessionState,
                         date: Date) {
-        print("Workout state: \(fromState.rawValue) → \(toState.rawValue)")
+        DiagnosticsLog.event("Mirroring", "session state \(fromState.rawValue) -> \(toState.rawValue)")
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }

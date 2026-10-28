@@ -12,11 +12,10 @@ import HealthKit
 import os
 import AVFAudio
 import UserNotifications
+import WatchConnectivity
 #if canImport(ActivityKit)
 import ActivityKit
 #endif
-
-private let mirrorLogger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "Mirroring")
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     private let locationManager = CLLocationManager()
@@ -66,7 +65,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // a NEW valid HKWorkoutSession — the old one is dead.
         // Runs on an anonymous background queue.
         healthStore.workoutSessionMirroringStartHandler = { [weak self] mirroredSession in
-            mirrorLogger.notice("[Mirroring] Received mirrored session, state: \(mirroredSession.state.rawValue)")
+            DiagnosticsLog.event("Mirroring", "received session state=\(mirroredSession.state.rawValue) reachable=\(WCSession.default.isReachable)")
             // Set new session FIRST — makes the === check in delegates work
             self?.mirroredSession = mirroredSession
             RideSessionManager.shared.mirroredSession = mirroredSession
@@ -119,7 +118,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                         didChangeTo toState: HKWorkoutSessionState,
                         from fromState: HKWorkoutSessionState,
                         date: Date) {
-        mirrorLogger.info("[Mirroring] Session state: \(fromState.rawValue) → \(toState.rawValue)")
+        DiagnosticsLog.event("Mirroring", "session state \(fromState.rawValue) -> \(toState.rawValue)")
 
         // THE KEY FIX: Only clean up for the CURRENT session.
         // When ride 1 ends and ride 2 starts quickly:
@@ -128,7 +127,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
         //   3. Without this guard, it would call stopImmediately() and kill
         //      session B's fresh synthesizer
         guard workoutSession === mirroredSession else {
-            mirrorLogger.info("[Mirroring] Ignoring state change from old session")
+            DiagnosticsLog.event("Mirroring", "ignored state change from old session")
             return
         }
 
@@ -145,15 +144,15 @@ extension AppDelegate: HKWorkoutSessionDelegate {
 
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didFailWithError error: Error) {
-        mirrorLogger.error("[Mirroring] Session error: \(error)")
+        DiagnosticsLog.event("Mirroring", "session error=\(error.localizedDescription)")
     }
 
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didDisconnectFromRemoteDeviceWithError error: Error?) {
-        mirrorLogger.notice("[Mirroring] Disconnected: \(error?.localizedDescription ?? "clean")")
+        DiagnosticsLog.event("Mirroring", "disconnected error=\(error?.localizedDescription ?? "none")")
         // Don't let old session's disconnect kill new session
         guard workoutSession === mirroredSession else {
-            mirrorLogger.info("[Mirroring] Ignoring disconnect from old session")
+            DiagnosticsLog.event("Mirroring", "ignored disconnect from old session")
             return
         }
         RideSessionManager.shared.mirroredSession = nil
@@ -180,7 +179,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
             if let tsString = payload["ts"], let ts = Double(tsString) {
                 let age = now - ts
                 if age > 10 {
-                    mirrorLogger.info("[Mirroring] Discarding stale \(type) message (\(String(format: "%.1f", age))s old)")
+                    DiagnosticsLog.event("Mirroring", "stale \(type) dropped age=\(String(format: "%.1f", age))s")
                     continue
                 }
             }

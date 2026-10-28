@@ -48,6 +48,7 @@ extension ConnectivityManager: WCSessionDelegate {
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
+        DiagnosticsLog.event("Link", "reachable=\(session.isReachable)")
         DispatchQueue.main.async {
             self.isReachable = session.isReachable
         }
@@ -153,8 +154,10 @@ extension ConnectivityManager: WCSessionDelegate {
         case "clearAllRoutes":
             clearAllRoutesFromPhone()
         case "holdRide":
+            DiagnosticsLog.event("Command", "received holdRide via userInfo")
             DispatchQueue.main.async { self.onHoldRideRequested?() }
         case "discardRide":
+            DiagnosticsLog.event("Command", "received discardRide via userInfo")
             DispatchQueue.main.async { self.onDiscardRideRequested?() }
         case "continueHeldRide":
             if let rideID = Self.rideID(in: userInfo) {
@@ -272,9 +275,11 @@ extension ConnectivityManager: WCSessionDelegate {
             DispatchQueue.main.async { self.onToggleVoiceRequested?() }
             replyHandler(["toggled": true])
         case "discardRide":
+            DiagnosticsLog.event("Command", "received discardRide via message")
             DispatchQueue.main.async { self.onDiscardRideRequested?() }
             replyHandler(["discarded": true])
         case "holdRide":
+            DiagnosticsLog.event("Command", "received holdRide via message")
             DispatchQueue.main.async { self.onHoldRideRequested?() }
             replyHandler(["held": true])
         case "sampleHaptic":

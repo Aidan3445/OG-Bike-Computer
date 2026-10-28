@@ -15,18 +15,25 @@ extension ConnectivityManager {
     /// Sends a ride command like startRide, changeRoute or toggleVoice.
     /// Queued if the watch isn't reachable.
     func sendRideCommand(_ message: [String: Any]) {
-        guard WCSession.default.activationState == .activated else { return }
+        let type = message["type"] as? String ?? "?"
+        guard WCSession.default.activationState == .activated else {
+            DiagnosticsLog.event("Command", "\(type) dropped, session not activated")
+            return
+        }
 
         if WCSession.default.isReachable {
+            let sent = Date()
             WCSession.default.sendMessage(message, replyHandler: { reply in
-                print("[RideCommand] Sent: \(message["type"] ?? "?"), reply: \(reply)")
+                let wait = String(format: "%.1f", Date().timeIntervalSince(sent))
+                DiagnosticsLog.event("Command", "\(type) replied after=\(wait)s reply=\(reply)")
             }, errorHandler: { error in
-                print("[RideCommand] Failed: \(error). Queuing via userInfo.")
+                let wait = String(format: "%.1f", Date().timeIntervalSince(sent))
+                DiagnosticsLog.event("Command", "\(type) failed after=\(wait)s error=\(error.localizedDescription), queued via userInfo")
                 WCSession.default.transferUserInfo(message)
             })
         } else {
             WCSession.default.transferUserInfo(message)
-            print("[RideCommand] Watch not reachable, queued via userInfo")
+            DiagnosticsLog.event("Command", "\(type) watch not reachable, queued via userInfo")
         }
     }
 
