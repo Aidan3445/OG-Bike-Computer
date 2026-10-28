@@ -310,6 +310,25 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             }
 
+            #if DEBUG
+            Section {
+                NavigationLink {
+                    DiagnosticsView(rideStore: rideStore)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Diagnostics")
+                            Text("Trace files from this phone and the watch")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "stethoscope")
+                            .foregroundStyle(.gray)
+                    }
+                }
+            }
+            #endif
         }
         .sheet(isPresented: $showClearRoutes) {
             ClearRoutesSheet(

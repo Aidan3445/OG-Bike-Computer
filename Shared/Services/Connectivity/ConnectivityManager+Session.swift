@@ -29,13 +29,19 @@ extension ConnectivityManager: WCSessionDelegate {
             #endif
         }
 
+        #if os(iOS)
+        if DiagnosticsLog.isEnabled {
+            DiagnosticsLog.pruneWatchRideFolders(keep: 30)
+        }
+        #endif
+
         if activationState == .activated, session.hasContentPending {
             print("WCSession has content pending delivery")
         }
 
         #if os(watchOS)
         if activationState == .activated {
-            retryPendingTransfers()
+            retryPendingTransfers(reason: "activation")
             cleanupOldRides()
         }
         #endif
@@ -48,7 +54,7 @@ extension ConnectivityManager: WCSessionDelegate {
 
         #if os(watchOS)
         if session.isReachable {
-            retryPendingTransfers()
+            retryPendingTransfers(reason: "reachability")
             cleanupOldRides()
         }
         #endif
@@ -81,8 +87,13 @@ extension ConnectivityManager: WCSessionDelegate {
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         #if os(iOS)
-        if file.metadata?["type"] as? String == "rideTrack" {
+        switch file.metadata?["type"] as? String {
+        case "rideTrack":
             handleRideTransfer(file)
+        case "diagnostics":
+            receiveDiagnosticsFile(file)
+        default:
+            break
         }
         #elseif os(watchOS)
         receiveRouteFile(file)
@@ -93,7 +104,11 @@ extension ConnectivityManager: WCSessionDelegate {
         #if os(iOS)
         cleanUpStagedRoute(fileTransfer, error: error)
         #elseif os(watchOS)
-        finishRideTransfer(fileTransfer, error: error)
+        if fileTransfer.file.metadata?["type"] as? String == "diagnostics" {
+            finishDiagnosticsTransfer(fileTransfer, error: error)
+        } else {
+            finishRideTransfer(fileTransfer, error: error)
+        }
         #endif
     }
 
@@ -133,7 +148,7 @@ extension ConnectivityManager: WCSessionDelegate {
         #if os(watchOS)
         case "rideAck":
             if let rideID = Self.rideID(in: userInfo) {
-                handleTransferAck(rideID: rideID)
+                handleTransferAck(rideID: rideID, via: "userInfo")
             }
         case "clearAllRoutes":
             clearAllRoutesFromPhone()
@@ -236,9 +251,13 @@ extension ConnectivityManager: WCSessionDelegate {
         #if os(watchOS)
         case "rideAck":
             if let rideID = Self.rideID(in: message) {
-                handleTransferAck(rideID: rideID)
+                handleTransferAck(rideID: rideID, via: "message")
             }
             replyHandler(["received": true])
+        case "requestDiagnostics":
+            sendAllDiagnostics { count in
+                replyHandler(["count": count])
+            }
         case "clearAllRoutes":
             clearAllRoutesFromPhone()
             replyHandler(["cleared": true])
