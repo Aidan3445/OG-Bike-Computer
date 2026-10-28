@@ -22,7 +22,9 @@ class RideSessionManager: ObservableObject {
 
     @Published var isRideActive = false {
         didSet {
-            if oldValue && !isRideActive {
+            if !oldValue && isRideActive {
+                suppressAwaitingOnNextEnd = false
+            } else if oldValue && !isRideActive {
                 if suppressAwaitingOnNextEnd {
                     suppressAwaitingOnNextEnd = false
                 } else {
@@ -111,6 +113,15 @@ class RideSessionManager: ObservableObject {
     func sendDiscardRide() {
         suppressAwaitingOnNextEnd = true
         ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
+    }
+
+    /// The watch is discarding the ride itself. Its message can land before
+    /// or after the mirrored session ends, so this covers both.
+    func watchWillDiscard() {
+        if isRideActive {
+            suppressAwaitingOnNextEnd = true
+        }
+        ConnectivityManager.shared.clearAwaitingIncomingRide()
     }
 
     // MARK: - Optimistic Updates

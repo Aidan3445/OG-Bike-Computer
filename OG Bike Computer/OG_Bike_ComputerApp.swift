@@ -314,6 +314,9 @@ struct OG_Bike_ComputerApp: App {
                     // back to a default `.completed`.
                     #if canImport(ActivityKit)
                     ConnectivityManager.shared.onWatchTerminalIntent = { kind in
+                        if kind == "discarded" {
+                            RideSessionManager.shared.watchWillDiscard()
+                        }
                         Task {
                             switch kind {
                             case "held":
