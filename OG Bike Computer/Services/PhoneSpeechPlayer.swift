@@ -59,6 +59,8 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     // Renders a throwaway phrase at ride start so the first real alert
     // doesn't pay for loading the voice. Kept alive until it finishes.
     private var warmUpSynthesizer: AVSpeechSynthesizer?
+    /// Loading the voice can stall for most of a minute, so it stays off main.
+    private let warmUpQueue = DispatchQueue(label: "com.aidan3445.OG-Bike-Computer.speechWarmUp", qos: .utility)
 
     #if os(iOS)
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -137,17 +139,20 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     /// Loads the voice by rendering to a buffer instead of speaking, so it
     /// doesn't touch the audio session or duck the rider's music.
     private func warmUpVoice() {
-        let warmUp = AVSpeechSynthesizer()
-        warmUpSynthesizer = warmUp
-        let utterance = AVSpeechUtterance(string: "Ready.")
-        utterance.voice = PreferredVoice.resolved
-        warmUp.write(utterance) { [weak self] buffer in
-            // An empty buffer marks the end of the render.
-            guard (buffer as? AVAudioPCMBuffer)?.frameLength ?? 0 == 0 else { return }
-            self?.onMain {
-                guard self?.warmUpSynthesizer === warmUp else { return }
-                self?.warmUpSynthesizer = nil
-                logger.notice("[Speech] Voice warmed up")
+        warmUpQueue.async { [weak self] in
+            let warmUp = AVSpeechSynthesizer()
+            let utterance = AVSpeechUtterance(string: "Ready.")
+            utterance.voice = PreferredVoice.resolved
+            // Stored before the write so its completion finds it.
+            self?.onMain { self?.warmUpSynthesizer = warmUp }
+            warmUp.write(utterance) { [weak self] buffer in
+                // An empty buffer marks the end of the render.
+                guard (buffer as? AVAudioPCMBuffer)?.frameLength ?? 0 == 0 else { return }
+                self?.onMain {
+                    guard self?.warmUpSynthesizer === warmUp else { return }
+                    self?.warmUpSynthesizer = nil
+                    logger.notice("[Speech] Voice warmed up")
+                }
             }
         }
     }
