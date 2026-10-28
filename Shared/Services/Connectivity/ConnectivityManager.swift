@@ -37,6 +37,11 @@ final class ConnectivityManager: NSObject, ObservableObject {
     /// before the mirrored session ends so the Live Activity can show the
     /// right banner instead of the default completed one.
     var onWatchTerminalIntent: ((String) -> Void)?
+    /// Telemetry the watch sends directly while HealthKit is still holding
+    /// back the mirrored session.
+    var onEarlyTelemetry: (([String: String]) -> Void)?
+    /// The watch ended a ride the phone only knew about from early telemetry.
+    var onEarlyRideEnded: ((String) -> Void)?
     /// Rides whose files are on their way from the watch.
     @Published var pendingTransferRideIDs: Set<UUID> = []
     /// The watch ended a ride but its transfer hasn't started yet. Drives the
@@ -69,6 +74,8 @@ final class ConnectivityManager: NSObject, ObservableObject {
     var onAlertFinishReceived: ((UUID) -> Void)?
     /// The phone dropped this alert without speaking it, so the watch should.
     var onAlertNackReceived: ((UUID) -> Void)?
+    /// The phone has the mirrored session, so early telemetry can stop.
+    var onPhoneMirrorAttached: (() -> Void)?
     #endif
 
     // Commands from the phone, handled on the watch.
@@ -77,6 +84,10 @@ final class ConnectivityManager: NSObject, ObservableObject {
     var onDiscardRideRequested: (() -> Void)?
     var onToggleVoiceRequested: (() -> Void)?
     var onHoldRideRequested: (() -> Void)?
+    /// Pause, resume and end sent before the phone has the mirrored session.
+    var onPauseRideRequested: (() -> Void)?
+    var onResumeRideRequested: (() -> Void)?
+    var onEndRideRequested: (() -> Void)?
     /// Plays a sample buzz for an intensity like "light", "medium" or "strong".
     var onSampleHapticRequested: ((String) -> Void)?
     /// Resumes a held ride. The summary is the phone's copy, used if the

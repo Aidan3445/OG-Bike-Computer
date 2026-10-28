@@ -66,15 +66,31 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Runs on an anonymous background queue.
         healthStore.workoutSessionMirroringStartHandler = { [weak self] mirroredSession in
             DiagnosticsLog.event("Mirroring", "received session state=\(mirroredSession.state.rawValue) reachable=\(WCSession.default.isReachable)")
+            if RideSessionManager.shared.isLateHandover(of: mirroredSession) {
+                DiagnosticsLog.event("Mirroring", "ignored late session for a ride that already ended")
+                return
+            }
             // Set new session FIRST — makes the === check in delegates work
             self?.mirroredSession = mirroredSession
             RideSessionManager.shared.mirroredSession = mirroredSession
             mirroredSession.delegate = self
+            ConnectivityManager.shared.sendMirrorAttached()
             // AVSpeechSynthesizer is not thread-safe — reset on main
             DispatchQueue.main.async {
                 PhoneSpeechPlayer.shared.resetSession()
                 self?.startPhoneAlerts()
             }
+        }
+
+        // HealthKit can hold back the next ride's session for about a minute,
+        // so until then the watch sends telemetry directly.
+        ConnectivityManager.shared.onEarlyTelemetry = { payload in
+            guard let sessionID = payload["sessionID"],
+                  RideSessionManager.shared.receiveEarlyTelemetry(sessionID: sessionID) else { return }
+            PhoneTelemetryStore.shared.update(from: payload)
+        }
+        ConnectivityManager.shared.onEarlyRideEnded = { sessionID in
+            RideSessionManager.shared.earlyRideEnded(sessionID: sessionID)
         }
 
         // Observe phone alert preference changes so we can restart/stop

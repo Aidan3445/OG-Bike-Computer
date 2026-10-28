@@ -308,6 +308,11 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Telemetry for phone Live Activity
     private var telemetryTimer: Timer?
+    /// HealthKit can hold back the phone's mirrored session for about a
+    /// minute after the previous ride, so telemetry also goes straight over
+    /// WatchConnectivity until the phone says it has the session.
+    private var earlyTelemetrySessionID: String?
+    private var earlyTelemetryUntil = Date.distantPast
 
     // Checkpoint / crash recovery
     private var checkpointTimer: Timer?
@@ -1723,6 +1728,8 @@ class WorkoutManager: NSObject, ObservableObject {
     // MARK: - Telemetry (Phone Live Activity)
 
     private func startTelemetryTimer() {
+        earlyTelemetrySessionID = UUID().uuidString
+        earlyTelemetryUntil = Date().addingTimeInterval(90)
         telemetryTimer?.invalidate()
         telemetryTimer = Timer.scheduledTimer(withTimeInterval: ridePreferences.telemetryRate.interval, repeats: true) { [weak self] _ in
             self?.sendTelemetry()
@@ -1732,6 +1739,16 @@ class WorkoutManager: NSObject, ObservableObject {
     private func stopTelemetryTimer() {
         telemetryTimer?.invalidate()
         telemetryTimer = nil
+        if let sessionID = earlyTelemetrySessionID {
+            ConnectivityManager.shared.sendEarlyRideEnded(sessionID: sessionID)
+            earlyTelemetrySessionID = nil
+        }
+    }
+
+    func stopEarlyTelemetry() {
+        guard earlyTelemetrySessionID != nil else { return }
+        DiagnosticsLog.event("Mirroring", "early telemetry stopped, phone has session")
+        earlyTelemetrySessionID = nil
     }
 
     // MARK: - Checkpoint (Crash Recovery)
@@ -2211,7 +2228,11 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func sendTelemetry() {
-        guard isMirroringReady, let workoutSession = session else { return }
+        if earlyTelemetrySessionID != nil, Date() > earlyTelemetryUntil {
+            earlyTelemetrySessionID = nil
+        }
+        let workoutSession = isMirroringReady ? session : nil
+        guard workoutSession != nil || earlyTelemetrySessionID != nil else { return }
 
         let avgSpeed = movingTime > 0 ? totalDistance / movingTime : 0
 
@@ -2287,7 +2308,13 @@ class WorkoutManager: NSObject, ObservableObject {
 
         }
 
-        guard let data = try? JSONEncoder().encode(payload) else { return }
+        if let sessionID = earlyTelemetrySessionID {
+            var early = payload
+            early["sessionID"] = sessionID
+            ConnectivityManager.shared.sendEarlyTelemetry(early)
+        }
+
+        guard let workoutSession, let data = try? JSONEncoder().encode(payload) else { return }
 
         workoutSession.sendToRemoteWorkoutSession(data: data) { [weak self] success, error in
             if let error = error {

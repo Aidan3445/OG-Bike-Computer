@@ -67,6 +67,27 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
             self.workout.attemptHold()
         }
 
+        ConnectivityManager.shared.onPauseRideRequested = { [weak self] in
+            guard let self, self.workout.isActive, !self.workout.isPaused else { return }
+            self.workout.pause()
+        }
+
+        ConnectivityManager.shared.onResumeRideRequested = { [weak self] in
+            guard let self, self.workout.isActive, self.workout.isPaused else { return }
+            self.workout.resume()
+        }
+
+        // Same as the session ending from the phone. The phone already
+        // turned short rides into a discard.
+        ConnectivityManager.shared.onEndRideRequested = { [weak self] in
+            guard let self, self.workout.isActive, self.workout.completedRideSummary == nil else { return }
+            self.workout.stop(save: true)
+        }
+
+        ConnectivityManager.shared.onPhoneMirrorAttached = { [weak self] in
+            self?.workout.stopEarlyTelemetry()
+        }
+
         ConnectivityManager.shared.onSampleHapticRequested = { intensity in
             let haptic: WKHapticType
             switch intensity {

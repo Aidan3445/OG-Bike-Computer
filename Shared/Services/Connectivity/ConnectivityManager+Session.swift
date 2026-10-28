@@ -282,6 +282,21 @@ extension ConnectivityManager: WCSessionDelegate {
             DiagnosticsLog.event("Command", "received holdRide via message")
             DispatchQueue.main.async { self.onHoldRideRequested?() }
             replyHandler(["held": true])
+        case "pauseRide", "resumeRide", "endRide":
+            DiagnosticsLog.event("Command", "received \(type) via message")
+            // Replies after the change so the phone's next telemetry
+            // already shows it.
+            DispatchQueue.main.async {
+                switch type {
+                case "pauseRide": self.onPauseRideRequested?()
+                case "resumeRide": self.onResumeRideRequested?()
+                default: self.onEndRideRequested?()
+                }
+                replyHandler(["received": true])
+            }
+        case "mirrorAttached":
+            DispatchQueue.main.async { self.onPhoneMirrorAttached?() }
+            replyHandler(["received": true])
         case "sampleHaptic":
             let intensity = (message["intensity"] as? String) ?? "medium"
             DispatchQueue.main.async { self.onSampleHapticRequested?(intensity) }
@@ -338,6 +353,15 @@ extension ConnectivityManager: WCSessionDelegate {
                 return
             }
             DispatchQueue.main.async { self.dropContinuedHeldRide(rideID: rideID) }
+            replyHandler(["received": true])
+        case "telemetry":
+            let payload = message.compactMapValues { $0 as? String }
+            DispatchQueue.main.async { self.onEarlyTelemetry?(payload) }
+            replyHandler(["received": true])
+        case "earlyRideEnded":
+            if let sessionID = message["sessionID"] as? String {
+                DispatchQueue.main.async { self.onEarlyRideEnded?(sessionID) }
+            }
             replyHandler(["received": true])
         #endif
 
