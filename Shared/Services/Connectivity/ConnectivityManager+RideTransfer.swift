@@ -31,7 +31,8 @@ extension ConnectivityManager {
                 self?.isAwaitingIncomingRide = false
             }
             self.awaitingIncomingRideTimeout = task
-            DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: task)
+            // Wall clock so the timeout still fires if the phone slept.
+            DispatchQueue.main.asyncAfter(wallDeadline: .now() + 120, execute: task)
         }
     }
 
