@@ -181,6 +181,7 @@ struct ContentView: View {
             }
             .tag(2)
         }
+        .layoutProbe("Root", corner: .topTrailing)
         .sheet(isPresented: $importCoordinator.showActionSheet) {
             RouteImportActionSheet()
         }

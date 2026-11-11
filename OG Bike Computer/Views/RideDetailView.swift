@@ -282,6 +282,7 @@ struct RideDetailView: View {
         } message: {
             Text(heldRideError ?? "")
         }
+        .layoutProbe("RideDetail")
         .navigationTitle(ride.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

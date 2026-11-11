@@ -130,6 +130,7 @@ struct MultiRideDetailView: View {
                 statsPanel()
             }
         }
+        .layoutProbe("MultiRideDetail")
         .navigationTitle("\(rides.count) Rides")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

@@ -413,6 +413,7 @@ struct RouteDetailView: View {
             cueFraming.mapSize = $0
         }
         }  // end: GeometryReader
+        .layoutProbe("RouteDetail")
         .navigationTitle(isEditingCues ? "Cue Editor" : route.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
