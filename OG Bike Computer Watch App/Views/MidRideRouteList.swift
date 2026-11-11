@@ -12,31 +12,34 @@ struct MidRideRouteList: View {
     @ObservedObject var workout: WorkoutManager
     @ObservedObject private var unitState = UnitState.shared
 
-    @State private var swapping: Route?
-    @State private var showConfirm = false
-    @State private var showRemoveConfirm = false
+    // Shown right away while loadRoute processes the route off the main thread.
+    @State private var pendingRoute: Route?
 
     var body: some View {
         let _ = unitState.preferences
         List {
             Section {
-                if workout.hasRoute {
+                if let pendingRoute {
+                    HStack {
+                        ProgressView()
+                            .frame(width: 20, height: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(pendingRoute.name)
+                                .font(.headline)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("Loading route")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else if workout.hasRoute {
                     let name = workout.navigation.processedRoute?.name ?? "Route"
                     HStack {
                         Image(systemName: "location.fill")
                             .foregroundStyle(.green)
                         Text(name)
                             .font(.headline)
-                            .lineLimit(1)
-                        Spacer()
-                        Button {
-                            showRemoveConfirm = true
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.red.opacity(0.7))
-                                .font(.system(size: 18))
-                        }
-                        .buttonStyle(.plain)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
                     HStack {
@@ -52,18 +55,27 @@ struct MidRideRouteList: View {
             }
 
             Section {
+                if workout.hasRoute && pendingRoute == nil {
+                    Button {
+                        workout.clearRoute()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "bicycle")
+                            Text("Free Ride")
+                        }
+                        .font(.subheadline)
+                    }
+                }
                 if store.routes.isEmpty {
                     Text("No routes available")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(store.routes) { route in
-                        let isActive = workout.navigation.processedRoute?.name == route.name
+                        let isPending = pendingRoute?.id == route.id
+                        let isActive = pendingRoute == nil && workout.navigation.processedRoute?.name == route.name
                         Button {
-                            if !isActive {
-                                swapping = route
-                                showConfirm = true
-                            }
+                            if !isActive { swapRoute(route) }
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -74,13 +86,16 @@ struct MidRideRouteList: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                if isActive {
+                                if isPending {
+                                    ProgressView()
+                                        .frame(width: 20, height: 20)
+                                } else if isActive {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundStyle(.green)
                                 }
                             }
                         }
-                        .disabled(isActive)
+                        .disabled(isActive || pendingRoute != nil)
                     }
                 }
             } header: {
@@ -89,35 +104,14 @@ struct MidRideRouteList: View {
             }
         }
         .navigationTitle("Routes")
-        .alert("Switch Route?", isPresented: $showConfirm) {
-            Button("Switch") {
-                if let route = swapping {
-                    swapRoute(route)
-                }
-                swapping = nil
-            }
-            Button("Cancel", role: .cancel) {
-                swapping = nil
-            }
-        } message: {
-            if let route = swapping {
-                Text("Switch navigation to \(route.name)? Your ride recording continues uninterrupted.")
-            }
-        }
-        .alert("Remove Route?", isPresented: $showRemoveConfirm) {
-            Button("Remove", role: .destructive) {
-                workout.clearRoute()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Switch to Free Ride? Your ride recording continues uninterrupted.")
-        }
     }
 
     private func swapRoute(_ route: Route) {
+        pendingRoute = route
         DispatchQueue.global(qos: .userInitiated).async {
             workout.loadRoute(route)
             DispatchQueue.main.async {
+                pendingRoute = nil
                 VoiceNavigator.shared.resetForRouteSwap()
             }
         }
