@@ -80,6 +80,7 @@ class RideSimulator: ObservableObject {
         let loc = track.locations[currentPointIndex]
         let speed = computeSpeed(at: currentPointIndex, in: track.locations)
         let enriched = enrichLocation(loc, speed: speed, course: computeCourse(at: currentPointIndex, in: track.locations))
+        workout.simTrackHeartRate = track.heartRates[currentPointIndex]
         workout.processLocation(enriched)
     }
 
@@ -97,6 +98,7 @@ class RideSimulator: ObservableObject {
         let speed = computeSpeed(at: currentPointIndex, in: track.locations)
         let course = computeCourse(at: currentPointIndex, in: track.locations)
         let enriched = enrichLocation(loc, speed: speed, course: course)
+        workout.simTrackHeartRate = track.heartRates[currentPointIndex]
         workout.processLocation(enriched)
 
         let i = currentPointIndex

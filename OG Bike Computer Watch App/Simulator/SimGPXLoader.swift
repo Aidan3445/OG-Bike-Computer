@@ -14,6 +14,8 @@ struct SimGPXLoader {
     struct SimTrack {
         let name: String
         let locations: [CLLocation]
+        /// One per location, nil where the point has no heart rate.
+        let heartRates: [Double?]
     }
 
    static func loadAll() -> [SimTrack] {
@@ -38,13 +40,14 @@ struct SimGPXLoader {
         }
         let name = parser.trackName ?? url.deletingPathExtension().lastPathComponent
         print("[Sim] Loaded \(name): \(locations.count) points")
-        return SimTrack(name: name, locations: locations)
+        return SimTrack(name: name, locations: locations, heartRates: parser.heartRates)
     }
 }
 
 private class SimGPXParser: NSObject, XMLParserDelegate {
     var trackName: String?
     private(set) var locations: [CLLocation] = []
+    private(set) var heartRates: [Double?] = []
 
     private var currentElement = ""
     private var currentText = ""
@@ -53,6 +56,7 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
     private var currentLon: Double?
     private var currentEle: Double?
     private var currentTime: Date?
+    private var currentHR: Double?
 
     private var inTrkpt = false
     private var inTrkName = false
@@ -88,6 +92,7 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
             currentLon = attributes["lon"].flatMap(Double.init)
             currentEle = nil
             currentTime = nil
+            currentHR = nil
         }
 
         if element == "name" && !inTrkpt && trackName == nil {
@@ -109,6 +114,9 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
             } else if element == "time" {
                 currentTime = dateFormatter.date(from: trimmed)
                     ?? dateFormatterNoFrac.date(from: trimmed)
+            } else if element == "hr" || element.hasSuffix(":hr") {
+                // TrackPointExtension heart rate, under whatever prefix the exporter used.
+                currentHR = Double(trimmed)
             } else if element == "trkpt" || element == "rtept" {
                 if let lat = currentLat, let lon = currentLon {
                     let location = CLLocation(
@@ -120,6 +128,7 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
                         speed: -1,
                         timestamp: currentTime ?? Date())
                     locations.append(location)
+                    heartRates.append(currentHR)
                 }
                 inTrkpt = false
             }

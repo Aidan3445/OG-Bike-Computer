@@ -83,12 +83,17 @@ struct SimulationView: View {
                     }
                 }
 
-                if selectedRoute != nil && simulator.isLoaded {
+                // The simulator keeps its last track loaded, so check the pick too.
+                if selectedTrack != nil && simulator.isLoaded {
                     Section {
-                        Button("Start Simulation") {
+                        Button(selectedRoute == nil ? "Start Free Ride" : "Start Simulation") {
                             startSimulation()
                         }
                         .tint(.green)
+                    } footer: {
+                        if selectedRoute == nil {
+                            Text("No nav route picked, so this replays as a free ride.")
+                        }
                     }
                 }
             }
@@ -102,7 +107,13 @@ struct SimulationView: View {
     }
 
     private func startSimulation() {
-        guard let route = selectedRoute else { return }
+        guard let route = selectedRoute else {
+            workout.clearRoute()
+            workout.startSimulation(activity: .cycling)
+            simulator.attach(to: workout)
+            simulator.play()
+            return
+        }
         isLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
             workout.loadRoute(route)
