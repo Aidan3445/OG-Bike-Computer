@@ -55,14 +55,14 @@ struct RideRow: View {
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow {
-                    Label(formatDistance(ride.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationGain) : "—", systemImage: "arrow.up.right")
-                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationLoss) : "—", systemImage: "arrow.down.right")
+                    Label(formatDistance(ride.distance, grouped: true), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationGain, grouped: true) : "—", systemImage: "arrow.up.right")
+                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationLoss, grouped: true) : "—", systemImage: "arrow.down.right")
                 }
                 GridRow {
                     Label(formatTime(ride.movingTime), systemImage: "clock")
                     Label(formatSpeed(ride.avgSpeed), systemImage: "speedometer")
-                    Label(String(format: "%.0f cal", ride.calories), systemImage: "flame")
+                    Label(formatCalories(ride.calories, grouped: true), systemImage: "flame")
                 }
             }
             .labelStyle(StatLabelStyle())
@@ -92,3 +92,23 @@ struct RideRow: View {
         }
     }
 }
+
+#if DEBUG
+extension RideSummary {
+    /// A ride with every stat past 1,000, to check how separators fit.
+    static func previewLong(name: String = "Day 117 - Oak Harbor to Port Angeles", onHold: Bool = false) -> RideSummary {
+        RideSummary(id: UUID(), name: name, activityType: .cycling, date: Date(),
+                    elapsedTime: 15 * 3600, movingTime: 11 * 3600 + 42 * 60, distance: 1_852_000,
+                    calories: 12_345, elevationGain: 9_524, elevationLoss: 8_731,
+                    avgSpeed: 7.3, pointCount: 0, trackFilename: "preview.track",
+                    isOnHold: onHold)
+    }
+}
+
+#Preview("Big numbers") {
+    List {
+        RideRow(ride: .previewLong(), onRename: { _ in })
+        RideRow(ride: .previewLong(name: "Short name"), onRename: { _ in })
+    }
+}
+#endif

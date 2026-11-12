@@ -59,12 +59,12 @@ struct RouteRow: View {
                     .disabled(isUploadBlocked || isQueued)
                 }
 
-                Label(formatDistance(route.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                Label(formatDistance(route.distance, grouped: true), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 if route.elevationGain > 0 {
-                    Label(formatElevation(route.elevationGain), systemImage: "arrow.up.right")
+                    Label(formatElevation(route.elevationGain, grouped: true), systemImage: "arrow.up.right")
                 }
                 if route.elevationLoss > 0 {
-                    Label(formatElevation(route.elevationLoss), systemImage: "arrow.down.right")
+                    Label(formatElevation(route.elevationLoss, grouped: true), systemImage: "arrow.down.right")
                 }
                 if let source = route.source {
                     ServiceBadge(service: source.service)
@@ -106,3 +106,17 @@ struct RouteRow: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Big numbers") {
+    // About 2,000 mi with steady climbing, so every stat passes 1,000.
+    let points = (0..<2_000).map { i in
+        TrackPoint(lat: 30 + Double(i) * 0.0145, lon: -100, elevation: Double(i % 40) * 25)
+    }
+    List {
+        RouteRow(route: Route(name: "London to Edinburgh - August 2027", points: points),
+                 isOnWatch: true, isUploading: false, isQueued: false, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+    }
+}
+#endif
