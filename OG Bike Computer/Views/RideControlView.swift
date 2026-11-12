@@ -93,6 +93,7 @@ struct RideControlView: View {
             activeRoute = newID.flatMap { id in routeStore.routes.first { $0.id == id } }
         }
         .background(telemetry.isOffRoute ? Self.offRouteBackground : Color(.systemGroupedBackground))
+        .layoutProbe("RideControl")
         .navigationTitle(session.isPaused ? "Paused" : "Riding")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Discard Ride?", isPresented: $showDiscardAlert) {
@@ -601,6 +602,7 @@ private struct FreeRideMapSheet: View {
                 MapCompass()
                 MapScaleView()
             }
+            .layoutProbe("FreeRideMap")
             .navigationTitle("Free Ride")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -621,7 +623,6 @@ private struct RoutePickerSheet: View {
     let onSelect: (Route?) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var showFreeRideConfirmation = false
 
     private var onWatch: [Route] {
         routes
@@ -652,7 +653,7 @@ private struct RoutePickerSheet: View {
                 if activeRoute != nil {
                     Section {
                         Button {
-                            showFreeRideConfirmation = true
+                            onSelect(nil)
                         } label: {
                             Label("Free Ride", systemImage: "bicycle")
                                 .foregroundStyle(.primary)
@@ -686,12 +687,6 @@ private struct RoutePickerSheet: View {
             }
             .navigationTitle("Switch Route")
             .navigationBarTitleDisplayMode(.inline)
-            .confirmationDialog("Switch to Free Ride?", isPresented: $showFreeRideConfirmation, titleVisibility: .visible) {
-                Button("Free Ride") { onSelect(nil) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Turn-by-turn navigation will stop.")
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Cancel") { dismiss() }

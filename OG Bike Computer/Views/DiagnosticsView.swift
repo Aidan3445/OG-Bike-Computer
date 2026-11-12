@@ -19,6 +19,7 @@ struct DiagnosticsView: View {
     @State private var requestStatus: String?
     @State private var isPreparingShare = false
     @State private var showDeleteConfirm = false
+    @AppStorage("layoutOverlayEnabled") private var layoutOverlayEnabled = false
 
     struct DiagnosticsFile: Identifiable {
         let url: URL
@@ -98,6 +99,18 @@ struct DiagnosticsView: View {
                     }
                 }
                 .disabled(isEmpty)
+            }
+
+            Section {
+                NavigationLink("Elevation vs Strava") {
+                    ElevationCompareView(rideStore: rideStore)
+                }
+            }
+
+            Section {
+                Toggle("Layout Overlay", isOn: $layoutOverlayEnabled)
+            } footer: {
+                Text("Shows each map screen's size, safe-area insets and keyboard height. The layout bug gets logged either way.")
             }
 
             Section("Event Logs") {
