@@ -36,6 +36,10 @@ class VoiceNavigator: NSObject, ObservableObject {
     private let atTurnThreshold: Double = 20
     private let cooldown: TimeInterval = 4
     private let minTimeBeforeTurn: TimeInterval = 4
+    /// A rejoin this far past the midpoint still gets the halfway alert.
+    private let halfwayRejoinGrace: Double = 1609.34
+    /// An along-route jump bigger than this between updates starts a new stretch.
+    private let stretchJumpDistance: Double = 300
 
     // State
     private var isActivelyMoving = true
@@ -50,7 +54,11 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var firedFinishAlerts: Set<Int> = []
 
     private var announcedHalfway = false
-    private var seenBeforeHalfway = false  // guards against firing halfway if rider started past that point
+    /// Along-route distance where the current on-route stretch began, nil while
+    /// off route or not yet near the route.
+    private var stretchStart: Double?
+    private var lastStretchAlong: Double?
+    private var hadStretchBeforeHalfway = false
     private var announcedArrival = false
     private var announcedOffRoute = false
 
@@ -104,7 +112,9 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
-        seenBeforeHalfway = false
+        stretchStart = nil
+        lastStretchAlong = nil
+        hadStretchBeforeHalfway = false
         announcedArrival = false
         announcedOffRoute = false
         firedPOIAlerts.removeAll()
@@ -134,7 +144,9 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
-        seenBeforeHalfway = false
+        stretchStart = nil
+        lastStretchAlong = nil
+        hadStretchBeforeHalfway = false
         announcedArrival = false
         announcedOffRoute = false
         firedPOIAlerts.removeAll()
@@ -197,6 +209,8 @@ class VoiceNavigator: NSObject, ObservableObject {
             }
             return
         }
+
+        trackRouteStretch(nav: nav, half: route.totalDistance / 2)
 
         if nav.isOffRoute {
             if !announcedOffRoute {
@@ -273,6 +287,10 @@ class VoiceNavigator: NSObject, ObservableObject {
             // it persisting until the at-turn alert fires.
             trackingFinish = false
             firedFinishAlerts.removeAll()
+
+            if !passedTurn {
+                keepClosestApproachOnly(distance: nav.distanceToNextTurn)
+            }
 
             if passedTurn {
                 if isActivelyMoving {
@@ -382,20 +400,15 @@ class VoiceNavigator: NSObject, ObservableObject {
             ) { return }
         }
 
-        if !announcedHalfway {
-            let half = route.totalDistance / 2
-            // Track that the rider was on the first half so we don't fire halfway
-            // if they started mid-route or resumed a hold past the halfway point.
-            if nav.distanceAlongRoute < half {
-                seenBeforeHalfway = true
+        let half = route.totalDistance / 2
+        if !announcedHalfway, hadStretchBeforeHalfway,
+           let start = stretchStart, start <= half + halfwayRejoinGrace,
+           nav.distanceAlongRoute >= half {
+            announcedHalfway = true
+            if isActivelyMoving {
+                announceHalfway(distanceRemaining: nav.distanceRemaining, mode: navEvents.halfwayAlert)
             }
-            if seenBeforeHalfway && nav.distanceAlongRoute >= half {
-                announcedHalfway = true
-                if isActivelyMoving {
-                    announceHalfway(distanceRemaining: nav.distanceRemaining, mode: navEvents.halfwayAlert)
-                }
-                return
-            }
+            return
         }
 
         if isActivelyMoving {
@@ -675,6 +688,39 @@ class VoiceNavigator: NSObject, ObservableObject {
             return true
         }
         return false
+    }
+
+    /// Halfway only counts riding that actually covered the midpoint. A stretch
+    /// starts on the first update that's truly near the route, so the snapped
+    /// samples of an off-route start don't count, and it ends when the rider
+    /// goes off route or the match jumps along the route.
+    private func trackRouteStretch(nav: NavigationTracker, half: Double) {
+        guard !nav.isOffRoute else {
+            stretchStart = nil
+            lastStretchAlong = nil
+            return
+        }
+        let along = nav.distanceAlongRoute
+        if let last = lastStretchAlong, abs(along - last) > stretchJumpDistance {
+            stretchStart = nil
+        }
+        lastStretchAlong = along
+
+        let nearRoute = nav.hasJoinedRoute && nav.nearestRouteDistance <= nav.offRouteThreshold
+        if stretchStart == nil, nearRoute {
+            stretchStart = along
+            if along < half { hadStretchBeforeHalfway = true }
+        }
+    }
+
+    /// Picking up a route already inside several approach thresholds would
+    /// fire one alert per threshold a few seconds apart. Keep only the closest.
+    private func keepClosestApproachOnly(distance: Double) {
+        let inside = alertDistances.enumerated().filter { $0.element > 0 && distance <= $0.element }
+        guard let closest = inside.min(by: { $0.element < $1.element }) else { return }
+        for (i, _) in inside where i != closest.offset {
+            firedTurnAlerts.insert(i)
+        }
     }
 
     private var canSpeak: Bool {
