@@ -222,16 +222,6 @@ struct ElevationChart: View {
             )
         }
     }
-
-    private func gradeColor(_ pct: Double) -> Color {
-        switch pct {
-        case ..<(-3):     return .blue
-        case ..<3:        return .green
-        case ..<6:        return .yellow
-        case ..<10:       return .orange
-        default:          return .red
-        }
-    }
 }
 
 // MARK: - Mock data for previews

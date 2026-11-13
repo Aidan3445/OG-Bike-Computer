@@ -22,7 +22,6 @@ struct RideSettingsView: View {
             tabOrderSection
             autoPauseSection
             checkpointSection
-            phoneAlertsSection
 
             if userSettings.settings.ridePreferences != .default {
                 Section {
@@ -106,30 +105,6 @@ struct RideSettingsView: View {
             Label("Crash Recovery", systemImage: "externaldrive.badge.checkmark")
         } footer: {
             Text("Periodically saves ride data to disk. If the app crashes, data up to the last checkpoint is recovered on next launch as a held ride you can continue or save.")
-        }
-    }
-
-    // MARK: - Live Activity
-
-    @ViewBuilder
-    private var phoneAlertsSection: some View {
-        Section {
-            NavigationLink {
-                PhoneAlertSettingsView(userSettings: userSettings)
-            } label: {
-                HStack {
-                    Text("Live Activity")
-                    Spacer()
-                    Text(userSettings.settings.phoneAlerts.showTurnNotifications
-                         ? "Notifications on"
-                         : "Stats only")
-                        .foregroundStyle(.secondary)
-                }
-            }
-        } header: {
-            Label("Live Activity", systemImage: "iphone")
-        } footer: {
-            Text("Customize the ride Live Activity stats and optional turn notifications on your iPhone.")
         }
     }
 }

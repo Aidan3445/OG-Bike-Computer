@@ -220,6 +220,69 @@ struct ChartDataPoint: Identifiable {
     let speed: Double         // m/s
     let heartRate: Double     // bpm (0 = no data)
     let power: Double         // watts (0 = no data)
+    let grade: Double         // percent
+}
+
+/// One colored run of the grade band under an elevation chart, in meters.
+struct GradeBandSegment {
+    let start: Double
+    let end: Double
+    let color: Color
+}
+
+/// Merges neighboring points of the same grade color so the band is a
+/// handful of marks instead of one per chart point.
+func gradeBand(distances: [Double], grades: [Double]) -> [GradeBandSegment] {
+    guard distances.count >= 2, distances.count == grades.count else { return [] }
+    var segments: [GradeBandSegment] = []
+    for i in 1..<distances.count {
+        let color = gradeColor(grades[i])
+        if let last = segments.last, last.color == color {
+            segments[segments.count - 1] = GradeBandSegment(start: last.start, end: distances[i], color: color)
+        } else {
+            segments.append(GradeBandSegment(start: distances[i - 1], end: distances[i], color: color))
+        }
+    }
+    return segments
+}
+
+/// Elevation by distance, for reading grade off a profile at any spacing.
+struct GradeProfile {
+    private let distances: [Double]
+    private let elevations: [Double]
+
+    /// `points` must be in distance order. A 5 point median runs first so one
+    /// bad fix can't spike the grade.
+    init(_ points: [(distance: Double, elevation: Double)]) {
+        distances = points.map(\.distance)
+        let raw = points.map(\.elevation)
+        elevations = raw.indices.map { i in
+            let window = raw[max(0, i - 2)...min(raw.count - 1, i + 2)].sorted()
+            return window[window.count / 2]
+        }
+    }
+
+    /// Percent grade over ±`halfWindow` meters around `distance`, clamped to ±25%.
+    func grade(at distance: Double, halfWindow: Double) -> Double {
+        guard let first = distances.first, let last = distances.last, distances.count >= 2 else { return 0 }
+        let lo = max(first, distance - halfWindow)
+        let hi = min(last, distance + halfWindow)
+        guard hi - lo > 1 else { return 0 }
+        let pct = (elevation(at: hi) - elevation(at: lo)) / (hi - lo) * 100
+        return max(-25, min(25, pct))
+    }
+
+    private func elevation(at d: Double) -> Double {
+        var lo = 0, hi = distances.count - 1
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2
+            if distances[mid] <= d { lo = mid } else { hi = mid }
+        }
+        let span = distances[hi] - distances[lo]
+        guard span > 0 else { return elevations[lo] }
+        let t = max(0, min(1, (d - distances[lo]) / span))
+        return elevations[lo] + (elevations[hi] - elevations[lo]) * t
+    }
 }
 
 // MARK: - Ride Charts (multi-metric with toggles)
@@ -257,6 +320,7 @@ struct RideChartsView: View {
     @State private var selected: RideChartMetric = .elevation
     @State private var scrubActive = false
     @ObservedObject private var unitState = UnitState.shared
+    @AppStorage(PhoneSettingsKeys.gradeColors) private var showGradeColors = true
 
     private var availableMetrics: [RideChartMetric] {
         var metrics: [RideChartMetric] = [.elevation, .speed]
@@ -353,6 +417,19 @@ struct RideChartsView: View {
                     .foregroundStyle(selected.color)
                     .interpolationMethod(.catmullRom)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
+                }
+
+                if showGradeColors {
+                    let bandTop = baseline + (yDomain.upperBound - yDomain.lowerBound) * 0.03
+                    ForEach(Array(gradeBand(distances: dataPoints.map(\.distance), grades: dataPoints.map(\.grade)).enumerated()), id: \.offset) { _, seg in
+                        RectangleMark(
+                            xStart: .value("Start", seg.start / metersPerUnit),
+                            xEnd: .value("End", seg.end / metersPerUnit),
+                            yStart: .value("Base", baseline),
+                            yEnd: .value("BandTop", bandTop)
+                        )
+                        .foregroundStyle(seg.color.opacity(0.85))
+                    }
                 }
 
             case .speed:
@@ -549,6 +626,9 @@ private struct RideScrubFooter: View {
                 Text(formatElevation(pt.elevation))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(selected.color)
+                Text(gradeLabel(pt.grade))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(gradeColor(pt.grade))
             case .speed:
                 Text(formatSpeed(pt.speed))
                     .font(.caption2.weight(.semibold))
@@ -571,12 +651,20 @@ private struct RideScrubFooter: View {
 
 // MARK: - Route Elevation Chart
 
+struct RouteElevationPoint {
+    let distanceFromStart: Double
+    let elevation: Double?
+    /// Percent, 0 where the route has no elevation.
+    let grade: Double
+}
+
 struct RouteElevationChartView: View {
-    let points: [ProcessedPoint]
+    let points: [RouteElevationPoint]
     /// Written from the gesture only — observed by the scrub leaf views.
     let scrub: ChartScrubState
     @State private var scrubActive = false
     @ObservedObject private var unitState = UnitState.shared
+    @AppStorage(PhoneSettingsKeys.gradeColors) private var showGradeColors = true
 
     var body: some View {
         let _ = unitState.preferences
@@ -611,6 +699,19 @@ struct RouteElevationChartView: View {
                 .foregroundStyle(.green)
                 .interpolationMethod(.catmullRom)
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
+            }
+
+            if showGradeColors {
+                let bandTop = baseline + (yDomain.upperBound - yDomain.lowerBound) * 0.03
+                ForEach(Array(gradeBand(distances: elevPoints.map(\.distanceFromStart), grades: elevPoints.map(\.grade)).enumerated()), id: \.offset) { _, seg in
+                    RectangleMark(
+                        xStart: .value("Start", seg.start / metersPerUnit),
+                        xEnd: .value("End", seg.end / metersPerUnit),
+                        yStart: .value("Base", baseline),
+                        yEnd: .value("BandTop", bandTop)
+                    )
+                    .foregroundStyle(seg.color.opacity(0.85))
+                }
             }
 
             ForEach(xTicks.filter { $0 > 0 }, id: \.self) { tick in
@@ -690,7 +791,7 @@ struct RouteElevationChartView: View {
         currentUnits.elevation == .feet ? meters * 3.28084 : meters
     }
 
-    private func elevationDomain(_ pts: [ProcessedPoint]) -> ClosedRange<Double> {
+    private func elevationDomain(_ pts: [RouteElevationPoint]) -> ClosedRange<Double> {
         let vals = pts.compactMap { $0.elevation.map { elevationValue($0) } }
         let lo = vals.min() ?? 0
         let hi = vals.max() ?? 100
@@ -704,7 +805,7 @@ struct RouteElevationChartView: View {
 private struct RouteScrubFooter: View {
     @ObservedObject var scrub: ChartScrubState
     let active: Bool
-    let points: [ProcessedPoint]
+    let points: [RouteElevationPoint]
 
     var body: some View {
         let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
@@ -714,7 +815,7 @@ private struct RouteScrubFooter: View {
                 .foregroundStyle(.secondary)
                 .opacity(active ? 0 : 1)
 
-            if let dist = scrub.distance, let elev = elevationAtDistance(dist) {
+            if let dist = scrub.distance, let pt = closestPoint(to: dist), let elev = pt.elevation {
                 HStack(spacing: 16) {
                     Text(String(format: "%.1f %@", dist / metersPerUnit, currentUnits.distance.label))
                         .font(.caption2.weight(.medium))
@@ -722,6 +823,9 @@ private struct RouteScrubFooter: View {
                     Text(formatElevation(elev))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.green)
+                    Text(gradeLabel(pt.grade))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(gradeColor(pt.grade))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
@@ -734,11 +838,10 @@ private struct RouteScrubFooter: View {
         .animation(.easeInOut(duration: 0.2), value: scrub.distance == nil)
     }
 
-    private func elevationAtDistance(_ targetDist: Double) -> Double? {
+    private func closestPoint(to targetDist: Double) -> RouteElevationPoint? {
         points
             .filter { $0.elevation != nil }
-            .min(by: { abs($0.distanceFromStart - targetDist) < abs($1.distanceFromStart - targetDist) })?
-            .elevation
+            .min(by: { abs($0.distanceFromStart - targetDist) < abs($1.distanceFromStart - targetDist) })
     }
 }
 
@@ -752,31 +855,38 @@ func buildRideChartData(from trackURL: URL, segmentCount: Int = 200) -> (points:
 func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 200) -> (points: [ChartDataPoint], hasHR: Bool, hasPower: Bool) {
     guard fullPoints.count >= 2 else { return ([], false, false) }
 
+    var distances: [Double] = []
+    distances.reserveCapacity(fullPoints.count)
+    var cumulativeDist: Double = 0
+    var lastLoc: CLLocation?
+    for pt in fullPoints {
+        let loc = CLLocation(latitude: pt.lat, longitude: pt.lon)
+        if let prev = lastLoc {
+            cumulativeDist += loc.distance(from: prev)
+        }
+        lastLoc = loc
+        distances.append(cumulativeDist)
+    }
+
+    // Some saved points have altitude exactly 0, which would read as a cliff.
+    let profile = GradeProfile(fullPoints.indices.compactMap { idx in
+        fullPoints[idx].altitude == 0 ? nil : (distances[idx], fullPoints[idx].altitude)
+    })
+
     let chunkSize = max(1, fullPoints.count / segmentCount)
     var chartPoints: [ChartDataPoint] = []
-    var cumulativeDist: Double = 0
     var hasHR = false
     var hasPower = false
-    var lastLoc: CLLocation?
+    var chunkStartDist: Double = 0
 
     var i = 0
     while i < fullPoints.count {
         let end = min(i + chunkSize, fullPoints.count)
         let chunk = fullPoints[i..<end]
+        let chunkEndDist = distances[end - 1]
 
-        // Accumulate distance
-        for pt in chunk {
-            let loc = CLLocation(latitude: pt.lat, longitude: pt.lon)
-            if let prev = lastLoc {
-                cumulativeDist += loc.distance(from: prev)
-            }
-            lastLoc = loc
-        }
-
-        // Average the chunk
         let avgElev = chunk.map(\.altitude).reduce(0, +) / Double(chunk.count)
         let avgSpeed: Double = {
-            // Compute speed from distance/time for the chunk
             let first = chunk.first!, last = chunk.last!
             let dt = last.timestamp - first.timestamp
             if dt > 0 {
@@ -794,14 +904,22 @@ func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 20
         if avgHR > 0 { hasHR = true }
         if avgPower > 0 { hasPower = true }
 
+        // Ride tracks only have GPS altitude, so grade needs a wide window.
+        let chunkLength = chunkEndDist - chunkStartDist
+        let grade = profile.grade(
+            at: (chunkStartDist + chunkEndDist) / 2,
+            halfWindow: max(150, chunkLength / 2))
+
         chartPoints.append(ChartDataPoint(
-            distance: cumulativeDist,
+            distance: chunkEndDist,
             elevation: avgElev,
             speed: avgSpeed,
             heartRate: avgHR,
-            power: avgPower
+            power: avgPower,
+            grade: grade
         ))
 
+        chunkStartDist = chunkEndDist
         i += chunkSize
     }
 
@@ -810,15 +928,44 @@ func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 20
 
 // MARK: - Preview
 
+/// Mock chart points with grade read off the mock profile, like the real builder.
+private func previewChartData(count: Int, spacing: Double, elevation: (Double) -> Double) -> [ChartDataPoint] {
+    let dists = (0..<count).map { Double($0) * spacing }
+    let profile = GradeProfile(dists.map { ($0, elevation($0)) })
+    return dists.enumerated().map { i, dist in
+        let phase = Double(i) / Double(count)
+        return ChartDataPoint(
+            distance: dist,
+            elevation: elevation(dist),
+            speed: max(0, 5.0 + 3.0 * sin(phase * .pi * 5)),
+            heartRate: 130 + 30 * sin(phase * .pi * 4),
+            power: max(0, 180 + 80 * sin(phase * .pi * 6)),
+            grade: profile.grade(at: dist, halfWindow: max(150, spacing / 2)))
+    }
+}
+
+/// Flat, then climbs at 4, 8 and 12%, a -8% descent, and flat again, 1 km each.
+private func previewSteepElevation(_ dist: Double) -> Double {
+    let legs: [Double] = [0, 0.04, 0.08, 0.12, -0.08, 0]
+    var elev = 180.0
+    for (i, g) in legs.enumerated() {
+        let legStart = Double(i) * 1000
+        guard dist > legStart else { break }
+        elev += min(dist - legStart, 1000) * g
+    }
+    return elev
+}
+
+private func previewScrub(at distance: Double) -> ChartScrubState {
+    let scrub = ChartScrubState()
+    scrub.distance = distance
+    return scrub
+}
+
 #Preview("Ride Charts Panel") {
-    let mockData: [ChartDataPoint] = (0..<200).map { i in
-        let dist = Double(i) * 250.0 // ~50km total
-        let phase = Double(i) / 200.0
-        let elevation = 200 + 150 * sin(phase * .pi * 3) + 50 * sin(phase * .pi * 7)
-        let speed = max(0, 5.0 + 3.0 * sin(phase * .pi * 5) + Double.random(in: -1...1))
-        let hr = 130 + 30 * sin(phase * .pi * 4) + Double.random(in: -5...5)
-        let power = max(0, 180 + 80 * sin(phase * .pi * 6) + Double.random(in: -20...20))
-        return ChartDataPoint(distance: dist, elevation: elevation, speed: speed, heartRate: hr, power: power)
+    let mockData = previewChartData(count: 200, spacing: 250) { dist in
+        let phase = dist / 50_000
+        return 200 + 150 * sin(phase * .pi * 3) + 50 * sin(phase * .pi * 7)
     }
 
     VStack(spacing: 6) {
@@ -844,38 +991,55 @@ func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 20
     .padding(.horizontal, 12)
 }
 
-func buildRouteElevationData(from route: Route) -> [ProcessedPoint] {
+#Preview("Grade Band Tiers") {
+    let mockData = previewChartData(count: 120, spacing: 50, elevation: previewSteepElevation)
+    RideChartsView(dataPoints: mockData, hasHeartRate: false, hasPower: false, scrub: ChartScrubState())
+        .padding(.horizontal, 16)
+}
+
+#Preview("Grade Readout") {
+    let mockData = previewChartData(count: 120, spacing: 50, elevation: previewSteepElevation)
+    // Middle of the flat, 8% climb and -8% descent legs.
+    VStack(spacing: 12) {
+        ForEach([500.0, 2500, 4500], id: \.self) { dist in
+            RideScrubFooter(scrub: previewScrub(at: dist), active: true, selected: .elevation, dataPoints: mockData)
+        }
+    }
+    .padding()
+}
+
+func buildRouteElevationData(from route: Route) -> [RouteElevationPoint] {
     let pts = route.points
     guard pts.count >= 2 else { return [] }
 
     var cumDist: Double = 0
-    var processed: [ProcessedPoint] = []
+    var distances: [Double] = []
+    distances.reserveCapacity(pts.count)
     for i in 0..<pts.count {
         if i > 0 {
             let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
             let cur = CLLocation(latitude: pts[i].lat, longitude: pts[i].lon)
             cumDist += cur.distance(from: prev)
         }
-        processed.append(ProcessedPoint(
-            coordinate: CLLocationCoordinate2D(latitude: pts[i].lat, longitude: pts[i].lon),
-            elevation: pts[i].elevation,
-            distanceFromStart: cumDist,
-            bearingToNext: 0
-        ))
+        distances.append(cumDist)
     }
+
+    let profile = GradeProfile(pts.indices.compactMap { i in
+        pts[i].elevation.map { (distances[i], $0) }
+    })
 
     // Downsample for chart performance
     let target = 300
-    if processed.count > target {
-        let step = processed.count / target
-        var downsampled: [ProcessedPoint] = []
-        for i in stride(from: 0, to: processed.count, by: step) {
-            downsampled.append(processed[i])
-        }
-        if let last = processed.last, downsampled.last?.distanceFromStart != last.distanceFromStart {
-            downsampled.append(last)
-        }
-        return downsampled
+    let step = max(1, pts.count / target)
+    var indices = Array(stride(from: 0, to: pts.count, by: step))
+    if indices.last != pts.count - 1 { indices.append(pts.count - 1) }
+
+    // Route elevation comes from map data, so a tighter window than rides works.
+    let halfWindow = max(100, cumDist / Double(indices.count) / 2)
+    return indices.map { i in
+        RouteElevationPoint(
+            distanceFromStart: distances[i],
+            elevation: pts[i].elevation,
+            grade: pts[i].elevation == nil ? 0 : profile.grade(at: distances[i], halfWindow: halfWindow))
     }
-    return processed
 }

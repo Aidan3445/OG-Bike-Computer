@@ -426,7 +426,7 @@ struct MapCustomizationView: View {
                 LookaheadDistancePicker(meters: elevationConfig.aheadLookahead)
 
                 Toggle("Show Total Gain Readout", isOn: elevationConfig.showGainLossReadout)
-                Toggle("Show Grade Overlay", isOn: elevationConfig.showGrade)
+                Toggle("Grade Colors", isOn: elevationConfig.showGrade)
 
                 Picker("Elevation Smoothing", selection: $userSettings.settings.ridePreferences.elevationSmoothing) {
                     ForEach(ElevationSmoothing.allCases, id: \.self) { level in
@@ -438,7 +438,7 @@ struct MapCustomizationView: View {
             Label("Elevation Screen", systemImage: "mountain.2")
         } footer: {
             if userSettings.settings.ridePreferences.elevationScreen.enabled {
-                Text("Adds an elevation profile tab to the watch when riding a route with elevation data. \"Ahead\" mode shows the next stretch of route only. Smoothing filters elevation noise and affects the chart, the total gain readout, and the grade overlay.")
+                Text("Adds an elevation profile tab to the watch when riding a route with elevation data. \"Ahead\" mode shows the next stretch of route only. Smoothing filters elevation noise and affects the chart, the total gain readout, and the grade colors. Grade colors for the phone's own charts are in Phone settings.")
             } else {
                 Text("Elevation screen is hidden from the watch.")
             }

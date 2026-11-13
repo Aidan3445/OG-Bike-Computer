@@ -41,7 +41,7 @@ struct RouteDetailView: View {
     @State private var cachedMileMarkers: [MileMarker] = []
     @State private var currentMarkerInterval: Double = 0
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
-    @State private var cachedElevationData: [ProcessedPoint] = []
+    @State private var cachedElevationData: [RouteElevationPoint] = []
     @State private var didStartLoad = false
     @State private var panelPage = 0
     /// Held in `@State` (not `@StateObject`) so per-frame scrub updates only
@@ -1143,7 +1143,7 @@ private struct RouteDetailCache {
     let processedPoints: [ProcessedPoint]
     let mileMarkers: [MileMarker]
     let elevationExtremes: (high: TrackPoint, low: TrackPoint)?
-    let elevationData: [ProcessedPoint]
+    let elevationData: [RouteElevationPoint]
 }
 
 /// Minimal POI shape for the default route-detail map. We keep our own struct

@@ -77,9 +77,8 @@ final class RouteImportCoordinator: ObservableObject {
     /// Watch" so the rider doesn't have to tap the same action twice.
     @Published var autoSentRouteIDs: Set<UUID> = []
 
-    /// Read by `handle(_:)`. Mirrors the `autoSendRoutesToWatch` `@AppStorage`
-    /// key in `RideSettingsView`. Settings UI writes the key directly; the
-    /// coordinator reads it at import time.
+    /// The toggles in Phone settings and the Routes tab Import menu write this
+    /// key; `handle(_:)` reads it at import time.
     static let autoSendDefaultsKey = "autoSendRoutesToWatch"
 
     func handle(_ routes: [Route]) {

@@ -552,7 +552,8 @@ struct MultiRideDetailView: View {
                     elevation: pt.elevation,
                     speed: pt.speed,
                     heartRate: pt.heartRate,
-                    power: pt.power))
+                    power: pt.power,
+                    grade: pt.grade))
             }
             if let last = chart.points.last { distOffset += last.distance }
         }

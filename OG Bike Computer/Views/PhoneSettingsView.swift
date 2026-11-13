@@ -1,14 +1,20 @@
 //
-//  PhoneAlertSettingsView.swift
+//  PhoneSettingsView.swift
 //  OG Bike Computer
-//
-//  Created by Aidan Weinberg on 3/28/26.
 //
 
 import SwiftUI
 
-struct PhoneAlertSettingsView: View {
+/// UserDefaults keys for settings that only affect this phone. They stay out
+/// of `UserSettings` so they never sync to the watch or save into presets.
+enum PhoneSettingsKeys {
+    static let gradeColors = "phoneGradeColors"
+}
+
+struct PhoneSettingsView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    @AppStorage(PhoneSettingsKeys.gradeColors) private var gradeColors = true
+    @AppStorage(RouteImportCoordinator.autoSendDefaultsKey) private var autoSendRoutesToWatch = false
     @State private var showResetConfirm = false
 
     private var prefs: Binding<PhoneAlertPreferences> {
@@ -31,7 +37,7 @@ struct PhoneAlertSettingsView: View {
                     }
                 }
             } header: {
-                Text("Live Activity")
+                Label("Live Activity", systemImage: "iphone.radiowaves.left.and.right")
             } footer: {
                 Text("Shown on the Lock Screen and Dynamic Island whenever a ride is in progress. Pick the six stats that appear in the lock-screen grid. Safe to dismiss from the Lock Screen: your ride keeps recording on the watch.")
             }
@@ -39,20 +45,36 @@ struct PhoneAlertSettingsView: View {
             Section {
                 Toggle("Turn Notifications", isOn: prefs.showTurnNotifications)
             } header: {
-                Text("Phone Notifications")
+                Label("Notifications", systemImage: "bell")
             } footer: {
                 Text("Also post a banner notification on the iPhone for each upcoming turn, in addition to the spoken alert. Requires a loaded route.")
             }
 
+            Section {
+                Toggle("Grade Colors", isOn: $gradeColors)
+            } header: {
+                Label("Charts", systemImage: "chart.xyaxis.line")
+            } footer: {
+                Text("Colors the bottom of the elevation charts on ride and route screens by how steep each stretch is. Scrubbing shows the grade either way.")
+            }
+
+            Section {
+                Toggle("Auto-Send to Watch", isOn: $autoSendRoutesToWatch)
+            } header: {
+                Label("Routes", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+            } footer: {
+                Text("Sends each imported route to the watch right away. Also in the Import menu on the Routes tab.")
+            }
+
             if userSettings.settings.phoneAlerts != .default {
                 Section {
-                    Button("Reset to Defaults", role: .destructive) {
+                    Button("Reset Live Activity to Defaults", role: .destructive) {
                         showResetConfirm = true
                     }
                 }
             }
         }
-        .settingsPageTitle("Live Activity", preset: userSettings.activePresetName)
+        .settingsPageTitle("Phone", preset: userSettings.activePresetName)
         .alert("Reset Live Activity to Defaults?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {
                 userSettings.settings.phoneAlerts = .default

@@ -41,6 +41,8 @@ struct SettingsView: View {
     @State private var exportAllZipURL: URL?
     @State private var showExportAllShareSheet = false
     @StateObject private var connectivity = ConnectivityManager.shared
+    @AppStorage(PhoneSettingsKeys.gradeColors) private var phoneGradeColors = true
+    @AppStorage(RouteImportCoordinator.autoSendDefaultsKey) private var autoSendRoutesToWatch = false
 
     private var navigationAlertsSummary: String {
         let alerts = userSettings.settings.navigationAlerts
@@ -77,6 +79,14 @@ struct SettingsView: View {
         parts.append(map.routeAheadColor.label)
         parts.append("\(zoomLabel(map.defaultZoom)) zoom")
         if !map.showTurnOverlay { parts.append("Overlay off") }
+        return bulletJoined(parts)
+    }
+
+    private var phoneSummary: String {
+        var parts = ["Live Activity"]
+        if userSettings.settings.phoneAlerts.showTurnNotifications { parts.append("Turn Notifications") }
+        if phoneGradeColors { parts.append("Grade Colors") }
+        if autoSendRoutesToWatch { parts.append("Auto-Send") }
         return bulletJoined(parts)
     }
 
@@ -179,6 +189,23 @@ struct SettingsView: View {
                     } icon: {
                         Image(systemName: "battery.100.bolt")
                             .foregroundStyle(.green)
+                    }
+                }
+
+                // MARK: - Phone
+                NavigationLink {
+                    PhoneSettingsView(userSettings: userSettings)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Phone")
+                            Text(phoneSummary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "iphone")
+                            .foregroundStyle(.orange)
                     }
                 }
             }
