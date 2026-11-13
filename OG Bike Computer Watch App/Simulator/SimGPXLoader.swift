@@ -18,13 +18,37 @@ struct SimGPXLoader {
         let heartRates: [Double?]
     }
 
-   static func loadAll() -> [SimTrack] {
+    /// Bundled GPX files ending in this are nav routes for the sim, not rides.
+    static let routeSuffix = "_route.gpx"
+
+    static func loadAll() -> [SimTrack] {
+        let urls = bundledGPX().filter { !$0.lastPathComponent.hasSuffix(routeSuffix) }
+        print("[Sim] Found \(urls.count) GPX rides")
+        return urls.compactMap { load(url: $0) }
+    }
+
+    /// Scenario routes bundled with the watch, so sims can run against them
+    /// without sending them from the phone.
+    static func loadRoutes() -> [Route] {
+        bundledGPX()
+            .filter { $0.lastPathComponent.hasSuffix(routeSuffix) }
+            .compactMap { load(url: $0) }
+            .map { track in
+                Route(
+                    name: track.name,
+                    points: track.locations.map {
+                        TrackPoint(lat: $0.coordinate.latitude, lon: $0.coordinate.longitude, elevation: $0.altitude)
+                    })
+            }
+            .sorted { $0.name < $1.name }
+    }
+
+    private static func bundledGPX() -> [URL] {
         guard let urls = Bundle.main.urls(forResourcesWithExtension: "gpx", subdirectory: nil) else {
             print("[Sim] No GPX files found in bundle")
             return []
         }
-        print("[Sim] Found \(urls.count) GPX files")
-        return urls.compactMap { load(url: $0) }
+        return urls
     }
 
     static func load(url: URL) -> SimTrack? {

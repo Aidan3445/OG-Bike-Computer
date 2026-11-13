@@ -15,6 +15,7 @@ struct SimulationView: View {
 
     @State private var selectedRoute: Route?
     @State private var simTracks: [SimGPXLoader.SimTrack] = []
+    @State private var simRoutes: [Route] = []
     @State private var selectedTrack: SimGPXLoader.SimTrack?
     @State private var isLoading = false
 
@@ -42,7 +43,7 @@ struct SimulationView: View {
                                 .font(.caption2)
                         }
                     } else {
-                        ForEach(store.routes) { route in
+                        ForEach(store.routes + simRoutes) { route in
                             Button(route.name) { selectedRoute = route }
                                 .font(.caption)
                         }
@@ -102,6 +103,9 @@ struct SimulationView: View {
         .onAppear {
             if simTracks.isEmpty {
                 simTracks = SimGPXLoader.loadAll()
+            }
+            if simRoutes.isEmpty {
+                simRoutes = SimGPXLoader.loadRoutes()
             }
         }
     }
