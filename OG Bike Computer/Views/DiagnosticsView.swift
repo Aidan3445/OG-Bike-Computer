@@ -7,6 +7,7 @@
 
 #if DEBUG
 import SwiftUI
+import WatchConnectivity
 
 /// Trace files from this phone and the watch, grouped by ride.
 struct DiagnosticsView: View {
@@ -19,6 +20,9 @@ struct DiagnosticsView: View {
     @State private var requestStatus: String?
     @State private var isPreparingShare = false
     @State private var showDeleteConfirm = false
+    @State private var queuedFiles = 0
+    @State private var queuedUserInfo = 0
+    @State private var showClearQueueConfirm = false
     @AppStorage("layoutOverlayEnabled") private var layoutOverlayEnabled = false
 
     struct DiagnosticsFile: Identifiable {
@@ -102,6 +106,33 @@ struct DiagnosticsView: View {
             }
 
             Section {
+                Button(role: .destructive) {
+                    showClearQueueConfirm = true
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Clear Transfer Queue")
+                            Text("\(queuedFiles) files and \(queuedUserInfo) messages waiting to go to the watch")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "tray.full")
+                            .foregroundStyle(.red)
+                    }
+                }
+                .disabled(queuedFiles == 0)
+
+                Button("Show Stalled Route Alert") {
+                    connectivity.routeTransferStalled = true
+                }
+            } header: {
+                Text("Watch Transfers")
+            } footer: {
+                Text("Cancels every file still waiting to go to the watch, like stuck route sends. Messages and settings aren't touched. Resend routes afterwards. The queue is logged to events.log before and after.")
+            }
+
+            Section {
                 NavigationLink("Elevation vs Strava") {
                     ElevationCompareView(rideStore: rideStore)
                 }
@@ -138,6 +169,12 @@ struct DiagnosticsView: View {
         .refreshable { reload() }
         .onReceive(NotificationCenter.default.publisher(for: .diagnosticsFilesChanged)) { _ in
             reload()
+        }
+        .confirmationDialog("Cancel \(queuedFiles) queued transfers to the watch?", isPresented: $showClearQueueConfirm, titleVisibility: .visible) {
+            Button("Clear Queue", role: .destructive) {
+                connectivity.clearOutgoingFileTransfers()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { reload() }
+            }
         }
         .confirmationDialog("Delete all diagnostics files on this phone?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Delete All", role: .destructive) {
@@ -184,6 +221,10 @@ struct DiagnosticsView: View {
     // MARK: - Files
 
     private func reload() {
+        if WCSession.default.activationState == .activated {
+            queuedFiles = WCSession.default.outstandingFileTransfers.count
+            queuedUserInfo = WCSession.default.outstandingUserInfoTransfers.count
+        }
         DiagnosticsLog.queue.async {
             let (logs, groups) = Self.scan()
             DispatchQueue.main.async {

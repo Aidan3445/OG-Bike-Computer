@@ -48,6 +48,10 @@ final class ConnectivityManager: NSObject, ObservableObject {
     /// placeholder row in the ride list.
     @Published var isAwaitingIncomingRide: Bool = false
     var awaitingIncomingRideTimeout: DispatchWorkItem?
+    /// A route send sat at 0% while the watch app was open. Drives the
+    /// restart advice alert, shown once until a route gets through.
+    @Published var routeTransferStalled = false
+    var stallWarningShown = false
     #endif
 
     #if os(watchOS)

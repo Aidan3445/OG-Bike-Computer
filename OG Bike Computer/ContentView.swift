@@ -89,6 +89,10 @@ struct ContentView: View {
                     if let id = uploadingRouteID, ids.contains(id) { uploadingRouteID = nil }
                     queuedRouteIDs.subtract(ids)
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .watchTransferQueueChanged)) { _ in
+                    // A route whose transfer was cancelled isn't queued anymore.
+                    queuedRouteIDs.formIntersection(connectivity.queuedRouteTransferIDs)
+                }
                 .navigationDestination(for: Route.self) { route in
                     RouteDetailView(
                         route: route,
@@ -183,6 +187,11 @@ struct ContentView: View {
             .tag(2)
         }
         .layoutProbe("Root", corner: .topTrailing)
+        .alert("Route Not Reaching Your Watch", isPresented: $connectivity.routeTransferStalled) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your watch is connected, but the route hasn't started sending. Restarting your Apple Watch and then your iPhone usually clears this up. Send the route again if it hasn't shown up after they reconnect.")
+        }
         .sheet(isPresented: $importCoordinator.showActionSheet) {
             RouteImportActionSheet()
         }
