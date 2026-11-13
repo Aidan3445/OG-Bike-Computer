@@ -17,9 +17,9 @@ struct WorkoutView<ExtraTab: View>: View {
 
     @State private var page = 2
     @State private var tab = 1
-    @State private var endCountdown: Double = 0
+    @State private var endCountdownStart: Date?
     @State private var endTimer: Timer?
-    @State private var holdCountdown: Double = 0
+    @State private var holdCountdownStart: Date?
     @State private var holdTimer: Timer?
     @State private var showNavOverlay = false
     @State private var navOverlayTask: Task<Void, Never>?
@@ -260,19 +260,9 @@ struct WorkoutView<ExtraTab: View>: View {
                 }
 
                 ZStack {
-                    if holdCountdown > 0 {
+                    if let start = holdCountdownStart {
                         Button { cancelCountdowns() } label: {
-                            ZStack {
-                                Circle()
-                                    .trim(from: 0, to: holdCountdown / 3.0)
-                                    .stroke(.orange, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                                    .rotationEffect(.degrees(-90))
-                                    .frame(width: 48, height: 48)
-                                Text(String(Int(ceil(3.0 - holdCountdown))))
-                                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.orange)
-                            }
+                            CountdownRing(start: start, duration: holdEndCountdownDuration, color: .orange)
                         }
                         .buttonStyle(.plain)
                     } else {
@@ -287,19 +277,9 @@ struct WorkoutView<ExtraTab: View>: View {
                 }
 
                 ZStack {
-                    if endCountdown > 0 {
+                    if let start = endCountdownStart {
                         Button { cancelCountdowns() } label: {
-                            ZStack {
-                                Circle()
-                                    .trim(from: 0, to: endCountdown / 3.0)
-                                    .stroke(.red, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                                    .rotationEffect(.degrees(-90))
-                                    .frame(width: 48, height: 48)
-                                Text(String(Int(ceil(3.0 - endCountdown))))
-                                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.red)
-                            }
+                            CountdownRing(start: start, duration: holdEndCountdownDuration, color: .red)
                         }
                         .buttonStyle(.plain)
                     } else {
@@ -366,22 +346,24 @@ struct WorkoutView<ExtraTab: View>: View {
         cancelHoldCountdown()
     }
 
+    /// One timer that fires when the countdown ends, in the common run loop
+    /// mode so scrolling doesn't hold it back. The ring reads the wall clock
+    /// on its own, so a busy main thread can't slow the count down.
+    private func countdownTimer(_ fire: @escaping () -> Void) -> Timer {
+        let timer = Timer(timeInterval: holdEndCountdownDuration, repeats: false) { _ in
+            guard workout.isActive, workout.completedRideSummary == nil else { return }
+            fire()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
+    }
+
     private func startEndCountdown() {
         cancelCountdowns()
-        endCountdown = 0.001 // trigger visible state
-        endTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
-            // Invalidate this timer itself, not just the stored one, so it can
-            // never outlive the ride and fire onStop again.
-            guard workout.isActive, workout.completedRideSummary == nil else {
-                timer.invalidate()
-                return
-            }
-            endCountdown += 0.05
-            if endCountdown >= 3.0 {
-                timer.invalidate()
-                cancelEndCountdown()
-                onStop()
-            }
+        endCountdownStart = Date()
+        endTimer = countdownTimer {
+            cancelEndCountdown()
+            onStop()
         }
     }
 
@@ -396,27 +378,19 @@ struct WorkoutView<ExtraTab: View>: View {
     private func cancelEndCountdown() {
         endTimer?.invalidate()
         endTimer = nil
-        endCountdown = 0
+        endCountdownStart = nil
     }
 
     private func startHoldCountdown() {
         cancelCountdowns()
-        holdCountdown = 0.001
-        holdTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
-            guard workout.isActive, workout.completedRideSummary == nil else {
-                timer.invalidate()
-                return
-            }
-            holdCountdown += 0.05
-            if holdCountdown >= 3.0 {
-                timer.invalidate()
-                cancelHoldCountdown()
-                if UserDefaults.standard.bool(forKey: "holdExplainerShown") {
-                    workout.attemptHold()
-                } else {
-                    holdExplainerDontShow = false
-                    showHoldExplainer = true
-                }
+        holdCountdownStart = Date()
+        holdTimer = countdownTimer {
+            cancelHoldCountdown()
+            if UserDefaults.standard.bool(forKey: "holdExplainerShown") {
+                workout.attemptHold()
+            } else {
+                holdExplainerDontShow = false
+                showHoldExplainer = true
             }
         }
     }
@@ -424,8 +398,39 @@ struct WorkoutView<ExtraTab: View>: View {
     private func cancelHoldCountdown() {
         holdTimer?.invalidate()
         holdTimer = nil
-        holdCountdown = 0
+        holdCountdownStart = nil
     }
+}
+
+private let holdEndCountdownDuration: TimeInterval = 3
+
+/// Ring and digit for the hold and end countdowns. Only this view redraws
+/// while counting, and it reads the time on each frame, so it never runs slow.
+private struct CountdownRing: View {
+    let start: Date
+    let duration: TimeInterval
+    let color: Color
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let elapsed = min(max(context.date.timeIntervalSince(start), 0), duration)
+            ZStack {
+                Circle()
+                    .trim(from: 0, to: elapsed / duration)
+                    .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 48, height: 48)
+                Text(String(max(1, Int(ceil(duration - elapsed)))))
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(color)
+            }
+        }
+    }
+}
+
+#Preview("Countdown ring") {
+    CountdownRing(start: Date(), duration: 3, color: .red)
 }
 
 // MARK: - Dynamic Metrics Page
