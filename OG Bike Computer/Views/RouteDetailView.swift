@@ -451,6 +451,8 @@ struct RouteDetailView: View {
                                     ProgressView()
                                 } else if isQueued {
                                     Image(systemName: "clock.arrow.circlepath")
+                                        // The clock draws wider than the circle icons at the same size.
+                                        .font(.title3)
                                 } else {
                                     Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
                                 }

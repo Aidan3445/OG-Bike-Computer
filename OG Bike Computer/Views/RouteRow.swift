@@ -43,11 +43,14 @@ struct RouteRow: View {
                                 ProgressView()
                             } else if isQueued {
                                 Image(systemName: "clock.arrow.circlepath")
+                                    // The clock draws wider than the circle icons at the same size.
+                                    .font(.title3)
                             } else {
                                 Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
                             }
                         }
                         .font(.title2)
+                        .frame(width: 28, height: 28)
                         .foregroundStyle(buttonColor(
                             isUploading: isUploading,
                             isQueued: isQueued,
@@ -116,6 +119,23 @@ struct RouteRow: View {
     List {
         RouteRow(route: Route(name: "London to Edinburgh - August 2027", points: points),
                  isOnWatch: true, isUploading: false, isQueued: false, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+    }
+}
+
+#Preview("Send states") {
+    let points = (0..<200).map { i in
+        TrackPoint(lat: 41.9 + Double(i) * 0.001, lon: -87.7, elevation: 180)
+    }
+    let route = Route(name: "Lakefront Loop", points: points)
+    List {
+        RouteRow(route: route, isOnWatch: false, isUploading: false, isQueued: false, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+        RouteRow(route: route, isOnWatch: false, isUploading: true, isQueued: false, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+        RouteRow(route: route, isOnWatch: false, isUploading: false, isQueued: true, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+        RouteRow(route: route, isOnWatch: true, isUploading: false, isQueued: false, isUploadBlocked: false,
                  canSendToWatch: true, onSend: {}, onRename: { _ in })
     }
 }

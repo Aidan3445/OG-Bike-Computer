@@ -23,7 +23,8 @@ struct ContentView: View {
     @State private var showFilePicker = false
     @State private var importError: String?
     @State private var uploadingRouteID: UUID?
-    @State private var queuedRouteID: UUID?
+    /// Routes sent but not yet reported back by the watch. Several can wait at once.
+    @State private var queuedRouteIDs: Set<UUID> = []
     @State private var showQueuedAlert = false
     @State private var selectedRoute: Route?
     @State private var serviceRoutePickerService: IntegrationServiceID?
@@ -84,16 +85,16 @@ struct ContentView: View {
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                 }
-                .onReceive(connectivity.$routeIDsOnWatch) { _ in
-                    uploadingRouteID = nil
-                    queuedRouteID = nil
+                .onReceive(connectivity.$routeIDsOnWatch) { ids in
+                    if let id = uploadingRouteID, ids.contains(id) { uploadingRouteID = nil }
+                    queuedRouteIDs.subtract(ids)
                 }
                 .navigationDestination(for: Route.self) { route in
                     RouteDetailView(
                         route: route,
                         isOnWatch: connectivity.routeIDsOnWatch.contains(route.id),
                         isUploading: uploadingRouteID == route.id,
-                        isQueued: queuedRouteID == route.id,
+                        isQueued: queuedRouteIDs.contains(route.id),
                         isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
                         canSendToWatch: canSendToWatch,
                         onSend: { sendToWatch(route) },
@@ -221,7 +222,7 @@ struct ContentView: View {
     private func sendToWatch(_ route: Route) {
         guard uploadingRouteID == nil else { return }
         uploadingRouteID = route.id
-        queuedRouteID = nil
+        queuedRouteIDs.remove(route.id)
 
         ConnectivityManager.shared.sendRoute(route) { result in
             DispatchQueue.main.async {
@@ -235,7 +236,7 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     guard uploadingRouteID == route.id else { return }
                     uploadingRouteID = nil
-                    queuedRouteID = route.id
+                    queuedRouteIDs.insert(route.id)
                     showQueuedAlert = true
                 }
             }
@@ -280,7 +281,7 @@ extension ContentView {
                     route: route,
                     isOnWatch: connectivity.routeIDsOnWatch.contains(route.id),
                     isUploading: uploadingRouteID == route.id,
-                    isQueued: queuedRouteID == route.id,
+                    isQueued: queuedRouteIDs.contains(route.id),
                     isUploadBlocked: uploadingRouteID != nil && uploadingRouteID != route.id,
                     canSendToWatch: canSendToWatch,
                     onSend: { sendToWatch(route) },
