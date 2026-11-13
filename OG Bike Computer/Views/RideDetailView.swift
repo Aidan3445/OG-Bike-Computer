@@ -187,7 +187,7 @@ struct RideDetailView: View {
                 cameraState.heading = context.camera.heading
                 if visibleRegion == nil {
                     visibleRegion = context.region
-                    useCoarseSegments = visibleSpanMeters(of: context.region) > Self.coarseSegmentSpanMeters
+                    updateSegmentDetail(for: context.region)
                     MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
                     updateMarkerInterval(for: context.region)
                 }
@@ -195,7 +195,7 @@ struct RideDetailView: View {
             .onMapCameraChange(frequency: .onEnd) { context in
                 visibleRegion = context.region
                 MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
-                useCoarseSegments = visibleSpanMeters(of: context.region) > Self.coarseSegmentSpanMeters
+                updateSegmentDetail(for: context.region)
                 updateMarkerInterval(for: context.region)
             }
             .overlay {
@@ -388,10 +388,21 @@ struct RideDetailView: View {
             && abs(coord.longitude - r.center.longitude) <= r.span.longitudeDelta
     }
 
-    /// Visible span (~10 km) above which the coarse segment LOD renders —
-    /// zoomed out that far, a 4 pt line covers >100 m of track and the fine
-    /// color resolution is invisible.
-    private static let coarseSegmentSpanMeters: Double = 10_000
+    /// Zoomed out past about 10 km a 4 pt line covers over 100 m of track and
+    /// the fine colors are invisible, so the coarse set renders. The gap
+    /// between the two keeps a zoom hovering near the switch from swapping
+    /// every polyline back and forth.
+    private static let coarseAboveSpanMeters: Double = 12_000
+    private static let fineBelowSpanMeters: Double = 8_000
+
+    private func updateSegmentDetail(for region: MKCoordinateRegion) {
+        let span = visibleSpanMeters(of: region)
+        if span > Self.coarseAboveSpanMeters {
+            useCoarseSegments = true
+        } else if span < Self.fineBelowSpanMeters {
+            useCoarseSegments = false
+        }
+    }
 
     private func visibleSpanMeters(of region: MKCoordinateRegion) -> Double {
         let cosLat = cos(region.center.latitude * .pi / 180)
@@ -753,13 +764,8 @@ struct RideDetailView: View {
             // colored polyline doesn't draw a straight line across a pause/
             // hold jump. The gaps themselves render as dashed grey.
             let split = splitAtPauseGaps(locations: locations, gapSeconds: 30)
-            let runCount = max(split.runs.count, 1)
-            let fine = split.runs.flatMap {
-                buildColoredSegments(locations: $0, segmentCount: max(50, 500 / runCount))
-            }
-            let coarseRaw = split.runs.flatMap {
-                buildColoredSegments(locations: $0, segmentCount: max(20, 120 / runCount), colorSteps: 6)
-            }
+            let fine = buildColoredSegments(runs: split.runs, chunkBudget: 500)
+            let coarseRaw = buildColoredSegments(runs: split.runs, chunkBudget: 120, colorSteps: 6)
             let coarse = downsampleSegments(coarseRaw, totalPointBudget: 1500)
 
             let chart = buildRideChartData(points: fullPoints)
@@ -988,21 +994,79 @@ private func splitAtPauseGaps(
     return (runs: meaningfulRuns, gaps: gaps)
 }
 
-/// Splits the track into `segmentCount` equal-sized chunks, computes average speed per chunk,
-/// then merges adjacent chunks that share the same quantized color step — so the rendered
-/// MapPolyline count equals the number of color *transitions*, not the chunk count.
-/// `colorSteps` controls color resolution: 20 gives 5% increments, plenty for a gradient.
+/// Speed-colored polylines for every ridden run. The chunk budget is shared
+/// across the whole ride by run length, so a ride with dozens of stops still
+/// draws about `chunkBudget` chunks at most, and one speed scale covers every
+/// run so a color means the same speed everywhere. Adjacent chunks with the
+/// same color merge, so the polyline count is the number of color changes.
+/// `colorSteps` sets color resolution: 20 gives 5% increments.
 private func buildColoredSegments(
-    locations: [CLLocation],
-    segmentCount: Int = 500,
+    runs: [[CLLocation]],
+    chunkBudget: Int,
     colorSteps: Int = 20
 ) -> [ColoredSegment] {
-    guard locations.count >= 2 else { return [] }
+    let runs = runs.filter { $0.count >= 2 }
+    let totalPoints = runs.reduce(0) { $0 + $1.count }
+    guard totalPoints > 0 else { return [] }
 
+    let runChunks = runs.map { run in
+        let share = Double(chunkBudget) * Double(run.count) / Double(totalPoints)
+        return speedChunks(locations: run, segmentCount: max(1, Int(share.rounded())))
+    }
+
+    // Normalize speeds to p10–p90 of the whole ride.
+    let speeds = runChunks.flatMap { $0.map(\.avgSpeed) }.filter { $0 > 0.5 }.sorted()
+    guard !speeds.isEmpty else {
+        return runs.map { run in
+            let coords = run.map(\.coordinate)
+            return ColoredSegment(coords: coords, color: .blue, bbox: SegmentBBox.compute(coords))
+        }
+    }
+    let p10   = speeds[speeds.count / 10]
+    let p90   = speeds[min(speeds.count - 1, speeds.count * 9 / 10)]
+    let range = max(p90 - p10, 0.1)
+
+    func stepFor(speed: Double) -> Int {
+        let ratio = max(0.0, min(1.0, (speed - p10) / range))
+        return Int((ratio * Double(colorSteps - 1)).rounded())
+    }
+    func segment(_ coords: [CLLocationCoordinate2D], step: Int) -> ColoredSegment {
+        ColoredSegment(
+            coords: coords,
+            color:  rideSpeedColor(ratio: Double(step) / Double(colorSteps - 1)),
+            bbox:   SegmentBBox.compute(coords))
+    }
+
+    var segments: [ColoredSegment] = []
+    for chunks in runChunks {
+        guard let first = chunks.first else { continue }
+        var batchCoords = first.coords
+        var batchStep   = stepFor(speed: first.avgSpeed)
+        for chunk in chunks.dropFirst() {
+            let step = stepFor(speed: chunk.avgSpeed)
+            if step == batchStep {
+                // Same color: extend the batch, dropping the shared endpoint
+                batchCoords.append(contentsOf: chunk.coords.dropFirst())
+            } else {
+                segments.append(segment(batchCoords, step: batchStep))
+                batchCoords = chunk.coords
+                batchStep   = step
+            }
+        }
+        segments.append(segment(batchCoords, step: batchStep))
+    }
+    return segments
+}
+
+/// Splits a run into `segmentCount` equal chunks with their average speed.
+/// Each chunk's last point is the next chunk's first, so polylines connect.
+private func speedChunks(
+    locations: [CLLocation],
+    segmentCount: Int
+) -> [(coords: [CLLocationCoordinate2D], avgSpeed: Double)] {
+    guard locations.count >= 2 else { return [] }
     let chunkSize = max(1, locations.count / segmentCount)
 
-    // ── Step 1: compute per-chunk average speed ──────────────────────────────
-    // Each chunk's last point == next chunk's first point, so polylines connect.
     var chunks: [(coords: [CLLocationCoordinate2D], avgSpeed: Double)] = []
     var i = 0
     while i < locations.count - 1 {
@@ -1020,51 +1084,7 @@ private func buildColoredSegments(
                        avgSpeed: totalTime > 0 ? totalDist / totalTime : 0))
         i += chunkSize
     }
-
-    // ── Step 2: normalize speeds to p10–p90 ──────────────────────────────────
-    let speeds = chunks.map(\.avgSpeed).filter { $0 > 0.5 }.sorted()
-    guard !speeds.isEmpty else {
-        let coords = locations.map(\.coordinate)
-        return [ColoredSegment(coords: coords, color: .blue, bbox: SegmentBBox.compute(coords))]
-    }
-    let p10   = speeds[speeds.count / 10]
-    let p90   = speeds[min(speeds.count - 1, speeds.count * 9 / 10)]
-    let range = max(p90 - p10, 0.1)
-
-    func stepFor(speed: Double) -> Int {
-        let ratio = max(0.0, min(1.0, (speed - p10) / range))
-        return Int((ratio * Double(colorSteps - 1)).rounded())
-    }
-
-    // ── Step 3: merge adjacent chunks with the same color step ───────────────
-    var segments: [ColoredSegment] = []
-    var batchCoords = chunks[0].coords
-    var batchStep   = stepFor(speed: chunks[0].avgSpeed)
-
-    for chunk in chunks.dropFirst() {
-        let step = stepFor(speed: chunk.avgSpeed)
-        if step == batchStep {
-            // Same color — extend batch, drop duplicate shared endpoint
-            batchCoords.append(contentsOf: chunk.coords.dropFirst())
-        } else {
-            // Color changed — flush current batch, start new one
-            segments.append(ColoredSegment(
-                coords: batchCoords,
-                color:  rideSpeedColor(ratio: Double(batchStep) / Double(colorSteps - 1)),
-                bbox:   SegmentBBox.compute(batchCoords)
-            ))
-            batchCoords = chunk.coords
-            batchStep   = step
-        }
-    }
-    if !batchCoords.isEmpty {
-        segments.append(ColoredSegment(
-            coords: batchCoords,
-            color:  rideSpeedColor(ratio: Double(batchStep) / Double(colorSteps - 1)),
-            bbox:   SegmentBBox.compute(batchCoords)
-        ))
-    }
-    return segments
+    return chunks
 }
 
 /// Red → yellow → green gradient.
