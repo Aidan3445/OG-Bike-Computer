@@ -55,6 +55,36 @@ enum SettingValue: String, AppEnum, CaseIterable {
     ]
 }
 
+extension ChangeableSetting {
+    /// How the setting reads in a shortcut's dialog.
+    var spokenName: String {
+        switch self {
+        case .autoPause:   return "Auto-Pause"
+        case .mapRotation: return "Map rotation"
+        case .units:       return "Units"
+        case .voiceAlerts: return "Voice alerts"
+        }
+    }
+}
+
+extension SettingValue {
+    /// How the value reads in a shortcut's dialog.
+    var spokenName: String {
+        switch self {
+        case .on:             return "on"
+        case .off:            return "off"
+        case .headingUp:      return "heading up"
+        case .northUp:        return "north up"
+        case .imperial:       return "imperial"
+        case .metric:         return "metric"
+        case .voiceAndHaptic: return "voice and haptic"
+        case .voiceOnly:      return "voice only"
+        case .hapticOnly:     return "haptic only"
+        case .none:           return "off"
+        }
+    }
+}
+
 // MARK: - Change Setting Intent
 
 struct ChangeSettingIntent: AppIntent {
@@ -69,7 +99,7 @@ struct ChangeSettingIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         await MainActor.run {
-            let store = UserSettingsStore()
+            let store = UserSettingsStore.shared
 
             switch setting {
             case .autoPause:
@@ -111,8 +141,9 @@ struct ChangeSettingIntent: AppIntent {
                     break
                 }
             }
+            store.commitNow()
         }
 
-        return .result(dialog: "Changed \(setting.rawValue) to \(value.rawValue).")
+        return .result(dialog: "\(setting.spokenName) set to \(value.spokenName).")
     }
 }

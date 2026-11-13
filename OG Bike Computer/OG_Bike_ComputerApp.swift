@@ -302,7 +302,7 @@ struct OG_Bike_ComputerApp: App {
     @StateObject private var routeStore = RouteStore()
     @StateObject private var rideStore = RideStore()
     @StateObject private var metricConfig = MetricConfigStore()
-    @StateObject private var userSettings = UserSettingsStore()
+    @StateObject private var userSettings = UserSettingsStore.shared
     @StateObject private var integrationSettings = IntegrationSettingsStore()
 
     @State private var importedFileURL: URL?
