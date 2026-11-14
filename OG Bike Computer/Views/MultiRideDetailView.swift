@@ -27,6 +27,7 @@ struct MultiRideDetailView: View {
     @State private var panelState: PanelState = .collapsed
     @State private var panelPage = 0
     @State private var showShareSheet = false
+    @State private var showPhoneSettings = false
     @State private var gpxExportURL: URL?
     @State private var isExportingGPX = false
     @State private var hasStravaAuth = false
@@ -170,11 +171,13 @@ struct MultiRideDetailView: View {
                         }
                         .disabled(isUploadingToStrava)
                     }
+
+                    MapMenuSection(showPhoneSettings: $showPhoneSettings)
                 } label: {
                     if isExportingGPX || isUploadingToStrava {
                         ProgressView()
                     } else {
-                        Image(systemName: "square.and.arrow.up")
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
@@ -184,6 +187,7 @@ struct MultiRideDetailView: View {
                 ShareSheet(activityItems: [url])
             }
         }
+        .phoneSettingsSheet(isPresented: $showPhoneSettings)
         .alert(
             "Upload Error",
             isPresented: .init(

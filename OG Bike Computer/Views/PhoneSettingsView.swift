@@ -94,3 +94,40 @@ struct PhoneSettingsView: View {
         }
     }
 }
+
+/// The Map section of a map screen's ⋯ menu: quick phone display toggles,
+/// plus a way into the full Phone settings page.
+struct MapMenuSection: View {
+    @Binding var showPhoneSettings: Bool
+    @AppStorage(PhoneSettingsKeys.gradeColors) private var gradeColors = true
+
+    var body: some View {
+        Section("Map") {
+            Toggle(isOn: $gradeColors) {
+                Label("Grade Colors", systemImage: "chart.xyaxis.line")
+            }
+            Button {
+                showPhoneSettings = true
+            } label: {
+                Label("Phone Settings…", systemImage: "iphone")
+            }
+        }
+    }
+}
+
+extension View {
+    /// The Phone settings page in a sheet with a Done button, opened from a
+    /// map screen's ⋯ menu.
+    func phoneSettingsSheet(isPresented: Binding<Bool>) -> some View {
+        sheet(isPresented: isPresented) {
+            NavigationStack {
+                PhoneSettingsView(userSettings: .shared)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { isPresented.wrappedValue = false }
+                        }
+                    }
+            }
+        }
+    }
+}

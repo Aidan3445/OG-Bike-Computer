@@ -36,7 +36,6 @@ struct RouteDetailView: View {
     @State private var showOverwriteAlert = false
     @State private var isExportingGPX = false
     @State private var showPhoneSettings = false
-    @AppStorage(PhoneSettingsKeys.gradeColors) private var showGradeColors = true
     @State private var gpxExport: GPXExportFile?
 
     // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
@@ -498,16 +497,7 @@ struct RouteDetailView: View {
                                 Label("Edit Cues", systemImage: "pencil.and.list.clipboard")
                             }
                         }
-                        Section("Map") {
-                            Toggle(isOn: $showGradeColors) {
-                                Label("Grade Colors", systemImage: "chart.xyaxis.line")
-                            }
-                            Button {
-                                showPhoneSettings = true
-                            } label: {
-                                Label("Phone Settings…", systemImage: "iphone")
-                            }
-                        }
+                        MapMenuSection(showPhoneSettings: $showPhoneSettings)
                     } label: {
                         if isExportingGPX {
                             ProgressView()
@@ -558,16 +548,7 @@ struct RouteDetailView: View {
         .sheet(item: $gpxExport) { file in
             ShareSheet(activityItems: [file.url])
         }
-        .sheet(isPresented: $showPhoneSettings) {
-            NavigationStack {
-                PhoneSettingsView(userSettings: .shared)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showPhoneSettings = false }
-                        }
-                    }
-            }
-        }
+        .phoneSettingsSheet(isPresented: $showPhoneSettings)
         .alert("Route Already on Watch", isPresented: $showOverwriteAlert) {
             Button("Replace", role: .destructive) {
                 onSend()

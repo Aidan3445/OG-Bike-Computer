@@ -26,6 +26,7 @@ struct RideDetailView: View {
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var panelState: PanelState = .collapsed
     @State private var showShareSheet = false
+    @State private var showPhoneSettings = false
     @State private var isUploadingToStrava = false
     @State private var showFinalizeConfirm = false
     @State private var showDiscardConfirm = false
@@ -316,11 +317,13 @@ struct RideDetailView: View {
                             }
                         }
                     }
+
+                    MapMenuSection(showPhoneSettings: $showPhoneSettings)
                 } label: {
                     if isUploadingToStrava || isExportingGPX {
                         ProgressView()
                     } else {
-                        Image(systemName: "square.and.arrow.up")
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
@@ -330,6 +333,7 @@ struct RideDetailView: View {
                 ShareSheet(activityItems: [gpxURL])
             }
         }
+        .phoneSettingsSheet(isPresented: $showPhoneSettings)
         .alert("Upload Error", isPresented: .init(
             get: { uploadError != nil },
             set: { if !$0 { uploadError = nil } }
