@@ -298,7 +298,7 @@ struct ContentView: View {
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            var allImported: [Route] = []
+            var allImported: [RouteImportCandidate] = []
             for url in urls {
                 guard url.startAccessingSecurityScopedResource() else { continue }
                 defer { url.stopAccessingSecurityScopedResource() }
@@ -346,9 +346,13 @@ extension ContentView {
                 // select instead of hitting the send button.
                 .allowsHitTesting(!isSelectingRoutes)
                 RowTrailingSlot(isSelecting: isSelectingRoutes, showsChevron: true) {
-                    Image(systemName: selectedRouteIDs.contains(route.id) ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(selectedRouteIDs.contains(route.id) ? Color.accentColor : .secondary)
+                    Image(
+                        systemName: selectedRouteIDs.contains(route.id)
+                            ? "checkmark.circle.fill" : "circle"
+                    )
+                    .font(.title3)
+                    .foregroundStyle(
+                        selectedRouteIDs.contains(route.id) ? Color.accentColor : .secondary)
                 }
             }
             .contentShape(Rectangle())
@@ -359,13 +363,14 @@ extension ContentView {
                 }
             }
             // Only claims taps in Select mode, so outside it the row opens.
-            .gesture(TapGesture().onEnded {
-                if selectedRouteIDs.contains(route.id) {
-                    selectedRouteIDs.remove(route.id)
-                } else {
-                    selectedRouteIDs.insert(route.id)
-                }
-            }, including: isSelectingRoutes ? .all : .subviews)
+            .gesture(
+                TapGesture().onEnded {
+                    if selectedRouteIDs.contains(route.id) {
+                        selectedRouteIDs.remove(route.id)
+                    } else {
+                        selectedRouteIDs.insert(route.id)
+                    }
+                }, including: isSelectingRoutes ? .all : .subviews)
         }
         .onDelete { indices in
             guard !isSelectingRoutes else { return }
@@ -414,7 +419,8 @@ extension ContentView {
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
-                routeStore.routes.filter { selectedRouteIDs.contains($0.id) }.forEach(routeStore.delete)
+                routeStore.routes.filter { selectedRouteIDs.contains($0.id) }.forEach(
+                    routeStore.delete)
                 exitRouteSelection()
             }
             Button("Cancel", role: .cancel) {}

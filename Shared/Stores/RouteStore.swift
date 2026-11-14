@@ -29,11 +29,34 @@ class RouteStore: ObservableObject {
         if let data = try? JSONEncoder().encode(route) {
             try? data.write(to: fileURL)
         }
-        if !routes.contains(where: { $0.id == route.id }) {
+        if let index = routes.firstIndex(where: { $0.id == route.id }) {
+            routes[index] = route
+        } else {
             routes.append(route)
         }
         onChange?()
         onImport?(route)
+    }
+
+    /// Overwrites `existing` with a newly imported copy of the same route.
+    /// Keeps the ID and creation date, so it stays where it was in the list
+    /// and on the watch. Cue edits survive only if the track didn't change,
+    /// since they're anchored to track points. Resends it if it's on the watch.
+    @discardableResult
+    func replace(_ existing: Route, with incoming: Route) -> Route {
+        let sameTrack = existing.points == incoming.points
+        let merged = Route(
+            id: existing.id,
+            name: incoming.name,
+            points: incoming.points,
+            waypoints: incoming.waypoints,
+            createdAt: existing.createdAt,
+            source: incoming.source ?? existing.source,
+            simplifiedElevation: sameTrack ? existing.simplifiedElevation : nil,
+            cueEdits: sameTrack ? existing.cueEdits : nil)
+        save(merged)
+        autoResyncIfOnWatch(merged)
+        return merged
     }
 
     func delete(_ route: Route) {

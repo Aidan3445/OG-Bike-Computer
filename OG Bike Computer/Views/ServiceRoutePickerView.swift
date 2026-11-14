@@ -19,6 +19,7 @@ struct ServiceRoutePickerView: View {
     @State private var error: String?
     @State private var downloadingID: String?
     @State private var importedIDs: Set<String> = []
+    @State private var replacePrompt: ReplacePrompt?
     @State private var showImportSheet = false
 
     // Import by URL
@@ -56,7 +57,7 @@ struct ServiceRoutePickerView: View {
     private var distanceUnitLabel: String {
         isImperial ? "mi" : "km"
     }
-    
+
     private var showError: Binding<Bool> {
         Binding<Bool>(
             get: { error != nil },
@@ -74,9 +75,10 @@ struct ServiceRoutePickerView: View {
                         ContentUnavailableView(
                             "No Routes Found",
                             systemImage: "map",
-                            description: Text(activeFilter.isEmpty
-                                ? "No routes found on your \(service.displayName) account."
-                                : "No routes match your filters. Try adjusting your search."))
+                            description: Text(
+                                activeFilter.isEmpty
+                                    ? "No routes found on your \(service.displayName) account."
+                                    : "No routes match your filters. Try adjusting your search."))
                         if service == .strava {
                             stravaVisibilityNote
                         }
@@ -86,11 +88,11 @@ struct ServiceRoutePickerView: View {
                         if service == .rideWithGPS && !collections.isEmpty {
                             collectionsSection
                         }
-                        
+
                         if !routes.isEmpty {
                             serviceRoutesSection
                         }
-                        
+
                         if hasMore {
                             Button {
                                 loadMore()
@@ -118,6 +120,9 @@ struct ServiceRoutePickerView: View {
             }
             .navigationTitle("From \(service.displayName)")
             .navigationBarTitleDisplayMode(.inline)
+            .replaceImportedRouteAlert($replacePrompt, serviceName: service.displayName) { prompt in
+                downloadRoute(prompt.serviceRoute, replacing: prompt.existing)
+            }
             .searchable(text: $searchText, prompt: "Search your routes")
             .onSubmit(of: .search) {
                 applyFilters()
@@ -131,9 +136,10 @@ struct ServiceRoutePickerView: View {
                         Button {
                             showFilters.toggle()
                         } label: {
-                            Image(systemName: activeFilter.isEmpty && searchText.isEmpty
-                                  ? "line.3.horizontal.decrease.circle"
-                                  : "line.3.horizontal.decrease.circle.fill")
+                            Image(
+                                systemName: activeFilter.isEmpty && searchText.isEmpty
+                                    ? "line.3.horizontal.decrease.circle"
+                                    : "line.3.horizontal.decrease.circle.fill")
                         }
                     }
                 }
@@ -165,9 +171,11 @@ struct ServiceRoutePickerView: View {
 
     private var stravaVisibilityNote: some View {
         Label {
-            Text("Only public routes you have created, saved, or duplicated appear here. To import a private route, set it to public on Strava first.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(
+                "Only public routes you have created, saved, or duplicated appear here. To import a private route, set it to public on Strava first."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
         } icon: {
             Image(systemName: "eye.slash")
                 .foregroundStyle(.secondary)
@@ -229,7 +237,7 @@ struct ServiceRoutePickerView: View {
         }
         .presentationDetents([.medium])
     }
-    
+
     // MARK: - Import by URL
 
     private var importByUrlSheet: some View {
@@ -257,15 +265,15 @@ struct ServiceRoutePickerView: View {
                 } else if let route = importedRoute {
                     Section {
                         Button {
-                            downloadRoute(route)
+                            importTapped(route)
                         } label: {
                             ServiceRouteRow(
                                 route: route,
                                 isDownloading: downloadingID == route.id,
-                                isImported: importedIDs.contains(route.id)
+                                isImported: isImported(route)
                             )
                         }
-                        .disabled(downloadingID != nil || importedIDs.contains(route.id))
+                        .disabled(downloadingID != nil)
                     } header: {
                         Text("Route Preview")
                     }
@@ -279,6 +287,10 @@ struct ServiceRoutePickerView: View {
             }
             .navigationTitle("Import by URL")
             .navigationBarTitleDisplayMode(.inline)
+            // This sheet covers the list, so it needs its own copy of the prompt.
+            .replaceImportedRouteAlert($replacePrompt, serviceName: service.displayName) { prompt in
+                downloadRoute(prompt.serviceRoute, replacing: prompt.existing)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showImportSheet = false }
@@ -326,7 +338,6 @@ struct ServiceRoutePickerView: View {
             }
         }
     }
-
 
     // MARK: - Filter Logic
 
@@ -391,14 +402,37 @@ struct ServiceRoutePickerView: View {
         Task { await fetchRoutes() }
     }
 
-    private func downloadRoute(_ serviceRoute: ServiceRoute) {
+    /// A route already imported from this service asks before downloading
+    /// again, since a second download replaces the saved copy.
+    private func importTapped(_ serviceRoute: ServiceRoute) {
+        if let existing = existingRoute(for: serviceRoute) {
+            replacePrompt = ReplacePrompt(serviceRoute: serviceRoute, existing: existing)
+        } else {
+            downloadRoute(serviceRoute)
+        }
+    }
+
+    private func existingRoute(for serviceRoute: ServiceRoute) -> Route? {
+        let source = RouteSource(service: service, remoteID: serviceRoute.id)
+        return routeStore.routes.first { $0.source == source }
+    }
+
+    private func isImported(_ serviceRoute: ServiceRoute) -> Bool {
+        importedIDs.contains(serviceRoute.id) || existingRoute(for: serviceRoute) != nil
+    }
+
+    private func downloadRoute(_ serviceRoute: ServiceRoute, replacing existing: Route? = nil) {
         downloadingID = serviceRoute.id
         Task {
             do {
                 let route = try await client.downloadRoute(id: serviceRoute.id)
                 await MainActor.run {
-                    routeStore.save(route)
-                    RouteImportCoordinator.shared.autoSendIfEnabled(route)
+                    if let existing {
+                        routeStore.replace(existing, with: route)
+                    } else {
+                        routeStore.save(route)
+                        RouteImportCoordinator.shared.autoSendIfEnabled(route)
+                    }
                     importedIDs.insert(serviceRoute.id)
                     downloadingID = nil
                 }
@@ -416,23 +450,29 @@ struct ServiceRoutePickerView: View {
         Section {
             // Pinned is always returned last but we want it first.
             // Reorder and limit to 4 items total before showing "View All" option
-            let items = Array(collections.suffix(1)) + Array(collections.prefix(collections.count - 1).prefix(3))
+            let items =
+                Array(collections.suffix(1))
+                + Array(collections.prefix(collections.count - 1).prefix(3))
 
             ForEach(items) { collection in
-                NavigationLink(destination: RWGPSCollectionView(
-                    collections: collections,
-                    selectedCollection: collection,
-                    routeStore: routeStore
-                )) {
+                NavigationLink(
+                    destination: RWGPSCollectionView(
+                        collections: collections,
+                        selectedCollection: collection,
+                        routeStore: routeStore
+                    )
+                ) {
                     Text(collection.name)
                 }
             }
             if collections.count > 4 {
-                NavigationLink(destination: RWGPSCollectionView(
-                    collections: collections,
-                    selectedCollection: nil,
-                    routeStore: routeStore
-                )) {
+                NavigationLink(
+                    destination: RWGPSCollectionView(
+                        collections: collections,
+                        selectedCollection: nil,
+                        routeStore: routeStore
+                    )
+                ) {
                     Text("View All (+\(collections.count - 4))")
                         .foregroundStyle(.secondary)
                 }
@@ -441,21 +481,21 @@ struct ServiceRoutePickerView: View {
             Text("Collections")
         }
     }
-    
+
     @ViewBuilder
     private var serviceRoutesSection: some View {
         Section {
             ForEach(routes) { route in
                 Button {
-                    downloadRoute(route)
+                    importTapped(route)
                 } label: {
                     ServiceRouteRow(
                         route: route,
                         isDownloading: downloadingID == route.id,
-                        isImported: importedIDs.contains(route.id)
+                        isImported: isImported(route)
                     )
                 }
-                .disabled(downloadingID != nil || importedIDs.contains(route.id))
+                .disabled(downloadingID != nil)
             }
         } header: {
             Text("Your Routes")
@@ -485,7 +525,9 @@ struct ServiceRouteRow: View {
                 }
             }
             HStack(spacing: 12) {
-                Label(formatDistance(route.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                Label(
+                    formatDistance(route.distance),
+                    systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 if route.elevationGain > 0 {
                     Label(formatElevation(route.elevationGain), systemImage: "arrow.up.right")
                 }
@@ -495,5 +537,37 @@ struct ServiceRouteRow: View {
             .foregroundStyle(.primary.opacity(0.8))
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// A service route that's already imported, waiting on the rider to confirm
+/// a second download.
+struct ReplacePrompt: Identifiable {
+    let serviceRoute: ServiceRoute
+    let existing: Route
+    var id: String { serviceRoute.id }
+}
+
+extension View {
+    /// Confirms downloading an already imported service route again, which
+    /// replaces the saved copy.
+    func replaceImportedRouteAlert(
+        _ prompt: Binding<ReplacePrompt?>,
+        serviceName: String,
+        onReplace: @escaping (ReplacePrompt) -> Void
+    ) -> some View {
+        alert(
+            "Already Imported",
+            isPresented: Binding(
+                get: { prompt.wrappedValue != nil }, set: { if !$0 { prompt.wrappedValue = nil } }),
+            presenting: prompt.wrappedValue
+        ) { p in
+            Button("Download and Replace") { onReplace(p) }
+            Button("Cancel", role: .cancel) {}
+        } message: { p in
+            Text(
+                "\"\(p.existing.name)\" came from this \(serviceName) route. Downloading it again replaces your copy. Cue edits stay only if the track didn't change."
+            )
+        }
     }
 }
