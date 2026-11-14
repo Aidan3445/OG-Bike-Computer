@@ -22,6 +22,8 @@ struct RideDetailView: View {
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var isPanelOpen = false
     @State private var expandedPanelPages: Set<Int> = []
+    /// Stretch the chart is zoomed to, highlighted on the map.
+    @State private var chartZoom: ClosedRange<Double>?
     @State private var showShareSheet = false
     @State private var showPhoneSettings = false
     @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
@@ -114,6 +116,10 @@ struct RideDetailView: View {
                 ForEach(Array(pauseJumps.enumerated()), id: \.offset) { _, pair in
                     MapPolyline(coordinates: [pair.0, pair.1])
                         .stroke(Color.gray, style: StrokeStyle(lineWidth: 3, dash: [4, 3]))
+                }
+
+                if let chartZoom {
+                    ChartZoomMapHighlight(range: chartZoom, coordinateAt: interpolateCoordinate)
                 }
 
                 if let first = startCoord {
@@ -482,7 +488,8 @@ struct RideDetailView: View {
                 dataPoints: chartData,
                 hasHeartRate: chartHasHR,
                 hasPower: chartHasPower,
-                scrub: scrubState
+                scrub: scrubState,
+                zoom: $chartZoom
             )
         } else {
             Text("No chart data")

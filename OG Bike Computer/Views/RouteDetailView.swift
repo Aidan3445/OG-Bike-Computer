@@ -29,6 +29,8 @@ struct RouteDetailView: View {
 
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var isPanelOpen = false
+    /// Stretch the chart is zoomed to, highlighted on the map.
+    @State private var chartZoom: ClosedRange<Double>?
     @State private var showOverwriteAlert = false
     @State private var isExportingGPX = false
     @State private var showPhoneSettings = false
@@ -205,6 +207,10 @@ struct RouteDetailView: View {
                                 }
                             }
 
+                            if let chartZoom {
+                                ChartZoomMapHighlight(range: chartZoom, coordinateAt: interpolateRouteCoordinate)
+                            }
+
                             // Waypoints / POIs — including user edits + user-added POIs
                             // from the latest persisted overlay, so a waypoint dropped via
                             // the Cue Editor shows up here too. Region-filtered and
@@ -330,7 +336,7 @@ struct RouteDetailView: View {
                             .statsPanelPage(0)
 
                             if !cachedElevationData.isEmpty {
-                                RouteElevationChartView(points: cachedElevationData, scrub: scrubState)
+                                RouteElevationChartView(points: cachedElevationData, scrub: scrubState, zoom: $chartZoom)
                                     .statsPanelPage(1)
                             }
                         }

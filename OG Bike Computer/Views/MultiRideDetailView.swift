@@ -25,6 +25,8 @@ struct MultiRideDetailView: View {
     @State private var isPanelOpen = false
     @State private var expandedPanelPages: Set<Int> = []
     @State private var segmentListHeight: CGFloat = 0
+    /// Stretch the chart is zoomed to, highlighted on the map.
+    @State private var chartZoom: ClosedRange<Double>?
     @State private var panelPage = 0
     @State private var showShareSheet = false
     @State private var showPhoneSettings = false
@@ -108,6 +110,10 @@ struct MultiRideDetailView: View {
                                 MapPolyline(coordinates: [c.from, c.to])
                                     .stroke(c.color, lineWidth: 4)
                             }
+                        }
+
+                        if let chartZoom {
+                            ChartZoomMapHighlight(range: chartZoom, coordinateAt: coordinate(atCombinedDistance:))
                         }
 
                         if let first = renders.first, let coord = first.coords.first {
@@ -351,7 +357,8 @@ struct MultiRideDetailView: View {
                 scrub: scrubState,
                 splits: renders.dropFirst().map {
                     ChartSplit(distance: $0.startDistance, color: $0.color)
-                }
+                },
+                zoom: $chartZoom
             )
         } else {
             Text("No chart data")
@@ -493,7 +500,8 @@ struct MultiRideDetailView: View {
                                 latitude: coords[i - 1].latitude, longitude: coords[i - 1].longitude
                             ))
                 }
-                return (coords, cumulative, buildRideChartData(points: pts))
+                // Fewer chunks per ride, since a selection can hold dozens of rides.
+                return (coords, cumulative, buildRideChartData(points: pts, segmentCount: 600))
             }.value
             guard let (coords, cumulative, chart) = loaded else { continue }
 

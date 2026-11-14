@@ -24,6 +24,41 @@ final class ChartScrubState: ObservableObject {
     @Published var distance: Double? = nil
     /// Color of the active chart metric, mirrored by the map dot.
     @Published var color: Color = .green
+    /// Stretch between two pinching fingers, in meters. Live while pinching,
+    /// nil otherwise. On release the chart zooms to it.
+    @Published var pinch: ClosedRange<Double>? = nil
+}
+
+/// Shaded band between the pinching fingers, drawn in the chart's overlay so
+/// per-frame pinch updates re-render only this view.
+struct ChartPinchBand: View {
+    @ObservedObject var scrub: ChartScrubState
+    let proxy: ChartProxy
+    let plotFrame: CGRect
+    let metersPerUnit: Double
+
+    var body: some View {
+        if let range = scrub.pinch,
+            let x1 = proxy.position(forX: range.lowerBound / metersPerUnit),
+            let x2 = proxy.position(forX: range.upperBound / metersPerUnit)
+        {
+            let minX = plotFrame.minX + max(0, min(x1, x2))
+            let maxX = plotFrame.minX + min(plotFrame.width, max(x1, x2))
+            ZStack(alignment: .topLeading) {
+                Rectangle()
+                    .fill(scrub.color.opacity(0.15))
+                    .frame(width: max(0, maxX - minX), height: plotFrame.height)
+                    .offset(x: minX, y: plotFrame.minY)
+                ForEach([minX, maxX], id: \.self) { x in
+                    Rectangle()
+                        .fill(scrub.color)
+                        .frame(width: 2, height: plotFrame.height)
+                        .offset(x: x - 1, y: plotFrame.minY)
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
 }
 
 /// Dashed vertical scrub line drawn in the chart's overlay (not as a chart
@@ -86,6 +121,9 @@ struct LongPressScrubOverlay: UIViewRepresentable {
     var onBegan: (CGPoint) -> Void
     var onChanged: (CGPoint) -> Void
     var onEnded: () -> Void
+    /// The two fingers' x positions while pinching, left to right.
+    var onPinchChanged: ((CGFloat, CGFloat) -> Void)? = nil
+    var onPinchEnded: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -105,6 +143,13 @@ struct LongPressScrubOverlay: UIViewRepresentable {
         context.coordinator.view = view
         context.coordinator.recognizer = recognizer
         view.addGestureRecognizer(recognizer)
+
+        let pinch = UIPinchGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePinch(_:)))
+        pinch.cancelsTouchesInView = false
+        pinch.delegate = context.coordinator
+        view.addGestureRecognizer(pinch)
         return view
     }
 
@@ -112,6 +157,8 @@ struct LongPressScrubOverlay: UIViewRepresentable {
         context.coordinator.onBegan = onBegan
         context.coordinator.onChanged = onChanged
         context.coordinator.onEnded = onEnded
+        context.coordinator.onPinchChanged = onPinchChanged
+        context.coordinator.onPinchEnded = onPinchEnded
     }
 
     func makeCoordinator() -> Coordinator {
@@ -129,6 +176,8 @@ struct LongPressScrubOverlay: UIViewRepresentable {
         var onBegan: (CGPoint) -> Void
         var onChanged: (CGPoint) -> Void
         var onEnded: () -> Void
+        var onPinchChanged: ((CGFloat, CGFloat) -> Void)?
+        var onPinchEnded: (() -> Void)?
 
         init(
             onBegan: @escaping (CGPoint) -> Void,
@@ -152,6 +201,24 @@ struct LongPressScrubOverlay: UIViewRepresentable {
             case .ended, .cancelled, .failed:
                 unlockAncestorGestures()
                 onEnded()
+            default:
+                break
+            }
+        }
+
+        @objc func handlePinch(_ gr: UIPinchGestureRecognizer) {
+            guard let view, onPinchChanged != nil else { return }
+            switch gr.state {
+            case .began, .changed:
+                if gr.state == .began { lockAncestorGestures(from: view) }
+                // A finger can lift for a moment mid-pinch; skip those frames.
+                guard gr.numberOfTouches >= 2 else { return }
+                let a = gr.location(ofTouch: 0, in: view).x
+                let b = gr.location(ofTouch: 1, in: view).x
+                onPinchChanged?(min(a, b), max(a, b))
+            case .ended, .cancelled, .failed:
+                unlockAncestorGestures()
+                onPinchEnded?()
             default:
                 break
             }
@@ -229,6 +296,89 @@ struct ChartDataPoint: Identifiable {
     let heartRate: Double  // bpm (0 = no data)
     let power: Double  // watts (0 = no data)
     let grade: Double  // percent
+    /// Seconds since the ride started, for the zoom readout. nil where time
+    /// doesn't mean anything, like a combined multi-ride chart.
+    var time: Double? = nil
+}
+
+// MARK: - Zoom
+
+/// Smallest stretch a pinch can zoom to, so axis labels stay distinct.
+let chartMinimumZoomSpan: Double = 300
+
+/// Points to draw for `domain`: the ones inside it plus one either side so
+/// the line reaches the edges, thinned to about `limit` so a zoomed-out
+/// chart of a long ride stays cheap.
+func chartPoints<T>(_ points: [T], distance: (T) -> Double, in domain: ClosedRange<Double>, limit: Int = 300) -> [T] {
+    guard let first = points.firstIndex(where: { distance($0) >= domain.lowerBound }) else { return Array(points.suffix(1)) }
+    let last = points.lastIndex(where: { distance($0) <= domain.upperBound }) ?? first
+    let lo = max(0, first - 1)
+    let hi = min(points.count - 1, max(last, first) + 1)
+    let slice = Array(points[lo...hi])
+    guard slice.count > limit else { return slice }
+    let step = Double(slice.count - 1) / Double(limit - 1)
+    return (0..<limit).map { slice[Int((Double($0) * step).rounded())] }
+}
+
+/// Gain and loss with a 2 m dead band, so GPS wobble on a flat stretch
+/// doesn't add up to phantom climbing.
+func chartGainLoss(_ elevations: [Double]) -> (gain: Double, loss: Double) {
+    guard var reference = elevations.first else { return (0, 0) }
+    var gain = 0.0, loss = 0.0
+    for elevation in elevations.dropFirst() {
+        if elevation - reference >= 2 {
+            gain += elevation - reference
+            reference = elevation
+        } else if reference - elevation >= 2 {
+            loss += reference - elevation
+            reference = elevation
+        }
+    }
+    return (gain, loss)
+}
+
+/// One line under a zoomed chart: what the stretch covers, and an X to zoom
+/// back out.
+struct ChartZoomReadout: View {
+    let text: String
+    let color: Color
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "plus.magnifyingglass")
+                .font(.caption2)
+                .foregroundStyle(color)
+            Text(text)
+                .font(.caption2.weight(.medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Spacer(minLength: 0)
+            Button(action: onClear) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Zoom out")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(color.opacity(0.1), in: Capsule())
+    }
+}
+
+/// Turns two finger x positions in the plot into a distance range.
+func chartPinchRange(
+    _ x1: CGFloat, _ x2: CGFloat, proxy: ChartProxy, plotFrame: CGRect,
+    metersPerUnit: Double, domain: ClosedRange<Double>
+) -> ClosedRange<Double>? {
+    guard let a: Double = proxy.value(atX: x1 - plotFrame.minX),
+          let b: Double = proxy.value(atX: x2 - plotFrame.minX) else { return nil }
+    let lo = max(domain.lowerBound, min(a, b) * metersPerUnit)
+    let hi = min(domain.upperBound, max(a, b) * metersPerUnit)
+    return hi > lo ? lo...hi : nil
 }
 
 /// One colored run of the grade band under an elevation chart, in meters.
@@ -336,6 +486,10 @@ struct RideChartsView: View {
     /// the gesture; the scrub-rendering leaf views observe it.
     let scrub: ChartScrubState
     var splits: [ChartSplit] = []
+    /// The stretch the chart is zoomed to, in meters. A pinch sets it on
+    /// release and the readout's X clears it. Owned by the screen so the map
+    /// can highlight the same stretch.
+    var zoom: Binding<ClosedRange<Double>?> = .constant(nil)
 
     @State private var selected: RideChartMetric = .elevation
     @State private var scrubActive = false
@@ -349,10 +503,25 @@ struct RideChartsView: View {
         return metrics
     }
 
+    private var fullDomain: ClosedRange<Double> {
+        0...max(dataPoints.last?.distance ?? 0, 1)
+    }
+
+    private var domain: ClosedRange<Double> {
+        zoom.wrappedValue ?? fullDomain
+    }
+
     var body: some View {
         let _ = unitState.preferences
+        let shown = chartPoints(dataPoints, distance: \.distance, in: domain)
         VStack(spacing: 8) {
-            chart
+            if let range = zoom.wrappedValue {
+                ChartZoomReadout(text: zoomSummary(range), color: selected.color) {
+                    withAnimation(.easeInOut(duration: 0.3)) { zoom.wrappedValue = nil }
+                }
+            }
+
+            chart(shown)
                 .frame(height: 140)
                 .onAppear { scrub.color = selected.color }
                 .onChange(of: selected) { _, newValue in
@@ -366,11 +535,15 @@ struct RideChartsView: View {
                             let x = loc.x - plotFrame.origin.x
                             if let distInUnits: Double = proxy.value(atX: x) {
                                 let dist = distInUnits * metersPerUnit
-                                let maxDist = dataPoints.last?.distance ?? 0
-                                scrub.distance = max(0, min(dist, maxDist))
+                                scrub.distance = max(domain.lowerBound, min(dist, domain.upperBound))
                             }
                         }
                         ZStack(alignment: .topLeading) {
+                            ChartPinchBand(
+                                scrub: scrub,
+                                proxy: proxy,
+                                plotFrame: plotFrame,
+                                metersPerUnit: metersPerUnit)
                             ChartScrubRule(
                                 scrub: scrub,
                                 proxy: proxy,
@@ -389,6 +562,19 @@ struct RideChartsView: View {
                                         scrubActive = false
                                     }
                                     scrub.distance = nil
+                                },
+                                onPinchChanged: { x1, x2 in
+                                    scrub.pinch = chartPinchRange(
+                                        x1, x2, proxy: proxy, plotFrame: plotFrame,
+                                        metersPerUnit: metersPerUnit, domain: domain)
+                                },
+                                onPinchEnded: {
+                                    if let range = scrub.pinch,
+                                        range.upperBound - range.lowerBound >= chartMinimumZoomSpan
+                                    {
+                                        withAnimation(.easeInOut(duration: 0.3)) { zoom.wrappedValue = range }
+                                    }
+                                    scrub.pinch = nil
                                 }
                             )
                         }
@@ -406,17 +592,18 @@ struct RideChartsView: View {
     }
 
     @ViewBuilder
-    private var chart: some View {
+    private func chart(_ shown: [ChartDataPoint]) -> some View {
         let unitLabel = currentUnits.distance.label
         let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
-        let maxDist = (dataPoints.last?.distance ?? 0) / metersPerUnit
-        let xTicks = chartDistanceTicks(in: 0...maxDist)
+        let xRange = (domain.lowerBound / metersPerUnit)...(domain.upperBound / metersPerUnit)
+        let xTicks = chartDistanceTicks(in: xRange)
+        let yDomain = yDomain(shown)
         let baseline = yDomain.lowerBound
 
         Chart {
             switch selected {
             case .elevation:
-                ForEach(dataPoints) { pt in
+                ForEach(shown) { pt in
                     AreaMark(
                         x: .value("Distance", pt.distance / metersPerUnit),
                         yStart: .value("Baseline", baseline),
@@ -444,8 +631,8 @@ struct RideChartsView: View {
                     ForEach(
                         Array(
                             gradeBand(
-                                distances: dataPoints.map(\.distance),
-                                grades: dataPoints.map(\.grade)
+                                distances: shown.map(\.distance),
+                                grades: shown.map(\.grade)
                             ).enumerated()), id: \.offset
                     ) { _, seg in
                         RectangleMark(
@@ -459,7 +646,7 @@ struct RideChartsView: View {
                 }
 
             case .speed:
-                ForEach(dataPoints) { pt in
+                ForEach(shown) { pt in
                     AreaMark(
                         x: .value("Distance", pt.distance / metersPerUnit),
                         yStart: .value("Baseline", baseline),
@@ -477,7 +664,7 @@ struct RideChartsView: View {
                 }
 
             case .heartRate:
-                ForEach(dataPoints.filter { $0.heartRate > 0 }) { pt in
+                ForEach(shown.filter { $0.heartRate > 0 }) { pt in
                     AreaMark(
                         x: .value("Distance", pt.distance / metersPerUnit),
                         yStart: .value("Baseline", baseline),
@@ -495,7 +682,7 @@ struct RideChartsView: View {
                 }
 
             case .power:
-                ForEach(dataPoints.filter { $0.power > 0 }) { pt in
+                ForEach(shown.filter { $0.power > 0 }) { pt in
                     AreaMark(
                         x: .value("Distance", pt.distance / metersPerUnit),
                         yStart: .value("Baseline", baseline),
@@ -520,12 +707,12 @@ struct RideChartsView: View {
                     .lineStyle(StrokeStyle(lineWidth: 2, dash: [8, 4]))
             }
         }
-        .chartXScale(domain: 0...maxDist)
+        .chartXScale(domain: xRange)
         .chartXAxis {
             AxisMarks(preset: .aligned, values: xTicks) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
                 if let v = value.as(Double.self) {
-                    AxisValueLabel(anchor: chartDistanceLabelAnchor(for: v, in: 0...maxDist)) {
+                    AxisValueLabel(anchor: chartDistanceLabelAnchor(for: v, in: xRange)) {
                         Text("\(chartDistanceLabel(v)) \(unitLabel)")
                             .font(.system(size: 9))
                     }
@@ -597,22 +784,45 @@ struct RideChartsView: View {
         }
     }
 
-    private var yDomain: ClosedRange<Double> {
+    /// Fits the points on screen, so a zoomed stretch fills the chart's height.
+    private func yDomain(_ shown: [ChartDataPoint]) -> ClosedRange<Double> {
         let vals: [Double]
         switch selected {
         case .elevation:
-            vals = dataPoints.map { elevationValue($0.elevation) }
+            vals = shown.map { elevationValue($0.elevation) }
         case .speed:
-            vals = dataPoints.map { speedValue($0.speed) }
+            vals = shown.map { speedValue($0.speed) }
         case .heartRate:
-            vals = dataPoints.compactMap { $0.heartRate > 0 ? $0.heartRate : nil }
+            vals = shown.compactMap { $0.heartRate > 0 ? $0.heartRate : nil }
         case .power:
-            vals = dataPoints.compactMap { $0.power > 0 ? $0.power : nil }
+            vals = shown.compactMap { $0.power > 0 ? $0.power : nil }
         }
         let lo = vals.min() ?? 0
         let hi = vals.max() ?? 100
         let pad = max((hi - lo) * 0.1, 1)
         return (lo - pad)...(hi + pad)
+    }
+
+    /// "6.5 mi · ↑ 120 ft ↓ 80 ft · 24:10 · 16.1 mph". Time and speed only
+    /// when the points carry time.
+    private func zoomSummary(_ range: ClosedRange<Double>) -> String {
+        let inRange = dataPoints.filter { range.contains($0.distance) }
+        let (gain, loss) = chartGainLoss(inRange.map(\.elevation))
+        var parts = [
+            formatDistance(range.upperBound - range.lowerBound),
+            "↑ \(formatElevation(gain)) ↓ \(formatElevation(loss))",
+        ]
+        if let start = inRange.first?.time, let end = inRange.last?.time, end > start {
+            parts.append(formatChartDuration(end - start))
+            var moving = 0.0
+            for (a, b) in zip(inRange, inRange.dropFirst()) {
+                if let ta = a.time, let tb = b.time, b.speed > 0.5 { moving += tb - ta }
+            }
+            if moving > 0 {
+                parts.append(formatSpeed((range.upperBound - range.lowerBound) / moving))
+            }
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -627,7 +837,7 @@ private struct RideScrubFooter: View {
     var body: some View {
         ZStack {
             // Hint — visible when not actively scrubbing.
-            Text("Tap and hold to scrub")
+            Text("Hold to scrub · Pinch to zoom")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .opacity(active ? 0 : 1)
@@ -697,135 +907,176 @@ struct RouteElevationChartView: View {
     let points: [RouteElevationPoint]
     /// Written from the gesture only — observed by the scrub leaf views.
     let scrub: ChartScrubState
+    /// The stretch the chart is zoomed to, in meters. See `RideChartsView.zoom`.
+    var zoom: Binding<ClosedRange<Double>?> = .constant(nil)
     @State private var scrubActive = false
     @ObservedObject private var unitState = UnitState.shared
     @AppStorage(PhoneSettingsKeys.gradeColors) private var showGradeColors = true
+
+    private var domain: ClosedRange<Double> {
+        zoom.wrappedValue ?? 0...max(points.last?.distanceFromStart ?? 0, 1)
+    }
 
     var body: some View {
         let _ = unitState.preferences
         let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
         let unitLabel = currentUnits.distance.label
-        let elevPoints = points.filter { $0.elevation != nil }
-        let maxDist = (points.last?.distanceFromStart ?? 0) / metersPerUnit
-        let xTicks = chartDistanceTicks(in: 0...maxDist)
+        let elevPoints = chartPoints(
+            points.filter { $0.elevation != nil }, distance: \.distanceFromStart, in: domain)
+        let xRange = (domain.lowerBound / metersPerUnit)...(domain.upperBound / metersPerUnit)
+        let xTicks = chartDistanceTicks(in: xRange)
         let yDomain = elevationDomain(elevPoints)
         let baseline = yDomain.lowerBound
 
-        Chart {
-            ForEach(Array(elevPoints.enumerated()), id: \.offset) { _, pt in
-                let elev = elevationValue(pt.elevation ?? 0)
-                AreaMark(
-                    x: .value("Distance", pt.distanceFromStart / metersPerUnit),
-                    yStart: .value("Baseline", baseline),
-                    yEnd: .value("Elevation", elev)
-                )
-                .foregroundStyle(
-                    .linearGradient(
-                        colors: [.green.opacity(0.4), .green.opacity(0.05)],
-                        startPoint: .top,
-                        endPoint: .bottom
+        VStack(spacing: 8) {
+            if let range = zoom.wrappedValue {
+                ChartZoomReadout(text: zoomSummary(range), color: .green) {
+                    withAnimation(.easeInOut(duration: 0.3)) { zoom.wrappedValue = nil }
+                }
+            }
+
+            Chart {
+                ForEach(Array(elevPoints.enumerated()), id: \.offset) { _, pt in
+                    let elev = elevationValue(pt.elevation ?? 0)
+                    AreaMark(
+                        x: .value("Distance", pt.distanceFromStart / metersPerUnit),
+                        yStart: .value("Baseline", baseline),
+                        yEnd: .value("Elevation", elev)
                     )
-                )
-                .interpolationMethod(.catmullRom)
-                LineMark(
-                    x: .value("Distance", pt.distanceFromStart / metersPerUnit),
-                    y: .value("Elevation", elev)
-                )
-                .foregroundStyle(.green)
-                .interpolationMethod(.catmullRom)
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
-            }
-
-            if showGradeColors {
-                let bandTop = baseline + (yDomain.upperBound - yDomain.lowerBound) * 0.03
-                ForEach(
-                    Array(
-                        gradeBand(
-                            distances: elevPoints.map(\.distanceFromStart),
-                            grades: elevPoints.map(\.grade)
-                        ).enumerated()), id: \.offset
-                ) { _, seg in
-                    RectangleMark(
-                        xStart: .value("Start", seg.start / metersPerUnit),
-                        xEnd: .value("End", seg.end / metersPerUnit),
-                        yStart: .value("Base", baseline),
-                        yEnd: .value("BandTop", bandTop)
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [.green.opacity(0.4), .green.opacity(0.05)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
                     )
-                    .foregroundStyle(seg.color.opacity(0.85))
+                    .interpolationMethod(.catmullRom)
+                    LineMark(
+                        x: .value("Distance", pt.distanceFromStart / metersPerUnit),
+                        y: .value("Elevation", elev)
+                    )
+                    .foregroundStyle(.green)
+                    .interpolationMethod(.catmullRom)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5))
                 }
-            }
 
-            ForEach(xTicks.filter { $0 > 0 }, id: \.self) { tick in
-                RuleMark(x: .value("Marker", tick))
-                    .foregroundStyle(.secondary.opacity(0.4))
-                    .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
-            }
+                if showGradeColors {
+                    let bandTop = baseline + (yDomain.upperBound - yDomain.lowerBound) * 0.03
+                    ForEach(
+                        Array(
+                            gradeBand(
+                                distances: elevPoints.map(\.distanceFromStart),
+                                grades: elevPoints.map(\.grade)
+                            ).enumerated()), id: \.offset
+                    ) { _, seg in
+                        RectangleMark(
+                            xStart: .value("Start", seg.start / metersPerUnit),
+                            xEnd: .value("End", seg.end / metersPerUnit),
+                            yStart: .value("Base", baseline),
+                            yEnd: .value("BandTop", bandTop)
+                        )
+                        .foregroundStyle(seg.color.opacity(0.85))
+                    }
+                }
 
-        }
-        .chartXScale(domain: 0...maxDist)
-        .chartXAxis {
-            AxisMarks(preset: .aligned, values: xTicks) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                if let v = value.as(Double.self) {
-                    AxisValueLabel(anchor: chartDistanceLabelAnchor(for: v, in: 0...maxDist)) {
-                        Text("\(chartDistanceLabel(v)) \(unitLabel)")
-                            .font(.system(size: 9))
-                    }
+                ForEach(xTicks.filter { $0 > xRange.lowerBound }, id: \.self) { tick in
+                    RuleMark(x: .value("Marker", tick))
+                        .foregroundStyle(.secondary.opacity(0.4))
+                        .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
                 }
+
             }
-        }
-        .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                if let v = value.as(Double.self) {
-                    AxisValueLabel(anchor: chartYLabelAnchor(for: v, in: yDomain)) {
-                        Text("\(Int(v)) \(currentUnits.elevation == .feet ? "ft" : "m")")
-                            .font(.system(size: 9))
-                    }
-                }
-            }
-        }
-        .chartYScale(domain: yDomain)
-        .chartLegend(.hidden)
-        .chartPlotStyle { $0.clipped() }
-        .frame(height: 140)
-        .chartOverlay { proxy in
-            GeometryReader { geo in
-                let plotFrame = geo[proxy.plotFrame!]
-                let updateScrub: (CGPoint) -> Void = { loc in
-                    let x = loc.x - plotFrame.origin.x
-                    if let distInUnits: Double = proxy.value(atX: x) {
-                        let dist = distInUnits * metersPerUnit
-                        let maxDistMeters = points.last?.distanceFromStart ?? 0
-                        scrub.distance = max(0, min(dist, maxDistMeters))
-                    }
-                }
-                ZStack(alignment: .topLeading) {
-                    ChartScrubRule(
-                        scrub: scrub,
-                        proxy: proxy,
-                        plotFrame: plotFrame,
-                        metersPerUnit: metersPerUnit)
-                    LongPressScrubOverlay(
-                        onBegan: { loc in
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                scrubActive = true
-                            }
-                            updateScrub(loc)
-                        },
-                        onChanged: updateScrub,
-                        onEnded: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                scrubActive = false
-                            }
-                            scrub.distance = nil
+            .chartXScale(domain: xRange)
+            .chartXAxis {
+                AxisMarks(preset: .aligned, values: xTicks) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
+                    if let v = value.as(Double.self) {
+                        AxisValueLabel(anchor: chartDistanceLabelAnchor(for: v, in: xRange)) {
+                            Text("\(chartDistanceLabel(v)) \(unitLabel)")
+                                .font(.system(size: 9))
                         }
-                    )
+                    }
                 }
             }
-        }
+            .chartYAxis {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
+                    if let v = value.as(Double.self) {
+                        AxisValueLabel(anchor: chartYLabelAnchor(for: v, in: yDomain)) {
+                            Text("\(Int(v)) \(currentUnits.elevation == .feet ? "ft" : "m")")
+                                .font(.system(size: 9))
+                        }
+                    }
+                }
+            }
+            .chartYScale(domain: yDomain)
+            .chartLegend(.hidden)
+            .chartPlotStyle { $0.clipped() }
+            .frame(height: 140)
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    let plotFrame = geo[proxy.plotFrame!]
+                    let updateScrub: (CGPoint) -> Void = { loc in
+                        let x = loc.x - plotFrame.origin.x
+                        if let distInUnits: Double = proxy.value(atX: x) {
+                            let dist = distInUnits * metersPerUnit
+                            scrub.distance = max(domain.lowerBound, min(dist, domain.upperBound))
+                        }
+                    }
+                    ZStack(alignment: .topLeading) {
+                        ChartPinchBand(
+                            scrub: scrub,
+                            proxy: proxy,
+                            plotFrame: plotFrame,
+                            metersPerUnit: metersPerUnit)
+                        ChartScrubRule(
+                            scrub: scrub,
+                            proxy: proxy,
+                            plotFrame: plotFrame,
+                            metersPerUnit: metersPerUnit)
+                        LongPressScrubOverlay(
+                            onBegan: { loc in
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    scrubActive = true
+                                }
+                                updateScrub(loc)
+                            },
+                            onChanged: updateScrub,
+                            onEnded: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    scrubActive = false
+                                }
+                                scrub.distance = nil
+                            },
+                            onPinchChanged: { x1, x2 in
+                                scrub.pinch = chartPinchRange(
+                                    x1, x2, proxy: proxy, plotFrame: plotFrame,
+                                    metersPerUnit: metersPerUnit, domain: domain)
+                            },
+                            onPinchEnded: {
+                                if let range = scrub.pinch,
+                                    range.upperBound - range.lowerBound >= chartMinimumZoomSpan
+                                {
+                                    withAnimation(.easeInOut(duration: 0.3)) { zoom.wrappedValue = range }
+                                }
+                                scrub.pinch = nil
+                            }
+                        )
+                    }
+                }
+            }
 
-        RouteScrubFooter(scrub: scrub, active: scrubActive, points: points)
+            RouteScrubFooter(scrub: scrub, active: scrubActive, points: points)
+        }
+    }
+
+    /// "6.5 mi · ↑ 120 ft ↓ 80 ft" for the zoomed stretch.
+    private func zoomSummary(_ range: ClosedRange<Double>) -> String {
+        let elevations = points
+            .filter { range.contains($0.distanceFromStart) }
+            .compactMap(\.elevation)
+        let (gain, loss) = chartGainLoss(elevations)
+        return "\(formatDistance(range.upperBound - range.lowerBound)) · ↑ \(formatElevation(gain)) ↓ \(formatElevation(loss))"
     }
 
     private func elevationValue(_ meters: Double) -> Double {
@@ -851,7 +1102,7 @@ private struct RouteScrubFooter: View {
     var body: some View {
         let metersPerUnit: Double = currentUnits.distance == .miles ? 1609.34 : 1000
         ZStack {
-            Text("Tap and hold to scrub")
+            Text("Hold to scrub · Pinch to zoom")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .opacity(active ? 0 : 1)
@@ -892,14 +1143,16 @@ private struct RouteScrubFooter: View {
 
 // MARK: - Data Building
 
-func buildRideChartData(from trackURL: URL, segmentCount: Int = 200) -> (
+func buildRideChartData(from trackURL: URL, segmentCount: Int = 1200) -> (
     points: [ChartDataPoint], hasHR: Bool, hasPower: Bool
 ) {
     guard let data = try? Data(contentsOf: trackURL) else { return ([], false, false) }
     return buildRideChartData(points: TrackEncoder.decodeV5Full(data), segmentCount: segmentCount)
 }
 
-func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 200) -> (
+/// About 1200 chunks by default: plenty for a zoomed-in chart, and the chart
+/// only draws ~300 of them at a time.
+func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 1200) -> (
     points: [ChartDataPoint], hasHR: Bool, hasPower: Bool
 ) {
     guard fullPoints.count >= 2 else { return ([], false, false) }
@@ -970,7 +1223,8 @@ func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 20
                 speed: avgSpeed,
                 heartRate: avgHR,
                 power: avgPower,
-                grade: grade
+                grade: grade,
+                time: chunk.last!.timestamp - fullPoints[0].timestamp
             ))
 
         chunkStartDist = chunkEndDist
@@ -1067,6 +1321,20 @@ private func previewScrub(at distance: Double) -> ChartScrubState {
     .padding(.horizontal, 16)
 }
 
+#Preview("Zoomed chart") {
+    @Previewable @State var zoom: ClosedRange<Double>? = 1000...4500
+    let mockData = previewChartData(count: 240, spacing: 25, elevation: previewSteepElevation)
+        .enumerated().map { i, pt in
+            ChartDataPoint(
+                distance: pt.distance, elevation: pt.elevation, speed: 6, heartRate: pt.heartRate,
+                power: pt.power, grade: pt.grade, time: Double(i) * 4)
+        }
+    RideChartsView(
+        dataPoints: mockData, hasHeartRate: true, hasPower: true, scrub: ChartScrubState(),
+        zoom: $zoom)
+        .padding(.horizontal, 16)
+}
+
 #Preview("Grade Readout") {
     let mockData = previewChartData(count: 120, spacing: 50, elevation: previewSteepElevation)
     // Middle of the flat, 8% climb and -8% descent legs.
@@ -1101,8 +1369,9 @@ func buildRouteElevationData(from route: Route) -> [RouteElevationPoint] {
             pts[i].elevation.map { (distances[i], $0) }
         })
 
-    // Downsample for chart performance
-    let target = 300
+    // Enough points that a zoomed chart keeps its detail. The chart draws
+    // ~300 of them at a time.
+    let target = 1500
     let step = max(1, pts.count / target)
     var indices = Array(stride(from: 0, to: pts.count, by: step))
     if indices.last != pts.count - 1 { indices.append(pts.count - 1) }
@@ -1115,5 +1384,46 @@ func buildRouteElevationData(from route: Route) -> [RouteElevationPoint] {
             elevation: pts[i].elevation,
             grade: pts[i].elevation == nil
                 ? 0 : profile.grade(at: distances[i], halfWindow: halfWindow))
+    }
+}
+
+/// "1:05:30" or "24:10".
+func formatChartDuration(_ seconds: Double) -> String {
+    let total = Int(seconds.rounded())
+    let h = total / 3600, m = (total % 3600) / 60, sec = total % 60
+    return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
+}
+
+/// The zoomed stretch on a map: a white-cased line with A and B at its ends.
+/// Samples the track through `coordinateAt`, so it follows curves.
+struct ChartZoomMapHighlight: MapContent {
+    let range: ClosedRange<Double>
+    let coordinateAt: (Double) -> CLLocationCoordinate2D?
+
+    var body: some MapContent {
+        let samples = 120
+        let step = (range.upperBound - range.lowerBound) / Double(samples)
+        let coords = (0...samples).compactMap { coordinateAt(range.lowerBound + Double($0) * step) }
+        if coords.count >= 2 {
+            MapPolyline(coordinates: coords)
+                .stroke(.white, style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
+            MapPolyline(coordinates: coords)
+                .stroke(.black, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+            Annotation("", coordinate: coords[0]) { ChartZoomPin(letter: "A") }
+            Annotation("", coordinate: coords[coords.count - 1]) { ChartZoomPin(letter: "B") }
+        }
+    }
+}
+
+private struct ChartZoomPin: View {
+    let letter: String
+
+    var body: some View {
+        Text(letter)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.white)
+            .frame(width: 20, height: 20)
+            .background(Circle().fill(.black))
+            .overlay(Circle().stroke(.white, lineWidth: 2))
     }
 }
