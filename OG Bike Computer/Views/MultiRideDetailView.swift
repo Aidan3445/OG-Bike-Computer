@@ -3,19 +3,22 @@
 //  OG Bike Computer
 //
 
-import SwiftUI
-import MapKit
 import CoreLocation
+import MapKit
+import SwiftUI
 
 struct MultiRideDetailView: View {
-    let rides: [RideSummary]   // ordered as the user selected
+    let rides: [RideSummary]  // oldest first
     let rideStore: RideStore
     @ObservedObject private var unitState = UnitState.shared
     @Environment(\.dismiss) private var dismiss
 
     enum PanelState { case collapsed, compact, expanded }
 
-    static let segmentColors: [Color] = [.blue, .yellow, .indigo, .orange, .green, .red]
+    /// Kept clear of the chart metric colors (green elevation, blue speed,
+    /// red heart rate, orange power), which the scrub line takes on, so
+    /// scrubbing and the ride split lines stay readable.
+    static let segmentColors: [Color] = [.purple, .yellow, .pink, .teal, .brown, .indigo]
     /// Connector gap below which we skip the grey link and just extend the
     /// previous ride's color over to the next start.
     private static let closeConnectorMeters: Double = 75
@@ -55,6 +58,10 @@ struct MultiRideDetailView: View {
     struct RideRender: Identifiable {
         let id: UUID
         let coords: [CLLocationCoordinate2D]
+        /// Distance along this ride at each coordinate, matching the chart's.
+        let cumulativeDistances: [Double]
+        /// Where this ride starts on the combined chart.
+        let startDistance: Double
         let color: Color
         let stat: SegmentStat
     }
@@ -69,7 +76,7 @@ struct MultiRideDetailView: View {
 
     struct SegmentStat {
         let name: String
-        let distance: Double           // meters
+        let distance: Double  // meters
         let movingTime: TimeInterval
         let elapsedTime: TimeInterval
         let elevationGain: Double
@@ -81,46 +88,58 @@ struct MultiRideDetailView: View {
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             if isOnScreen {
-            Map(position: $mapPosition, bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)) {
-                ForEach(renders) { r in
-                    MapPolyline(coordinates: r.coords)
-                        .stroke(r.color, lineWidth: 4)
-                }
-                ForEach(connectors) { c in
-                    if c.dashed {
-                        MapPolyline(coordinates: [c.from, c.to])
-                            .stroke(c.color, style: StrokeStyle(lineWidth: 3, dash: [6, 4]))
-                    } else {
-                        MapPolyline(coordinates: [c.from, c.to])
-                            .stroke(c.color, lineWidth: 4)
-                    }
-                }
+                MapReader { mapProxy in
+                    Map(
+                        position: $mapPosition,
+                        bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)
+                    ) {
+                        ForEach(renders) { r in
+                            MapPolyline(coordinates: r.coords)
+                                .stroke(r.color, lineWidth: 4)
+                        }
+                        ForEach(connectors) { c in
+                            if c.dashed {
+                                MapPolyline(coordinates: [c.from, c.to])
+                                    .stroke(
+                                        c.color, style: StrokeStyle(lineWidth: 3, dash: [6, 4]))
+                            } else {
+                                MapPolyline(coordinates: [c.from, c.to])
+                                    .stroke(c.color, lineWidth: 4)
+                            }
+                        }
 
-                if let first = renders.first, let coord = first.coords.first {
-                    Annotation("Start", coordinate: coord) {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                        if let first = renders.first, let coord = first.coords.first {
+                            Annotation("Start", coordinate: coord) {
+                                Circle()
+                                    .fill(.green)
+                                    .frame(width: 14, height: 14)
+                                    .overlay(Circle().stroke(.white, lineWidth: 2))
+                            }
+                        }
+                        if let last = renders.last, let coord = last.coords.last {
+                            Annotation("End", coordinate: coord) {
+                                Circle()
+                                    .fill(.red)
+                                    .frame(width: 14, height: 14)
+                                    .overlay(Circle().stroke(.white, lineWidth: 2))
+                            }
+                        }
                     }
-                }
-                if let last = renders.last, let coord = last.coords.last {
-                    Annotation("End", coordinate: coord) {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                    .mapStyle(.standard(elevation: .flat))
+                    .mapControls {
+                        MapCompass()
+                        MapScaleView()
                     }
-                }
-            }
-            .mapStyle(.standard(elevation: .flat))
-            .mapControls {
-                MapCompass()
-                MapScaleView()
-            }
-            .onMapCameraChange(frequency: .onEnd) { context in
-                MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
-            }
+                    .onMapCameraChange(frequency: .onEnd) { context in
+                        MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+                    }
+                    .overlay {
+                        MapScrubDot(
+                            scrub: scrubState,
+                            proxy: mapProxy,
+                            coordinateFor: coordinate(atCombinedDistance:))
+                    }
+                }  // end: MapReader
             } else {
                 Color(.systemBackground)
             }
@@ -165,18 +184,24 @@ struct MultiRideDetailView: View {
                 ShareSheet(activityItems: [url])
             }
         }
-        .alert("Upload Error", isPresented: .init(
-            get: { uploadError != nil },
-            set: { if !$0 { uploadError = nil } }
-        )) {
+        .alert(
+            "Upload Error",
+            isPresented: .init(
+                get: { uploadError != nil },
+                set: { if !$0 { uploadError = nil } }
+            )
+        ) {
             Button("OK") { uploadError = nil }
         } message: {
             Text(uploadError ?? "")
         }
-        .alert("Uploaded to Strava", isPresented: .init(
-            get: { uploadedWebURL != nil },
-            set: { if !$0 { uploadedWebURL = nil } }
-        )) {
+        .alert(
+            "Uploaded to Strava",
+            isPresented: .init(
+                get: { uploadedWebURL != nil },
+                set: { if !$0 { uploadedWebURL = nil } }
+            )
+        ) {
             if let urlString = uploadedWebURL, let url = URL(string: urlString) {
                 Link("View on Strava", destination: url)
             }
@@ -271,14 +296,14 @@ struct MultiRideDetailView: View {
                             if value.translation.height > 0 {
                                 switch panelState {
                                 case .expanded: panelState = .compact
-                                case .compact:  panelState = .collapsed
+                                case .compact: panelState = .collapsed
                                 case .collapsed: break
                                 }
                             } else {
                                 switch panelState {
                                 case .collapsed: panelState = .compact
-                                case .compact:   panelState = .expanded
-                                case .expanded:  break
+                                case .compact: panelState = .expanded
+                                case .expanded: break
                                 }
                             }
                         }
@@ -348,14 +373,31 @@ struct MultiRideDetailView: View {
             let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
             LazyVGrid(columns: columns, spacing: 10) {
                 MultiStatItem(label: "Segments", value: "\(segs.count)")
-                MultiStatItem(label: "Avg Length", value: segs.isEmpty ? "—" : formatDistance(segs.map(\.distance).reduce(0, +) / Double(segs.count)))
-                MultiStatItem(label: "Avg Time", value: segs.isEmpty ? "—" : formatTime(segs.map(\.movingTime).reduce(0, +) / Double(segs.count)))
+                MultiStatItem(
+                    label: "Avg Length",
+                    value: segs.isEmpty
+                        ? "—"
+                        : formatDistance(segs.map(\.distance).reduce(0, +) / Double(segs.count)))
+                MultiStatItem(
+                    label: "Avg Time",
+                    value: segs.isEmpty
+                        ? "—" : formatTime(segs.map(\.movingTime).reduce(0, +) / Double(segs.count))
+                )
             }
             Divider()
             LazyVGrid(columns: columns, spacing: 10) {
-                MultiStatItem(label: "Avg Elev Gain", value: segs.isEmpty ? "—" : formatElevation(segs.map(\.elevationGain).reduce(0, +) / Double(segs.count)))
-                MultiStatItem(label: "Longest", value: segs.map(\.distance).max().map { formatDistance($0) } ?? "—")
-                MultiStatItem(label: "Shortest", value: segs.map(\.distance).min().map { formatDistance($0) } ?? "—")
+                MultiStatItem(
+                    label: "Avg Elev Gain",
+                    value: segs.isEmpty
+                        ? "—"
+                        : formatElevation(
+                            segs.map(\.elevationGain).reduce(0, +) / Double(segs.count)))
+                MultiStatItem(
+                    label: "Longest",
+                    value: segs.map(\.distance).max().map { formatDistance($0) } ?? "—")
+                MultiStatItem(
+                    label: "Shortest",
+                    value: segs.map(\.distance).min().map { formatDistance($0) } ?? "—")
             }
 
             if panelState == .expanded {
@@ -408,7 +450,10 @@ struct MultiRideDetailView: View {
                     dataPoints: combinedChart,
                     hasHeartRate: chartHasHR,
                     hasPower: chartHasPower,
-                    scrub: scrubState
+                    scrub: scrubState,
+                    splits: renders.dropFirst().map {
+                        ChartSplit(distance: $0.startDistance, color: $0.color)
+                    }
                 )
             } else {
                 Text("No chart data")
@@ -424,9 +469,9 @@ struct MultiRideDetailView: View {
 
     private var hasExtendedStats: Bool {
         rides.contains { r in
-            r.maxSpeed != nil || r.avgPower != nil || r.maxPower != nil ||
-            r.avgHeartRate != nil || r.maxHeartRate != nil ||
-            r.highestElevation != nil || r.lowestElevation != nil || r.calories > 0
+            r.maxSpeed != nil || r.avgPower != nil || r.maxPower != nil || r.avgHeartRate != nil
+                || r.maxHeartRate != nil || r.highestElevation != nil || r.lowestElevation != nil
+                || r.calories > 0
         }
     }
 
@@ -498,8 +543,33 @@ struct MultiRideDetailView: View {
     // MARK: - Cache build
 
     /// Background load — each ride's track publishes as soon as it decodes,
-    /// so lines appear progressively instead of blocking the push animation
-    /// on decoding every selected ride.
+    /// so lines appear progressively
+
+    /// Track coordinate for a distance on the combined chart.
+    private func coordinate(atCombinedDistance distance: Double) -> CLLocationCoordinate2D? {
+        guard let render = renders.last(where: { $0.startDistance <= distance }) ?? renders.first
+        else { return nil }
+        let cum = render.cumulativeDistances
+        guard cum.count >= 2, cum.count == render.coords.count else { return render.coords.first }
+        let target = distance - render.startDistance
+        guard target > 0 else { return render.coords.first }
+        guard target < cum[cum.count - 1] else { return render.coords.last }
+
+        var lo = 0
+        var hi = cum.count - 1
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2
+            if cum[mid] < target { lo = mid } else { hi = mid }
+        }
+        let span = cum[hi] - cum[lo]
+        let t = span > 0 ? (target - cum[lo]) / span : 0
+        let a = render.coords[lo]
+        let b = render.coords[hi]
+        return CLLocationCoordinate2D(
+            latitude: a.latitude + (b.latitude - a.latitude) * t,
+            longitude: a.longitude + (b.longitude - a.longitude) * t)
+    }
+
     private func loadRides() async {
         let hadCachedCamera = MapCameraCache.shared.camera(for: cameraCacheKey) != nil
         var distOffset: Double = 0
@@ -508,14 +578,28 @@ struct MultiRideDetailView: View {
             let color = Self.segmentColors[idx % Self.segmentColors.count]
             let url = rideStore.trackURL(for: ride)
 
-            let loaded = await Task.detached(priority: .userInitiated) { () -> ([CLLocationCoordinate2D], (points: [ChartDataPoint], hasHR: Bool, hasPower: Bool))? in
+            let loaded = await Task.detached(priority: .userInitiated) {
+                () -> (
+                    [CLLocationCoordinate2D], [Double],
+                    (points: [ChartDataPoint], hasHR: Bool, hasPower: Bool)
+                )? in
                 guard let data = try? Data(contentsOf: url) else { return nil }
                 let pts = TrackEncoder.decodeV5Full(data)
                 guard pts.count >= 2 else { return nil }
                 let coords = pts.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
-                return (coords, buildRideChartData(points: pts))
+                var cumulative = [Double](repeating: 0, count: coords.count)
+                for i in 1..<coords.count {
+                    cumulative[i] =
+                        cumulative[i - 1]
+                        + CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
+                        .distance(
+                            from: CLLocation(
+                                latitude: coords[i - 1].latitude, longitude: coords[i - 1].longitude
+                            ))
+                }
+                return (coords, cumulative, buildRideChartData(points: pts))
             }.value
-            guard let (coords, chart) = loaded else { continue }
+            guard let (coords, cumulative, chart) = loaded else { continue }
 
             let stat = SegmentStat(
                 name: ride.name,
@@ -529,39 +613,49 @@ struct MultiRideDetailView: View {
 
             // Connector from previous render's end to this start
             if let prev = renders.last,
-               let prevEnd = prev.coords.last,
-               let thisStart = coords.first {
+                let prevEnd = prev.coords.last,
+                let thisStart = coords.first
+            {
                 let gap = CLLocation(latitude: prevEnd.latitude, longitude: prevEnd.longitude)
-                    .distance(from: CLLocation(latitude: thisStart.latitude, longitude: thisStart.longitude))
+                    .distance(
+                        from: CLLocation(
+                            latitude: thisStart.latitude, longitude: thisStart.longitude))
                 if gap < Self.closeConnectorMeters {
                     // Extend the previous ride's color directly over to the next start.
-                    connectors.append(Connector(from: prevEnd, to: thisStart, color: prev.color, dashed: false))
+                    connectors.append(
+                        Connector(from: prevEnd, to: thisStart, color: prev.color, dashed: false))
                 } else {
-                    connectors.append(Connector(from: prevEnd, to: thisStart, color: .gray, dashed: true))
+                    connectors.append(
+                        Connector(from: prevEnd, to: thisStart, color: .gray, dashed: true))
                 }
             }
 
-            renders.append(RideRender(id: ride.id, coords: coords, color: color, stat: stat))
+            renders.append(
+                RideRender(
+                    id: ride.id, coords: coords, cumulativeDistances: cumulative,
+                    startDistance: distOffset, color: color, stat: stat))
 
             // Combined chart — append with running offset
             if chart.hasHR { chartHasHR = true }
             if chart.hasPower { chartHasPower = true }
             for pt in chart.points {
-                combinedChart.append(ChartDataPoint(
-                    distance: pt.distance + distOffset,
-                    elevation: pt.elevation,
-                    speed: pt.speed,
-                    heartRate: pt.heartRate,
-                    power: pt.power,
-                    grade: pt.grade))
+                combinedChart.append(
+                    ChartDataPoint(
+                        distance: pt.distance + distOffset,
+                        elevation: pt.elevation,
+                        speed: pt.speed,
+                        heartRate: pt.heartRate,
+                        power: pt.power,
+                        grade: pt.grade))
             }
-            if let last = chart.points.last { distOffset += last.distance }
+            distOffset += cumulative.last ?? 0
         }
 
         // Fit camera to the union of all coordinates — unless the user
         // already has a remembered camera for this selection.
         if !hadCachedCamera,
-           let region = fittingRegion(for: renders.flatMap(\.coords)) {
+            let region = fittingRegion(for: renders.flatMap(\.coords))
+        {
             mapPosition = .region(region)
         }
     }
@@ -605,11 +699,15 @@ struct MultiRideDetailView: View {
 
     private func fittingRegion(for coords: [CLLocationCoordinate2D]) -> MKCoordinateRegion? {
         guard !coords.isEmpty else { return nil }
-        var minLat = coords[0].latitude, maxLat = coords[0].latitude
-        var minLon = coords[0].longitude, maxLon = coords[0].longitude
+        var minLat = coords[0].latitude
+        var maxLat = coords[0].latitude
+        var minLon = coords[0].longitude
+        var maxLon = coords[0].longitude
         for c in coords {
-            minLat = min(minLat, c.latitude); maxLat = max(maxLat, c.latitude)
-            minLon = min(minLon, c.longitude); maxLon = max(maxLon, c.longitude)
+            minLat = min(minLat, c.latitude)
+            maxLat = max(maxLat, c.latitude)
+            minLon = min(minLon, c.longitude)
+            maxLon = max(maxLon, c.longitude)
         }
         let center = CLLocationCoordinate2D(
             latitude: (minLat + maxLat) / 2,

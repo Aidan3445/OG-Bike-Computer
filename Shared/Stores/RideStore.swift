@@ -5,9 +5,9 @@
 //  Created by Aidan Weinberg on 3/1/26.
 //
 
-import Foundation
-import CoreLocation
 import Combine
+import CoreLocation
+import Foundation
 import os
 
 private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "RideStore")
@@ -94,8 +94,10 @@ class RideStore: ObservableObject {
     }
 
     var storageSize: Int64 {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        guard
+            let files = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.fileSizeKey])
+        else { return 0 }
         return files.reduce(0) { total, url in
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
             return total + Int64(size)
@@ -149,23 +151,7 @@ class RideStore: ObservableObject {
     ///
     /// Synchronous and disk-bound — call off the main thread for large batches.
     func exportZipGPX(rides: [RideSummary]) -> URL? {
-        guard !rides.isEmpty else { return nil }
-
-        let fm = FileManager.default
-        let folderName = "Computa_Rides_\(GPXExporter.datePrefix(Date()))"
-        let stagingDir = fm.temporaryDirectory.appendingPathComponent(folderName, isDirectory: true)
-
-        try? fm.removeItem(at: stagingDir)
-        do {
-            try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-        } catch {
-            logger.log("[RideStore] zip staging dir error: \(error.localizedDescription)")
-            return nil
-        }
-
-        var usedNames: Set<String> = []
-        var wrote = 0
-
+        var files: [(name: String, data: Data)] = []
         for ride in rides {
             let trackURL = directory.appendingPathComponent(ride.trackFilename)
             guard let data = try? Data(contentsOf: trackURL) else { continue }
@@ -191,65 +177,26 @@ class RideStore: ObservableObject {
                 activityType: ride.activityType.rawValue,
                 pointExtras: extras)
             guard let gpxData = gpx.data(using: .utf8) else { continue }
-
-            let baseName = GPXExporter.fileName(name: ride.name, date: ride.date)
-            var fileName = baseName
-            var dedupe = 2
-            while usedNames.contains(fileName) {
-                fileName = baseName.replacingOccurrences(of: ".gpx", with: "_\(dedupe).gpx")
-                dedupe += 1
-            }
-            usedNames.insert(fileName)
-
-            do {
-                try gpxData.write(to: stagingDir.appendingPathComponent(fileName))
-                wrote += 1
-            } catch {
-                logger.log("[RideStore] zip write error for \(ride.name): \(error.localizedDescription)")
-            }
+            files.append((GPXExporter.fileName(name: ride.name, date: ride.date), gpxData))
         }
-
-        guard wrote > 0 else {
-            try? fm.removeItem(at: stagingDir)
-            return nil
+        let url = GPXExporter.zip(
+            files, folderName: "Computa_Rides_\(GPXExporter.datePrefix(Date()))")
+        if let url {
+            logger.log(
+                "[RideStore] exported zip with \(files.count) rides → \(url.lastPathComponent)")
         }
-
-        // NSFileCoordinator with .forUploading zips the directory into a
-        // temp file that's only valid inside the closure — copy it to a
-        // stable temp location with our preferred filename before returning.
-        let finalURL = fm.temporaryDirectory.appendingPathComponent("\(folderName).zip")
-        try? fm.removeItem(at: finalURL)
-
-        let coordinator = NSFileCoordinator()
-        var coordError: NSError?
-        var didCopy = false
-        coordinator.coordinate(readingItemAt: stagingDir, options: [.forUploading], error: &coordError) { tempZipURL in
-            do {
-                try fm.copyItem(at: tempZipURL, to: finalURL)
-                didCopy = true
-            } catch {
-                logger.log("[RideStore] zip copy error: \(error.localizedDescription)")
-            }
-        }
-        try? fm.removeItem(at: stagingDir)
-
-        if let err = coordError {
-            logger.log("[RideStore] zip coordinator error: \(err)")
-            return nil
-        }
-        guard didCopy else { return nil }
-        logger.log("[RideStore] exported zip with \(wrote) rides → \(finalURL.lastPathComponent)")
-        return finalURL
+        return url
     }
 
     /// Combined GPX of multiple rides — one `<trkseg>` per ride, preserving
     /// each ride's real timestamps so the gaps between rides are visible to
-    /// downstream tools.
+    /// downstream tools. Segments always go oldest first: Strava rejects a
+    /// track whose times run backwards.
     func exportCombinedGPX(rides: [RideSummary], combinedName: String? = nil) -> URL? {
         guard !rides.isEmpty else { return nil }
 
         var segments: [GPXExporter.Segment] = []
-        for ride in rides {
+        for ride in rides.sorted(by: { $0.date < $1.date }) {
             let url = directory.appendingPathComponent(ride.trackFilename)
             guard let data = try? Data(contentsOf: url) else { continue }
             let pts = TrackEncoder.decodeV5Full(data)
@@ -267,7 +214,8 @@ class RideStore: ObservableObject {
                     power: pt.power > 0 ? pt.power : nil,
                     heartRate: pt.heartRate > 0 ? pt.heartRate : nil)
             }
-            segments.append(GPXExporter.Segment(name: ride.name, locations: locations, pointExtras: extras))
+            segments.append(
+                GPXExporter.Segment(name: ride.name, locations: locations, pointExtras: extras))
         }
         guard !segments.isEmpty else { return nil }
 
@@ -289,16 +237,20 @@ class RideStore: ObservableObject {
     }
 
     func loadAll() {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil) else {
+        guard
+            let files = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil)
+        else {
             logger.log("[RideStore] loadAll: could not list directory")
             return
         }
 
         let jsonFiles = files.filter { $0.pathExtension == "json" }
-        logger.log("[RideStore] loadAll: found \(jsonFiles.count) JSON files, \(files.count) total files")
+        logger.log(
+            "[RideStore] loadAll: found \(jsonFiles.count) JSON files, \(files.count) total files")
 
-        rides = jsonFiles
+        rides =
+            jsonFiles
             .compactMap { url in
                 guard let data = try? Data(contentsOf: url) else {
                     logger.log("[RideStore] loadAll: could not read \(url.lastPathComponent)")
@@ -335,13 +287,17 @@ class RideStore: ObservableObject {
         for ride in rides {
             let trackExists = FileManager.default.fileExists(
                 atPath: directory.appendingPathComponent(ride.trackFilename).path)
-            logger.log("[RideStore]   • \(ride.name) | \(ride.date) | track: \(trackExists ? "✓" : "✗ MISSING")")
+            logger.log(
+                "[RideStore]   • \(ride.name) | \(ride.date) | track: \(trackExists ? "✓" : "✗ MISSING")"
+            )
         }
     }
 
     func printDiskContents() {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.fileSizeKey]) else {
+        guard
+            let files = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.fileSizeKey])
+        else {
             logger.log("[RideStore] printDiskContents: directory empty or unreadable")
             return
         }

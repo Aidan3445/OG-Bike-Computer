@@ -5,10 +5,10 @@
 //  Created by Aidan Weinberg on 3/2/26.
 //
 
-import SwiftUI
-import MapKit
-import CoreLocation
 import Charts
+import CoreLocation
+import MapKit
+import SwiftUI
 
 struct RouteDetailView: View {
     let route: Route
@@ -34,6 +34,10 @@ struct RouteDetailView: View {
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var panelState: PanelState = .collapsed
     @State private var showOverwriteAlert = false
+    @State private var isExportingGPX = false
+    @State private var showPhoneSettings = false
+    @AppStorage(PhoneSettingsKeys.gradeColors) private var showGradeColors = true
+    @State private var gpxExport: GPXExportFile?
 
     // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
     @State private var cachedCoordinates: [CLLocationCoordinate2D] = []
@@ -91,327 +95,378 @@ struct RouteDetailView: View {
     var body: some View {
         let _ = unitState.preferences
         GeometryReader { proxy in
-        ZStack(alignment: .bottom) {
-            if isOnScreen {
-            MapReader { mapProxy in
-            Map(position: $mapPosition, bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)) {
-                // Route polyline
-                MapPolyline(coordinates: cachedCoordinates)
-                    .stroke(.blue, lineWidth: 4)
+            ZStack(alignment: .bottom) {
+                if isOnScreen {
+                    MapReader { mapProxy in
+                        Map(
+                            position: $mapPosition,
+                            bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)
+                        ) {
+                            // Route polyline
+                            MapPolyline(coordinates: cachedCoordinates)
+                                .stroke(.blue, lineWidth: 4)
 
-                // In-progress recording breadcrumb, above the route
-                if recordingPath.count >= 2 {
-                    MapPolyline(coordinates: recordingPath)
-                        .stroke(.purple.opacity(0.65), lineWidth: 4)
-                }
-
-                // Start marker
-                if let first = cachedCoordinates.first {
-                    Annotation("Start", coordinate: first) {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
-                    }
-                }
-
-                // End marker
-                if let last = cachedCoordinates.last {
-                    Annotation("End", coordinate: last) {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
-                    }
-                }
-
-                // Cue Editor map content (highlight overlay, turn pins,
-                // waypoint pins). Extracted so the body's @MapContentBuilder
-                // stays small enough for Swift's type-checker.
-                if isEditingCues, let editor = cueEditorHolder.viewModel {
-                    cueEditorMapContent(editor: editor)
-                }
-
-                // Elevation markers
-                if let peaks = cachedElevationExtremes {
-                    if let highElev = peaks.high.elevation {
-                        Annotation("", coordinate: peaks.high.coordinate) {
-                            VStack(spacing: 2) {
-                                Text(formatElevation(highElev))
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 2)
-                                    .background(.orange)
-                                    .clipShape(Capsule())
-                                    .opacity(0.5)
-                                Image(systemName: "triangle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.orange)
-                                    .opacity(0.5)
+                            // In-progress recording breadcrumb, above the route
+                            if recordingPath.count >= 2 {
+                                MapPolyline(coordinates: recordingPath)
+                                    .stroke(.purple.opacity(0.65), lineWidth: 4)
                             }
-                        }
-                    }
 
-                    if let lowElev = peaks.low.elevation {
-                        Annotation("", coordinate: peaks.low.coordinate) {
-                            VStack(spacing: 2) {
-                                Image(systemName: "triangle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.cyan)
-                                    .rotationEffect(.degrees(180))
-                                    .opacity(0.5)
-                                Text(formatElevation(lowElev))
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 2)
-                                    .background(.cyan)
-                                    .clipShape(Capsule())
-                                    .opacity(0.5)
-                            }
-                        }
-                    }
-                }
-
-                // Mile markers: label is a static capsule at the marker
-                // position; the direction arrow is a separate annotation
-                // halfway-along-route to the next marker (snapped to a track
-                // point) so only the arrow re-renders on camera rotation.
-                // Filtered to the visible region (with padding) so a 600-mile
-                // route doesn't render all ~1200 markers at once.
-                ForEach(visibleMileMarkers, id: \.offset) { _, marker in
-                    Annotation("", coordinate: marker.coordinate) {
-                        MileMarkerLabel(
-                            mile: marker.mile,
-                            unitLabel: currentUnits.distance.label)
-                    }
-                    if let arrowCoord = marker.arrowCoordinate,
-                       inVisibleRegion(arrowCoord) {
-                        Annotation("", coordinate: arrowCoord) {
-                            MileMarkerArrow(
-                                camera: cameraState,
-                                worldBearing: marker.bearingDegrees)
-                        }
-                    }
-                }
-
-                // Waypoints / POIs — including user edits + user-added POIs
-                // from the latest persisted overlay, so a waypoint dropped via
-                // the Cue Editor shows up here too. Region-filtered and
-                // proximity-clustered so POI-heavy routes don't render every
-                // pin individually when zoomed out. Clusters re-use the
-                // WaypointPin glyph with stacked copies behind it so the
-                // visual stays consistent with single pins.
-                let poiClusters = clusterAnnotations(
-                    displayedPOIs.filter { inVisibleRegion($0.coordinate) },
-                    coordinate: { $0.coordinate })
-                ForEach(poiClusters) { cluster in
-                    if cluster.items.count == 1 {
-                        let poi = cluster.items[0]
-                        Annotation(poi.name, coordinate: poi.coordinate) {
-                            WaypointPin()
-                                .onTapGesture { zoomMapToPOI(poi.coordinate) }
-                        }
-                    } else {
-                        Annotation("", coordinate: cluster.center) {
-                            WaypointPinCluster(count: cluster.items.count)
-                                .onTapGesture {
-                                    zoomToCoordinates(cluster.items.map { $0.coordinate })
-                                }
-                        }
-                    }
-                }
-
-                // Current location
-                UserAnnotation()
-            }
-            .mapStyle(.standard(elevation: .flat))
-            .mapControls {
-                MapUserLocationButton()
-                MapCompass()
-                MapScaleView()
-            }
-            // Two camera handlers: continuous keeps the arrow/chevron
-            // counter-rotation responsive without invalidating the Map body
-            // every frame, while .onEnd handles the heavier work (re-bucketing
-            // the marker interval, snapshotting the visible region, capturing
-            // the camera for tab-switch restore).
-            .onMapCameraChange(frequency: .continuous) { context in
-                cameraState.heading = context.camera.heading
-                // Seed the visible region on first camera frame so the initial
-                // render is already filtered — .onEnd doesn't fire until the
-                // user actually interacts with the map.
-                if visibleRegion == nil {
-                    visibleRegion = context.region
-                    MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
-                    updateMarkerInterval(for: context.region)
-                }
-                if cueFraming.cameraDistanceScale == nil {
-                    calibrateCameraScale(context, proxy: mapProxy)
-                }
-            }
-            .onMapCameraChange(frequency: .onEnd) { context in
-                handleCameraChange(context)
-                calibrateCameraScale(context, proxy: mapProxy)
-            }
-            // Forward map taps to the editor view-model while a placement
-            // mode is active. SpatialTapGesture exposes the local point so we
-            // can ask MapKit to convert it into a real-world coordinate.
-            .gesture(
-                SpatialTapGesture().onEnded { event in
-                    guard isEditingCues, let editor = cueEditorHolder.viewModel else { return }
-                    guard editor.placementMode != .none else { return }
-                    if let coord = mapProxy.convert(event.location, from: .local) {
-                        editor.handleMapTap(at: coord)
-                    }
-                }
-            )
-            .overlay {
-                MapScrubDot(
-                    scrub: scrubState,
-                    proxy: mapProxy,
-                    coordinateFor: interpolateRouteCoordinate)
-            }
-            }  // end: MapReader
-            } else {
-                // Map is unmounted while the tab is hidden — keep the same
-                // backdrop so re-appearing doesn't flash white.
-                Color(.systemBackground)
-            }
-
-            // Editor panel takes over while in cue-editor mode
-            if isEditingCues, let editor = cueEditorHolder.viewModel {
-                VStack(spacing: 0) {
-                    Spacer()
-                    CueEditorPanel(viewModel: editor, availableHeight: proxy.size.height)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                            cueFraming.panelHeight = $0
-                        }
-                }
-            } else {
-            // Stats overlay — collapsed (button) ↔ compact (stats)
-            VStack(spacing: 0) {
-                Spacer()
-
-                VStack(spacing: 6) {
-                    if panelState != .collapsed {
-                        Capsule()
-                            .fill(.secondary)
-                            .frame(width: 36, height: 4)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 30)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                    panelState = .collapsed
+                            // Start marker
+                            if let first = cachedCoordinates.first {
+                                Annotation("Start", coordinate: first) {
+                                    Circle()
+                                        .fill(.green)
+                                        .frame(width: 14, height: 14)
+                                        .overlay(Circle().stroke(.white, lineWidth: 2))
                                 }
                             }
-                            .gesture(
-                                DragGesture(minimumDistance: 10)
-                                    .onEnded { value in
-                                        guard abs(value.translation.height) > 10 else { return }
-                                        let skipsCompact = (panelPage == 1)
-                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                            if value.translation.height > 0 {
-                                                switch panelState {
-                                                case .expanded: panelState = skipsCompact ? .collapsed : .compact
-                                                case .compact: panelState = .collapsed
-                                                case .collapsed: break
-                                                }
-                                            } else {
-                                                switch panelState {
-                                                case .collapsed: panelState = skipsCompact ? .expanded : .compact
-                                                case .compact: panelState = .expanded
-                                                case .expanded: break
-                                                }
-                                            }
+
+                            // End marker
+                            if let last = cachedCoordinates.last {
+                                Annotation("End", coordinate: last) {
+                                    Circle()
+                                        .fill(.red)
+                                        .frame(width: 14, height: 14)
+                                        .overlay(Circle().stroke(.white, lineWidth: 2))
+                                }
+                            }
+
+                            // Cue Editor map content (highlight overlay, turn pins,
+                            // waypoint pins). Extracted so the body's @MapContentBuilder
+                            // stays small enough for Swift's type-checker.
+                            if isEditingCues, let editor = cueEditorHolder.viewModel {
+                                cueEditorMapContent(editor: editor)
+                            }
+
+                            // Elevation markers
+                            if let peaks = cachedElevationExtremes {
+                                if let highElev = peaks.high.elevation {
+                                    Annotation("", coordinate: peaks.high.coordinate) {
+                                        VStack(spacing: 2) {
+                                            Text(formatElevation(highElev))
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 2)
+                                                .background(.orange)
+                                                .clipShape(Capsule())
+                                                .opacity(0.5)
+                                            Image(systemName: "triangle.fill")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.orange)
+                                                .opacity(0.5)
                                         }
                                     }
-                            )
+                                }
 
-                        TabView(selection: $panelPage) {
-                            // Page 0: Stats
-                            VStack {
-                                LazyVGrid(columns: [
-                                    GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
-                                ], spacing: 10) {
-                                    StatItem(label: "Distance", value: formatDistance(route.distance))
-                                    if route.elevationGain > 0 {
-                                        StatItem(label: "Elev Gain", value: formatElevation(route.elevationGain))
+                                if let lowElev = peaks.low.elevation {
+                                    Annotation("", coordinate: peaks.low.coordinate) {
+                                        VStack(spacing: 2) {
+                                            Image(systemName: "triangle.fill")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.cyan)
+                                                .rotationEffect(.degrees(180))
+                                                .opacity(0.5)
+                                            Text(formatElevation(lowElev))
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 2)
+                                                .background(.cyan)
+                                                .clipShape(Capsule())
+                                                .opacity(0.5)
+                                        }
                                     }
-                                    if route.elevationLoss > 0 {
-                                        StatItem(label: "Elev Loss", value: formatElevation(route.elevationLoss))
+                                }
+                            }
+
+                            // Mile markers: label is a static capsule at the marker
+                            // position; the direction arrow is a separate annotation
+                            // halfway-along-route to the next marker (snapped to a track
+                            // point) so only the arrow re-renders on camera rotation.
+                            // Filtered to the visible region (with padding) so a 600-mile
+                            // route doesn't render all ~1200 markers at once.
+                            ForEach(visibleMileMarkers, id: \.offset) { _, marker in
+                                Annotation("", coordinate: marker.coordinate) {
+                                    MileMarkerLabel(
+                                        mile: marker.mile,
+                                        unitLabel: currentUnits.distance.label)
+                                }
+                                if let arrowCoord = marker.arrowCoordinate,
+                                    inVisibleRegion(arrowCoord)
+                                {
+                                    Annotation("", coordinate: arrowCoord) {
+                                        MileMarkerArrow(
+                                            camera: cameraState,
+                                            worldBearing: marker.bearingDegrees)
                                     }
                                 }
-                                Spacer(minLength: 0)
                             }
-                            .tag(0)
 
-                            // Page 1: Elevation Chart
-                            if !cachedElevationData.isEmpty {
-                                VStack {
-                                    RouteElevationChartView(points: cachedElevationData, scrub: scrubState)
-                                    Spacer(minLength: 0)
+                            // Waypoints / POIs — including user edits + user-added POIs
+                            // from the latest persisted overlay, so a waypoint dropped via
+                            // the Cue Editor shows up here too. Region-filtered and
+                            // proximity-clustered so POI-heavy routes don't render every
+                            // pin individually when zoomed out. Clusters re-use the
+                            // WaypointPin glyph with stacked copies behind it so the
+                            // visual stays consistent with single pins.
+                            let poiClusters = clusterAnnotations(
+                                displayedPOIs.filter { inVisibleRegion($0.coordinate) },
+                                coordinate: { $0.coordinate })
+                            ForEach(poiClusters) { cluster in
+                                if cluster.items.count == 1 {
+                                    let poi = cluster.items[0]
+                                    Annotation(poi.name, coordinate: poi.coordinate) {
+                                        WaypointPin()
+                                            .onTapGesture { zoomMapToPOI(poi.coordinate) }
+                                    }
+                                } else {
+                                    Annotation("", coordinate: cluster.center) {
+                                        WaypointPinCluster(count: cluster.items.count)
+                                            .onTapGesture {
+                                                zoomToCoordinates(
+                                                    cluster.items.map { $0.coordinate })
+                                            }
+                                    }
                                 }
-                                .tag(1)
                             }
-                        }
-                        .tabViewStyle(.page(indexDisplayMode: .never))
-                        .frame(height: panelState == .expanded ? 170 : (route.elevationGain > 0 ? 70 : 60))
-                        .onChange(of: panelPage) { _, newPage in
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                panelState = newPage == 1 ? .expanded : .compact
-                            }
-                        }
 
-                        // Page dots (only if chart data exists)
-                        if !cachedElevationData.isEmpty {
-                            HStack(spacing: 6) {
-                                ForEach(0..<2, id: \.self) { i in
-                                    Circle()
-                                        .fill(panelPage == i ? Color.primary : Color.secondary.opacity(0.4))
-                                        .frame(width: 6, height: 6)
+                            // Current location
+                            UserAnnotation()
+                        }
+                        .mapStyle(.standard(elevation: .flat))
+                        .mapControls {
+                            MapUserLocationButton()
+                            MapCompass()
+                            MapScaleView()
+                        }
+                        // Two camera handlers: continuous keeps the arrow/chevron
+                        // counter-rotation responsive without invalidating the Map body
+                        // every frame, while .onEnd handles the heavier work (re-bucketing
+                        // the marker interval, snapshotting the visible region, capturing
+                        // the camera for tab-switch restore).
+                        .onMapCameraChange(frequency: .continuous) { context in
+                            cameraState.heading = context.camera.heading
+                            // Seed the visible region on first camera frame so the initial
+                            // render is already filtered — .onEnd doesn't fire until the
+                            // user actually interacts with the map.
+                            if visibleRegion == nil {
+                                visibleRegion = context.region
+                                MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+                                updateMarkerInterval(for: context.region)
+                            }
+                            if cueFraming.cameraDistanceScale == nil {
+                                calibrateCameraScale(context, proxy: mapProxy)
+                            }
+                        }
+                        .onMapCameraChange(frequency: .onEnd) { context in
+                            handleCameraChange(context)
+                            calibrateCameraScale(context, proxy: mapProxy)
+                        }
+                        // Forward map taps to the editor view-model while a placement
+                        // mode is active. SpatialTapGesture exposes the local point so we
+                        // can ask MapKit to convert it into a real-world coordinate.
+                        .gesture(
+                            SpatialTapGesture().onEnded { event in
+                                guard isEditingCues, let editor = cueEditorHolder.viewModel else {
+                                    return
+                                }
+                                guard editor.placementMode != .none else { return }
+                                if let coord = mapProxy.convert(event.location, from: .local) {
+                                    editor.handleMapTap(at: coord)
+                                }
+                            }
+                        )
+                        .overlay {
+                            MapScrubDot(
+                                scrub: scrubState,
+                                proxy: mapProxy,
+                                coordinateFor: interpolateRouteCoordinate)
+                        }
+                    }  // end: MapReader
+                } else {
+                    // Map is unmounted while the tab is hidden — keep the same
+                    // backdrop so re-appearing doesn't flash white.
+                    Color(.systemBackground)
+                }
+
+                // Editor panel takes over while in cue-editor mode
+                if isEditingCues, let editor = cueEditorHolder.viewModel {
+                    VStack(spacing: 0) {
+                        Spacer()
+                        CueEditorPanel(viewModel: editor, availableHeight: proxy.size.height)
+                            .onGeometryChange(for: CGFloat.self) {
+                                $0.size.height
+                            } action: {
+                                cueFraming.panelHeight = $0
+                            }
+                    }
+                } else {
+                    // Stats overlay — collapsed (button) ↔ compact (stats)
+                    VStack(spacing: 0) {
+                        Spacer()
+
+                        VStack(spacing: 6) {
+                            if panelState != .collapsed {
+                                Capsule()
+                                    .fill(.secondary)
+                                    .frame(width: 36, height: 4)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 30)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        withAnimation(
+                                            .spring(response: 0.35, dampingFraction: 0.85)
+                                        ) {
+                                            panelState = .collapsed
+                                        }
+                                    }
+                                    .gesture(
+                                        DragGesture(minimumDistance: 10)
+                                            .onEnded { value in
+                                                guard abs(value.translation.height) > 10 else {
+                                                    return
+                                                }
+                                                let skipsCompact = (panelPage == 1)
+                                                withAnimation(
+                                                    .spring(response: 0.35, dampingFraction: 0.85)
+                                                ) {
+                                                    if value.translation.height > 0 {
+                                                        switch panelState {
+                                                        case .expanded:
+                                                            panelState =
+                                                                skipsCompact ? .collapsed : .compact
+                                                        case .compact: panelState = .collapsed
+                                                        case .collapsed: break
+                                                        }
+                                                    } else {
+                                                        switch panelState {
+                                                        case .collapsed:
+                                                            panelState =
+                                                                skipsCompact ? .expanded : .compact
+                                                        case .compact: panelState = .expanded
+                                                        case .expanded: break
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                    )
+
+                                Text(route.name)
+                                    .font(.headline)
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.horizontal)
+
+                                TabView(selection: $panelPage) {
+                                    // Page 0: Stats
+                                    VStack {
+                                        LazyVGrid(
+                                            columns: [
+                                                GridItem(.flexible()), GridItem(.flexible()),
+                                                GridItem(.flexible()),
+                                            ], spacing: 10
+                                        ) {
+                                            StatItem(
+                                                label: "Distance",
+                                                value: formatDistance(route.distance))
+                                            if route.elevationGain > 0 {
+                                                StatItem(
+                                                    label: "Elev Gain",
+                                                    value: formatElevation(route.elevationGain))
+                                            }
+                                            if route.elevationLoss > 0 {
+                                                StatItem(
+                                                    label: "Elev Loss",
+                                                    value: formatElevation(route.elevationLoss))
+                                            }
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .tag(0)
+
+                                    // Page 1: Elevation Chart
+                                    if !cachedElevationData.isEmpty {
+                                        VStack {
+                                            RouteElevationChartView(
+                                                points: cachedElevationData, scrub: scrubState)
+                                            Spacer(minLength: 0)
+                                        }
+                                        .tag(1)
+                                    }
+                                }
+                                .tabViewStyle(.page(indexDisplayMode: .never))
+                                .frame(
+                                    height: panelState == .expanded
+                                        ? 170 : (route.elevationGain > 0 ? 70 : 60)
+                                )
+                                .onChange(of: panelPage) { _, newPage in
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                        panelState = newPage == 1 ? .expanded : .compact
+                                    }
+                                }
+
+                                // Page dots (only if chart data exists)
+                                if !cachedElevationData.isEmpty {
+                                    HStack(spacing: 6) {
+                                        ForEach(0..<2, id: \.self) { i in
+                                            Circle()
+                                                .fill(
+                                                    panelPage == i
+                                                        ? Color.primary
+                                                        : Color.secondary.opacity(0.4)
+                                                )
+                                                .frame(width: 6, height: 6)
+                                        }
+                                    }
+                                }
+                            } else {
+                                Image(systemName: "chart.bar.xaxis")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .padding(.top, 8)
+                            }
+                        }
+                        .padding(.horizontal, panelState != .collapsed ? 16 : 0)
+                        .padding(.bottom, panelState != .collapsed ? 8 : 8)
+                        .frame(
+                            maxWidth: panelState != .collapsed ? .infinity : nil,
+                            alignment: panelState != .collapsed ? .center : .trailing
+                        )
+                        .frame(
+                            width: panelState != .collapsed ? nil : 48,
+                            height: panelState != .collapsed ? nil : 48
+                        )
+                        .background(
+                            RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
+                                .fill(.ultraThinMaterial)
+                                .shadow(radius: 12, y: 4)
+                        )
+                        .padding(.horizontal, panelState != .collapsed ? 12 : 0)
+                        .padding(.bottom, panelState != .collapsed ? 12 : 24)
+                        .padding(.trailing, panelState != .collapsed ? 0 : 16)
+                        .frame(
+                            maxWidth: .infinity,
+                            alignment: panelState != .collapsed ? .center : .trailing
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if panelState == .collapsed {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                    panelState = panelPage == 1 ? .expanded : .compact
                                 }
                             }
                         }
-                    } else {
-                        Image(systemName: "chart.bar.xaxis")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.top, 8)
                     }
-                }
-                .padding(.horizontal, panelState != .collapsed ? 16 : 0)
-                .padding(.bottom, panelState != .collapsed ? 8 : 8)
-                .frame(
-                    maxWidth: panelState != .collapsed ? .infinity : nil,
-                    alignment: panelState != .collapsed ? .center : .trailing
-                )
-                .frame(width: panelState != .collapsed ? nil : 48, height: panelState != .collapsed ? nil : 48)
-                .background(
-                    RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                        .fill(.ultraThinMaterial)
-                        .shadow(radius: 12, y: 4)
-                )
-                .padding(.horizontal, panelState != .collapsed ? 12 : 0)
-                .padding(.bottom, panelState != .collapsed ? 12 : 24)
-                .padding(.trailing, panelState != .collapsed ? 0 : 16)
-                .frame(maxWidth: .infinity, alignment: panelState != .collapsed ? .center : .trailing)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if panelState == .collapsed {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            panelState = panelPage == 1 ? .expanded : .compact
-                        }
-                    }
-                }
+                }  // end: stats-panel else
             }
-            }  // end: stats-panel else
-        }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: {
-            cueFraming.mapSize = $0
-        }
+            .onGeometryChange(for: CGSize.self) {
+                $0.size
+            } action: {
+                cueFraming.mapSize = $0
+            }
         }  // end: GeometryReader
         .layoutProbe("RouteDetail")
         .navigationTitle(isEditingCues ? "Cue Editor" : route.name)
@@ -425,16 +480,43 @@ struct RouteDetailView: View {
                     .font(.body.weight(.semibold))
                 }
             } else {
-                if let store = routeStore {
-                    ToolbarItem(placement: .topBarTrailing) {
+                // One menu instead of separate buttons leaves the title room.
+                // Send to watch stays out front since its icon shows state.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
                         Button {
-                            _ = cueEditorHolder.ensure(for: liveRoute(store: store), routeStore: store)
-                            withAnimation { isEditingCues = true }
+                            exportGPX()
                         } label: {
-                            Image(systemName: "pencil.and.list.clipboard")
+                            Label("Export GPX", systemImage: "square.and.arrow.up")
+                        }
+                        if let store = routeStore {
+                            Button {
+                                _ = cueEditorHolder.ensure(
+                                    for: liveRoute(store: store), routeStore: store)
+                                withAnimation { isEditingCues = true }
+                            } label: {
+                                Label("Edit Cues", systemImage: "pencil.and.list.clipboard")
+                            }
+                        }
+                        Section("Map") {
+                            Toggle(isOn: $showGradeColors) {
+                                Label("Grade Colors", systemImage: "chart.xyaxis.line")
+                            }
+                            Button {
+                                showPhoneSettings = true
+                            } label: {
+                                Label("Phone Settings…", systemImage: "iphone")
+                            }
+                        }
+                    } label: {
+                        if isExportingGPX {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "ellipsis.circle")
                                 .font(.title3)
                         }
                     }
+                    .disabled(isExportingGPX)
                 }
                 if canSendToWatch {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -454,20 +536,36 @@ struct RouteDetailView: View {
                                         // The clock draws wider than the circle icons at the same size.
                                         .font(.title3)
                                 } else {
-                                    Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
+                                    Image(
+                                        systemName: isOnWatch
+                                            ? "checkmark.circle.fill" : "arrow.up.circle")
                                 }
                             }
                             .font(.title2)
-                            .foregroundStyle(buttonColor(
-                                isUploading: isUploading,
-                                isQueued: isQueued,
-                                isUploadBlocked: isUploadBlocked,
-                                isOnWatch: isOnWatch
-                            ))
+                            .foregroundStyle(
+                                buttonColor(
+                                    isUploading: isUploading,
+                                    isQueued: isQueued,
+                                    isUploadBlocked: isUploadBlocked,
+                                    isOnWatch: isOnWatch
+                                ))
                         }
                         .disabled(isUploadBlocked || isQueued)
                     }
                 }
+            }
+        }
+        .sheet(item: $gpxExport) { file in
+            ShareSheet(activityItems: [file.url])
+        }
+        .sheet(isPresented: $showPhoneSettings) {
+            NavigationStack {
+                PhoneSettingsView(userSettings: .shared)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showPhoneSettings = false }
+                        }
+                    }
             }
         }
         .alert("Route Already on Watch", isPresented: $showOverwriteAlert) {
@@ -476,7 +574,9 @@ struct RouteDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
+            Text(
+                "\"\(route.name)\" is already on your watch. Sending will replace the existing version."
+            )
         }
         .onAppear {
             isOnScreen = true
@@ -511,8 +611,9 @@ struct RouteDetailView: View {
     /// no inherent travel direction.
     private func zoomMapToWaypoint(_ id: UUID?) {
         guard let editor = cueEditorHolder.viewModel,
-              let id = id,
-              let wp = editor.waypointEntries.first(where: { $0.id == id }) else {
+            let id = id,
+            let wp = editor.waypointEntries.first(where: { $0.id == id })
+        else {
             return
         }
         let heading = cameraState.heading
@@ -536,7 +637,8 @@ struct RouteDetailView: View {
     /// Center on a tapped waypoint and zoom in, keeping the heading. Never
     /// zooms out if the map is already closer than that.
     private func zoomMapToPOI(_ coordinate: CLLocationCoordinate2D) {
-        let currentDistance = MapCameraCache.shared.camera(for: cameraCacheKey)?.distance ?? .infinity
+        let currentDistance =
+            MapCameraCache.shared.camera(for: cameraCacheKey)?.distance ?? .infinity
         let camera = MapCamera(
             centerCoordinate: coordinate,
             distance: min(currentDistance, 700),
@@ -553,6 +655,19 @@ struct RouteDetailView: View {
     /// edits made after entering the screen.
     private func liveRoute(store: RouteStore) -> Route {
         store.routes.first(where: { $0.id == route.id }) ?? route
+    }
+
+    /// Exports the latest copy so cue edits made on this screen are included.
+    private func exportGPX() {
+        let current = routeStore.map(liveRoute(store:)) ?? route
+        isExportingGPX = true
+        Task.detached(priority: .userInitiated) {
+            let url = RouteStore.exportGPXFile(for: current)
+            await MainActor.run {
+                isExportingGPX = false
+                gpxExport = url.map(GPXExportFile.init)
+            }
+        }
     }
 
     /// Settled-camera handler: snapshot the visible region for annotation
@@ -625,7 +740,8 @@ struct RouteDetailView: View {
     private var isZoomedIn: Bool {
         guard let r = visibleRegion else { return false }
         let latMeters = r.span.latitudeDelta * 111_320
-        let lonMeters = r.span.longitudeDelta * 111_320
+        let lonMeters =
+            r.span.longitudeDelta * 111_320
             * cos(r.center.latitude * .pi / 180)
         return max(latMeters, lonMeters) < 500
     }
@@ -676,7 +792,8 @@ struct RouteDetailView: View {
             }
         }
         let cosLat = cos(r.center.latitude * .pi / 180)
-        let shortSide = min(r.span.latitudeDelta * 111_320, r.span.longitudeDelta * 111_320 * cosLat)
+        let shortSide = min(
+            r.span.latitudeDelta * 111_320, r.span.longitudeDelta * 111_320 * cosLat)
         let threshold = shortSide * shortSideFraction
         let meters = { (a: CLLocationCoordinate2D, b: CLLocationCoordinate2D) -> Double in
             let dLat = (a.latitude - b.latitude) * 111_320
@@ -690,8 +807,10 @@ struct RouteDetailView: View {
             if let idx = clusters.firstIndex(where: { meters($0.center, c) <= threshold }) {
                 var merged = clusters[idx].items
                 merged.append(item)
-                let avgLat = merged.reduce(0.0) { $0 + coordinate($1).latitude } / Double(merged.count)
-                let avgLon = merged.reduce(0.0) { $0 + coordinate($1).longitude } / Double(merged.count)
+                let avgLat =
+                    merged.reduce(0.0) { $0 + coordinate($1).latitude } / Double(merged.count)
+                let avgLon =
+                    merged.reduce(0.0) { $0 + coordinate($1).longitude } / Double(merged.count)
                 clusters[idx] = AnnotationCluster(
                     id: clusters[idx].id,
                     center: CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon),
@@ -736,7 +855,8 @@ struct RouteDetailView: View {
         let front = cueStackFront(stack, editor: editor)
         var target = tapped
         if tapped == front, selectedCueGroupID(editor) == front,
-           let i = ids.firstIndex(of: front) {
+            let i = ids.firstIndex(of: front)
+        {
             target = ids[(i + 1) % ids.count]
         }
         cueStackFronts[stack.id] = target
@@ -750,7 +870,8 @@ struct RouteDetailView: View {
         let lats = coords.map(\.latitude)
         let lons = coords.map(\.longitude)
         guard let minLat = lats.min(), let maxLat = lats.max(),
-              let minLon = lons.min(), let maxLon = lons.max() else { return }
+            let minLon = lons.min(), let maxLon = lons.max()
+        else { return }
         let center = CLLocationCoordinate2D(
             latitude: (minLat + maxLat) / 2,
             longitude: (minLon + maxLon) / 2)
@@ -772,9 +893,10 @@ struct RouteDetailView: View {
         // highlights the first-pass anchor — keeps the visual consistent
         // with the displayed pin and badge.
         if let selID = editor.selection,
-           let selGroup = editor.groupedEntries.first(where: {
-               $0.id == selID || $0.members.contains(where: { $0.id == selID })
-           }) {
+            let selGroup = editor.groupedEntries.first(where: {
+                $0.id == selID || $0.members.contains(where: { $0.id == selID })
+            })
+        {
             let selEntry = selGroup.anchor
             let highlight = editor.highlightCoordinates(for: selEntry)
             if highlight.count >= 2 {
@@ -805,7 +927,8 @@ struct RouteDetailView: View {
         let visibleGroups = editor.groupedEntries.filter {
             (stacking || $0.id != selectedGroupID) && inVisibleRegion($0.anchor.turn.coordinate)
         }
-        let turnClusters = stacking
+        let turnClusters =
+            stacking
             ? stackOverlappingPins(visibleGroups, coordinate: { $0.anchor.turn.coordinate })
             : clusterAnnotations(visibleGroups, coordinate: { $0.anchor.turn.coordinate })
         let selectedIsStacked = turnClusters.contains { cluster in
@@ -853,8 +976,9 @@ struct RouteDetailView: View {
         // may pan back to it. A selected group inside a stack is drawn by
         // the stack instead.
         if !selectedIsStacked,
-           let selID = selectedGroupID,
-           let selGroup = editor.groupedEntries.first(where: { $0.id == selID }) {
+            let selID = selectedGroupID,
+            let selGroup = editor.groupedEntries.first(where: { $0.id == selID })
+        {
             Annotation("", coordinate: selGroup.anchor.turn.coordinate) {
                 CueEditorTurnPin(
                     editor: editor,
@@ -902,7 +1026,8 @@ struct RouteDetailView: View {
             }
         }
         if let selWPID = editor.waypointSelection,
-           let selWP = editor.waypointEntries.first(where: { $0.id == selWPID }) {
+            let selWP = editor.waypointEntries.first(where: { $0.id == selWPID })
+        {
             Annotation("", coordinate: selWP.coordinate) {
                 CueEditorWaypointPin(
                     isSelected: true,
@@ -930,7 +1055,8 @@ struct RouteDetailView: View {
     /// against the imported waypoints. Mid-ride callers that don't pass
     /// `routeStore` fall back to the navigation-captured route.
     private var displayedPOIs: [DisplayedPOI] {
-        let liveRoute: Route = routeStore.flatMap { $0.routes.first(where: { $0.id == route.id }) } ?? route
+        let liveRoute: Route =
+            routeStore.flatMap { $0.routes.first(where: { $0.id == route.id }) } ?? route
         let edits = liveRoute.cueEdits
         var result: [DisplayedPOI] = []
         for wp in (liveRoute.waypoints ?? []).filter({ $0.kind == .poi }) {
@@ -939,18 +1065,20 @@ struct RouteDetailView: View {
             let name = d?.titleOverride ?? wp.name
             let lat = d?.latitudeOverride ?? wp.lat
             let lon = d?.longitudeOverride ?? wp.lon
-            result.append(DisplayedPOI(
-                id: wp.id,
-                name: name,
-                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)
-            ))
+            result.append(
+                DisplayedPOI(
+                    id: wp.id,
+                    name: name,
+                    coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                ))
         }
         for added in edits?.addedPOIs ?? [] {
-            result.append(DisplayedPOI(
-                id: added.id,
-                name: added.name,
-                coordinate: CLLocationCoordinate2D(latitude: added.lat, longitude: added.lon)
-            ))
+            result.append(
+                DisplayedPOI(
+                    id: added.id,
+                    name: added.name,
+                    coordinate: CLLocationCoordinate2D(latitude: added.lat, longitude: added.lon)
+                ))
         }
         return result
     }
@@ -960,8 +1088,9 @@ struct RouteDetailView: View {
     /// oriented so the rider's approach heading points "up".
     private func zoomMapToSelection(_ sel: CueEntryID?) {
         guard let editor = cueEditorHolder.viewModel,
-              let id = sel,
-              let entry = editor.allEntries.first(where: { $0.id == id }) else {
+            let id = sel,
+            let entry = editor.allEntries.first(where: { $0.id == id })
+        else {
             return
         }
         let heading = editor.inboundBearing(for: entry)
@@ -971,14 +1100,19 @@ struct RouteDetailView: View {
 
         // Section bounds in meters along the screen's axes once the camera
         // turns heading-up: u to the right, v up.
-        var minU = 0.0, maxU = 0.0, minV = 0.0, maxV = 0.0
+        var minU = 0.0
+        var maxU = 0.0
+        var minV = 0.0
+        var maxV = 0.0
         for c in editor.highlightCoordinates(for: entry) {
             let x = (c.longitude - origin.longitude) * 111_320 * cosLat
             let y = (c.latitude - origin.latitude) * 111_320
             let u = x * cos(h) - y * sin(h)
             let v = x * sin(h) + y * cos(h)
-            minU = min(minU, u); maxU = max(maxU, u)
-            minV = min(minV, v); maxV = max(maxV, v)
+            minU = min(minU, u)
+            maxU = max(maxU, u)
+            minV = min(minV, v)
+            maxV = max(maxV, v)
         }
 
         // Padding keeps the chevrons, pins and map controls off the edges. The
@@ -1023,7 +1157,8 @@ struct RouteDetailView: View {
         let center = context.camera.centerCoordinate
         let north = shiftedCoordinate(from: center, distanceMeters: 100, bearingDegrees: 0)
         guard let a = proxy.convert(center, to: .local),
-              let b = proxy.convert(north, to: .local) else { return }
+            let b = proxy.convert(north, to: .local)
+        else { return }
         let points = hypot(b.x - a.x, b.y - a.y)
         guard points > 1 else { return }
         cueFraming.cameraDistanceScale = context.camera.distance / (100 / Double(points))
@@ -1041,17 +1176,19 @@ struct RouteDetailView: View {
         let lon1 = coord.longitude * .pi / 180
         let angular = distanceMeters / R
         let lat2 = asin(sin(lat1) * cos(angular) + cos(lat1) * sin(angular) * cos(bearing))
-        let lon2 = lon1 + atan2(
-            sin(bearing) * sin(angular) * cos(lat1),
-            cos(angular) - sin(lat1) * sin(lat2)
-        )
+        let lon2 =
+            lon1
+            + atan2(
+                sin(bearing) * sin(angular) * cos(lat1),
+                cos(angular) - sin(lat1) * sin(lat2)
+            )
         return CLLocationCoordinate2D(
             latitude: lat2 * 180 / .pi,
             longitude: lon2 * 180 / .pi
         )
     }
 
-    private let minElevDiff: Double = 50 // meters — minimum difference to show markers
+    private let minElevDiff: Double = 50  // meters — minimum difference to show markers
 
     /// Two-phase background load: publish the plain route line as soon as
     /// the coordinates are mapped, then the derived data (processed points,
@@ -1077,14 +1214,15 @@ struct RouteDetailView: View {
                 for i in 0..<pts.count {
                     if i > 0 {
                         let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
-                        let cur  = CLLocation(latitude: pts[i].lat,     longitude: pts[i].lon)
+                        let cur = CLLocation(latitude: pts[i].lat, longitude: pts[i].lon)
                         cumDist += cur.distance(from: prev)
                     }
-                    processed.append(ProcessedPoint(
-                        coordinate: coords[i],
-                        elevation: pts[i].elevation,
-                        distanceFromStart: cumDist,
-                        bearingToNext: 0))
+                    processed.append(
+                        ProcessedPoint(
+                            coordinate: coords[i],
+                            elevation: pts[i].elevation,
+                            distanceFromStart: cumDist,
+                            bearingToNext: 0))
                 }
                 markers = computeMileMarkers(points: processed)
             }
@@ -1092,10 +1230,11 @@ struct RouteDetailView: View {
             var extremes: (high: TrackPoint, low: TrackPoint)? = nil
             let withElev = pts.filter { $0.elevation != nil }
             if let highest = withElev.max(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-               let lowest  = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-               let highElev = highest.elevation,
-               let lowElev  = lowest.elevation,
-               highElev - lowElev >= minElevDiff {
+                let lowest = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
+                let highElev = highest.elevation,
+                let lowElev = lowest.elevation,
+                highElev - lowElev >= minElevDiff
+            {
                 extremes = (highest, lowest)
             }
 
@@ -1124,7 +1263,8 @@ struct RouteDetailView: View {
             return pts.last?.coordinate
         }
 
-        var lo = 0, hi = pts.count - 1
+        var lo = 0
+        var hi = pts.count - 1
         while lo + 1 < hi {
             let mid = (lo + hi) / 2
             if pts[mid].distanceFromStart < targetDist { lo = mid } else { hi = mid }
@@ -1176,7 +1316,6 @@ private struct StatItem: View {
     }
 }
 
-
 /// Sizes the cue editor needs to frame a selected turn. A plain class, not
 /// observable, so writing to it never re-renders anything.
 final class CueFramingMetrics {
@@ -1202,4 +1341,10 @@ final class CueFramingMetrics {
     }
     .padding()
     .frame(width: 375)
+}
+
+/// A GPX file ready for the share sheet.
+struct GPXExportFile: Identifiable {
+    let url: URL
+    var id: URL { url }
 }
