@@ -29,7 +29,7 @@ enum DuplicateHandlingEnum: String, AppEnum {
         .replace: "Replace",
         .keepBoth: "Keep Both",
         .useExisting: "Use Existing",
-        .ask: DisplayRepresentation(title: "Ask", subtitle: "Only when a duplicate is found"),
+        .ask: DisplayRepresentation(title: "Ask", subtitle: "Only when a duplicate is found. Cancel stops the shortcut"),
     ]
 }
 
@@ -135,18 +135,14 @@ struct ImportGPXIntent: AppIntent {
         case .keepBoth: return .keepBoth
         case .useExisting: return .useExisting
         case .ask:
-            do {
-                let picked = try await $duplicates.requestDisambiguation(
-                    among: [.replace, .keepBoth, .useExisting],
-                    dialog: "\(name): \(duplicate.explanation) What should Computa do?")
-                switch picked {
-                case .replace: return .replace
-                case .keepBoth: return .keepBoth
-                default: return .useExisting
-                }
-            } catch {
-                // No one to ask, like an automation running in the background.
-                return duplicate.automaticChoice
+            // Cancelling throws, which stops the shortcut before anything is saved.
+            let picked = try await $duplicates.requestDisambiguation(
+                among: [.replace, .keepBoth, .useExisting],
+                dialog: "\(name): \(duplicate.explanation) What should Computa do?")
+            switch picked {
+            case .replace: return .replace
+            case .keepBoth: return .keepBoth
+            default: return .useExisting
             }
         }
     }
