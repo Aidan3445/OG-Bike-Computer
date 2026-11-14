@@ -198,20 +198,6 @@ struct RideHistoryView: View {
         .onAppear {
             hasStravaAuth = KeychainHelper.loadTokens(for: .strava) != nil
         }
-        .confirmationDialog(
-            "Delete \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides")?",
-            isPresented: $showDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                let toDelete = selectedRides
-                for ride in toDelete { rideStore.delete(ride) }
-                exitSelectionMode()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This cannot be undone.")
-        }
     }
 
     @ViewBuilder
@@ -300,6 +286,22 @@ struct RideHistoryView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.regularMaterial)
+        // On the whole bar, so the dialog opens above it rather than beside
+        // a narrow button at the screen edge.
+        .confirmationDialog(
+            "Delete \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides")?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                let toDelete = selectedRides
+                for ride in toDelete { rideStore.delete(ride) }
+                exitSelectionMode()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone.")
+        }
     }
 
     private func exportSelectedAsZip() {

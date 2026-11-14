@@ -99,20 +99,6 @@ struct ContentView: View {
                 .sheet(item: $routeExport) { file in
                     ShareSheet(activityItems: [file.url])
                 }
-                .confirmationDialog(
-                    "Delete \(selectedRouteIDs.count) \(selectedRouteIDs.count == 1 ? "route" : "routes")?",
-                    isPresented: $showDeleteRoutesConfirm,
-                    titleVisibility: .visible
-                ) {
-                    Button("Delete", role: .destructive) {
-                        routeStore.routes.filter { selectedRouteIDs.contains($0.id) }.forEach(
-                            routeStore.delete)
-                        exitRouteSelection()
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("Removes them from this phone. Copies already on the watch stay there.")
-                }
                 .onAppear {
                     ConnectivityManager.shared.attachStores(rideStore: rideStore)
                 }
@@ -421,6 +407,20 @@ extension ContentView {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.regularMaterial)
+        // On the whole bar, so the dialog opens above it like on the Rides tab.
+        .confirmationDialog(
+            "Delete \(selectedRouteIDs.count) \(selectedRouteIDs.count == 1 ? "route" : "routes")?",
+            isPresented: $showDeleteRoutesConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                routeStore.routes.filter { selectedRouteIDs.contains($0.id) }.forEach(routeStore.delete)
+                exitRouteSelection()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes them from this phone. Copies already on the watch stay there.")
+        }
     }
 
     /// One route exports as a plain GPX, several as a zip.
