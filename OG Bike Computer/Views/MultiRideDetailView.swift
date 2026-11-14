@@ -28,6 +28,7 @@ struct MultiRideDetailView: View {
     @State private var panelPage = 0
     @State private var showShareSheet = false
     @State private var showPhoneSettings = false
+    @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
     @State private var gpxExportURL: URL?
     @State private var isExportingGPX = false
     @State private var hasStravaAuth = false
@@ -126,7 +127,7 @@ struct MultiRideDetailView: View {
                             }
                         }
                     }
-                    .mapStyle(.standard(elevation: .flat))
+                    .mapStyle(mapStyle.mapStyle)
                     .mapControls {
                         MapCompass()
                         MapScaleView()
@@ -172,7 +173,7 @@ struct MultiRideDetailView: View {
                         .disabled(isUploadingToStrava)
                     }
 
-                    MapMenuSection(showPhoneSettings: $showPhoneSettings)
+                    MapMenuSection(showPhoneSettings: $showPhoneSettings, showsMarkerToggles: false)
                 } label: {
                     if isExportingGPX || isUploadingToStrava {
                         ProgressView()

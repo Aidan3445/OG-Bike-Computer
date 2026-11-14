@@ -27,6 +27,9 @@ struct RideDetailView: View {
     @State private var panelState: PanelState = .collapsed
     @State private var showShareSheet = false
     @State private var showPhoneSettings = false
+    @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
+    @AppStorage(PhoneSettingsKeys.mileMarkers) private var showMileMarkers = true
+    @AppStorage(PhoneSettingsKeys.directionArrows) private var showDirectionArrows = true
     @State private var isUploadingToStrava = false
     @State private var showFinalizeConfirm = false
     @State private var showDiscardConfirm = false
@@ -174,7 +177,7 @@ struct RideDetailView: View {
                 // Mile markers
                 mileMarkerAnnotations()
             }
-            .mapStyle(.standard(elevation: .flat))
+            .mapStyle(mapStyle.mapStyle)
             .mapControls {
                 MapCompass()
                 MapScaleView()
@@ -367,12 +370,15 @@ struct RideDetailView: View {
         // Filtered to the visible region so a long ride doesn't render every
         // marker at once.
         ForEach(visibleMileMarkers, id: \.offset) { _, marker in
-            Annotation("", coordinate: marker.coordinate) {
-                MileMarkerLabel(
-                    mile: marker.mile,
-                    unitLabel: currentUnits.distance.label)
+            if showMileMarkers {
+                Annotation("", coordinate: marker.coordinate) {
+                    MileMarkerLabel(
+                        mile: marker.mile,
+                        unitLabel: currentUnits.distance.label)
+                }
             }
-            if let arrowCoord = marker.arrowCoordinate,
+            if showDirectionArrows,
+               let arrowCoord = marker.arrowCoordinate,
                inVisibleRegion(arrowCoord) {
                 Annotation("", coordinate: arrowCoord) {
                     MileMarkerArrow(

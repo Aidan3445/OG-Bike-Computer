@@ -573,6 +573,7 @@ struct RideControlView: View {
 /// Map for free rides — no planned route, just the live recording breadcrumb
 /// and the rider's current position.
 private struct FreeRideMapSheet: View {
+    @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
     @ObservedObject private var telemetry = PhoneTelemetryStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var mapPosition: MapCameraPosition = .userLocation(fallback: .automatic)
@@ -596,7 +597,7 @@ private struct FreeRideMapSheet: View {
 
                 UserAnnotation()
             }
-            .mapStyle(.standard(elevation: .flat))
+            .mapStyle(mapStyle.mapStyle)
             .mapControls {
                 MapUserLocationButton()
                 MapCompass()

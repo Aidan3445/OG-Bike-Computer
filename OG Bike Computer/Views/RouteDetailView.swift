@@ -36,6 +36,9 @@ struct RouteDetailView: View {
     @State private var showOverwriteAlert = false
     @State private var isExportingGPX = false
     @State private var showPhoneSettings = false
+    @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
+    @AppStorage(PhoneSettingsKeys.mileMarkers) private var showMileMarkers = true
+    @AppStorage(PhoneSettingsKeys.directionArrows) private var showDirectionArrows = true
     @State private var gpxExport: GPXExportFile?
 
     // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
@@ -187,12 +190,15 @@ struct RouteDetailView: View {
                             // Filtered to the visible region (with padding) so a 600-mile
                             // route doesn't render all ~1200 markers at once.
                             ForEach(visibleMileMarkers, id: \.offset) { _, marker in
-                                Annotation("", coordinate: marker.coordinate) {
-                                    MileMarkerLabel(
-                                        mile: marker.mile,
-                                        unitLabel: currentUnits.distance.label)
+                                if showMileMarkers {
+                                    Annotation("", coordinate: marker.coordinate) {
+                                        MileMarkerLabel(
+                                            mile: marker.mile,
+                                            unitLabel: currentUnits.distance.label)
+                                    }
                                 }
-                                if let arrowCoord = marker.arrowCoordinate,
+                                if showDirectionArrows,
+                                    let arrowCoord = marker.arrowCoordinate,
                                     inVisibleRegion(arrowCoord)
                                 {
                                     Annotation("", coordinate: arrowCoord) {
@@ -234,7 +240,7 @@ struct RouteDetailView: View {
                             // Current location
                             UserAnnotation()
                         }
-                        .mapStyle(.standard(elevation: .flat))
+                        .mapStyle(mapStyle.mapStyle)
                         .mapControls {
                             MapUserLocationButton()
                             MapCompass()
