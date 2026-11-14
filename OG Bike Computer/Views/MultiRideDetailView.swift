@@ -13,8 +13,6 @@ struct MultiRideDetailView: View {
     @ObservedObject private var unitState = UnitState.shared
     @Environment(\.dismiss) private var dismiss
 
-    enum PanelState { case collapsed, compact, expanded }
-
     /// Kept clear of the chart metric colors (green elevation, blue speed,
     /// red heart rate, orange power), which the scrub line takes on, so
     /// scrubbing and the ride split lines stay readable.
@@ -24,7 +22,9 @@ struct MultiRideDetailView: View {
     private static let closeConnectorMeters: Double = 75
 
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var panelState: PanelState = .collapsed
+    @State private var isPanelOpen = false
+    @State private var expandedPanelPages: Set<Int> = []
+    @State private var segmentListHeight: CGFloat = 0
     @State private var panelPage = 0
     @State private var showShareSheet = false
     @State private var showPhoneSettings = false
@@ -233,113 +233,26 @@ struct MultiRideDetailView: View {
 
     // MARK: - Stats panel (same 3-state pattern as RideDetailView)
 
-    @ViewBuilder
     private func statsPanel() -> some View {
-        VStack(spacing: 6) {
-            if panelState != .collapsed {
-                panelDragHandle()
-
-                TabView(selection: $panelPage) {
-                    combinedStatsPage().tag(0)
-                    segmentStatsPage().tag(1)
-                    chartsPage().tag(2)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(height: panelState == .expanded ? 280 : 200)
-
-                panelPageDots()
-            } else {
-                collapsedPanelButton()
-            }
+        MapStatsPanel(
+            isOpen: $isPanelOpen,
+            page: $panelPage,
+            expandedPages: $expandedPanelPages,
+            pageCount: 3,
+            expandablePages: hasExtendedStats ? [0, 1] : [1]
+        ) {
+            combinedStatsPage().statsPanelPage(0)
+            segmentStatsPage().statsPanelPage(1)
+            chartsPage().statsPanelPage(2)
         }
-        .padding(.horizontal, panelState != .collapsed ? 16 : 0)
-        .padding(.bottom, 8)
-        .frame(
-            maxWidth: panelState != .collapsed ? .infinity : nil,
-            alignment: panelState != .collapsed ? .center : .trailing
-        )
-        .frame(
-            width: panelState != .collapsed ? nil : 48,
-            height: panelState != .collapsed ? nil : 48
-        )
-        .background(
-            RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                .fill(.ultraThinMaterial)
-                .shadow(radius: 12, y: 4)
-        )
-        .padding(.horizontal, panelState != .collapsed ? 12 : 0)
-        .padding(.bottom, panelState != .collapsed ? 12 : 24)
-        .padding(.trailing, panelState != .collapsed ? 0 : 16)
-        .frame(maxWidth: .infinity, alignment: panelState != .collapsed ? .center : .trailing)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if panelState == .collapsed {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    panelState = .compact
-                }
-            }
-        }
-    }
-
-    private func panelDragHandle() -> some View {
-        Capsule()
-            .fill(.secondary)
-            .frame(width: 36, height: 4)
-            .frame(maxWidth: .infinity)
-            .frame(height: 30)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    panelState = .collapsed
-                }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 10)
-                    .onEnded { value in
-                        guard abs(value.translation.height) > 10 else { return }
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            if value.translation.height > 0 {
-                                switch panelState {
-                                case .expanded: panelState = .compact
-                                case .compact: panelState = .collapsed
-                                case .collapsed: break
-                                }
-                            } else {
-                                switch panelState {
-                                case .collapsed: panelState = .compact
-                                case .compact: panelState = .expanded
-                                case .expanded: break
-                                }
-                            }
-                        }
-                    }
-            )
-    }
-
-    private func panelPageDots() -> some View {
-        HStack(spacing: 6) {
-            ForEach(0..<3, id: \.self) { i in
-                Circle()
-                    .fill(panelPage == i ? Color.primary : Color.secondary.opacity(0.4))
-                    .frame(width: 6, height: 6)
-            }
-        }
-    }
-
-    private func collapsedPanelButton() -> some View {
-        Image(systemName: "chart.bar.xaxis")
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(.primary)
-            .padding(.top, 8)
     }
 
     // MARK: - Pages
 
-    @ViewBuilder
     private func combinedStatsPage() -> some View {
         VStack(spacing: 8) {
             let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-            let stats = combinedStats(compact: panelState == .compact)
+            let stats = combinedStats(compact: !expandedPanelPages.contains(0))
             let rows = stats.chunked(into: 3)
 
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
@@ -350,31 +263,13 @@ struct MultiRideDetailView: View {
                     }
                 }
             }
-
-            if hasExtendedStats {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        panelState = panelState == .expanded ? .compact : .expanded
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(panelState == .expanded ? "Less" : "More")
-                            .font(.caption2.weight(.medium))
-                        Image(systemName: panelState == .expanded ? "chevron.up" : "chevron.down")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer(minLength: 0)
         }
     }
 
-    @ViewBuilder
+    /// Summary up top. Expanding adds every ride with its distance and time.
     private func segmentStatsPage() -> some View {
         let segs = renders.map(\.stat)
-        VStack(spacing: 8) {
+        return VStack(spacing: 8) {
             let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
             LazyVGrid(columns: columns, spacing: 10) {
                 MultiStatItem(label: "Segments", value: "\(segs.count)")
@@ -405,68 +300,64 @@ struct MultiRideDetailView: View {
                     value: segs.map(\.distance).min().map { formatDistance($0) } ?? "—")
             }
 
-            if panelState == .expanded {
+            if expandedPanelPages.contains(1) {
                 Divider()
-                ScrollView {
-                    VStack(spacing: 6) {
-                        ForEach(Array(segs.enumerated()), id: \.offset) { idx, s in
-                            HStack(spacing: 8) {
-                                Circle().fill(s.color).frame(width: 10, height: 10)
-                                Text("\(idx + 1).")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                Text(s.name)
-                                    .font(.caption)
-                                Spacer()
-                                Text(formatDistance(s.distance))
-                                    .font(.caption.monospacedDigit())
-                                Text(formatTime(s.movingTime))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            } else {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        panelState = .expanded
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("More")
-                            .font(.caption2.weight(.medium))
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+                segmentList(segs)
             }
-            Spacer(minLength: 0)
         }
+    }
+
+    private static let segmentListMaxHeight: CGFloat = 150
+
+    /// Every ride with its distance and time. Past the cap only the list
+    /// scrolls, with room on the right so the scroll bar clears the text.
+    private func segmentList(_ segs: [SegmentStat]) -> some View {
+        let scrolls = segmentListHeight > Self.segmentListMaxHeight
+        return ScrollView {
+            VStack(spacing: 6) {
+                ForEach(Array(segs.enumerated()), id: \.offset) { idx, s in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle().fill(s.color).frame(width: 10, height: 10)
+                        Text("\(idx + 1).")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text(s.name)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Text(formatDistance(s.distance))
+                            .font(.caption.monospacedDigit())
+                        Text(formatTime(s.movingTime))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.trailing, scrolls ? 12 : 0)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { segmentListHeight = $0 }
+        }
+        .frame(height: min(segmentListHeight, Self.segmentListMaxHeight))
+        .scrollIndicators(scrolls ? .visible : .hidden)
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     @ViewBuilder
     private func chartsPage() -> some View {
-        VStack(spacing: 4) {
-            if !combinedChart.isEmpty {
-                RideChartsView(
-                    dataPoints: combinedChart,
-                    hasHeartRate: chartHasHR,
-                    hasPower: chartHasPower,
-                    scrub: scrubState,
-                    splits: renders.dropFirst().map {
-                        ChartSplit(distance: $0.startDistance, color: $0.color)
-                    }
-                )
-            } else {
-                Text("No chart data")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(height: 140)
-            }
-            Spacer(minLength: 0)
+        if !combinedChart.isEmpty {
+            RideChartsView(
+                dataPoints: combinedChart,
+                hasHeartRate: chartHasHR,
+                hasPower: chartHasPower,
+                scrub: scrubState,
+                splits: renders.dropFirst().map {
+                    ChartSplit(distance: $0.startDistance, color: $0.color)
+                }
+            )
+        } else {
+            Text("No chart data")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(height: 140)
         }
     }
 

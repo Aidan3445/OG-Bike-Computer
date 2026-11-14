@@ -19,12 +19,9 @@ struct RideDetailView: View {
     @ObservedObject private var uploadManager = UploadManager.shared
     @Environment(\.dismiss) private var dismiss
 
-    enum PanelState {
-        case collapsed, compact, expanded
-    }
-
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var panelState: PanelState = .collapsed
+    @State private var isPanelOpen = false
+    @State private var expandedPanelPages: Set<Int> = []
     @State private var showShareSheet = false
     @State private var showPhoneSettings = false
     @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
@@ -440,110 +437,19 @@ struct RideDetailView: View {
         }
     }
     
-    @ViewBuilder
     private func statsPanel() -> some View {
-        VStack(spacing: 6) {
-            if panelState != .collapsed {
-                panelDragHandle()
-
-                TabView(selection: $panelPage) {
-                    statsPage()
-                        .tag(0)
-
-                    chartsPage()
-                        .tag(1)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(height: panelState == .expanded ? 280 : 200)
-                .onChange(of: panelPage) { _, newPage in
-                    if newPage == 1 && panelState == .compact {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            panelState = .expanded
-                        }
-                    }
-                }
-
-                panelPageDots()
-            } else {
-                collapsedPanelButton()
-            }
-        }
-        .padding(.horizontal, panelState != .collapsed ? 16 : 0)
-        .padding(.bottom, 8)
-        .frame(
-            maxWidth: panelState != .collapsed ? .infinity : nil,
-            alignment: panelState != .collapsed ? .center : .trailing
-        )
-        .frame(
-            width: panelState != .collapsed ? nil : 48,
-            height: panelState != .collapsed ? nil : 48
-        )
-        .background(
-            RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                .fill(.ultraThinMaterial)
-                .shadow(radius: 12, y: 4)
-        )
-        .padding(.horizontal, panelState != .collapsed ? 12 : 0)
-        .padding(.bottom, panelState != .collapsed ? 12 : 24)
-        .padding(.trailing, panelState != .collapsed ? 0 : 16)
-        .frame(
-            maxWidth: .infinity,
-            alignment: panelState != .collapsed ? .center : .trailing
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if panelState == .collapsed {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    panelState = panelPage == 1 ? .expanded : .compact
-                }
-            }
+        MapStatsPanel(
+            isOpen: $isPanelOpen,
+            page: $panelPage,
+            expandedPages: $expandedPanelPages,
+            pageCount: 2,
+            expandablePages: hasExtendedStats ? [0] : []
+        ) {
+            statsPage().statsPanelPage(0)
+            chartsPage().statsPanelPage(1)
         }
     }
 
-    private func panelDragHandle() -> some View {
-        Capsule()
-            .fill(.secondary)
-            .frame(width: 36, height: 4)
-            .frame(maxWidth: .infinity)
-            .frame(height: 30)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    panelState = .collapsed
-                }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 10)
-                    .onEnded { value in
-                        guard abs(value.translation.height) > 10 else { return }
-
-                        let skipsCompact = (panelPage == 1)
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            if value.translation.height > 0 {
-                                switch panelState {
-                                case .expanded:
-                                    panelState = skipsCompact ? .collapsed : .compact
-                                case .compact:
-                                    panelState = .collapsed
-                                case .collapsed:
-                                    break
-                                }
-                            } else {
-                                switch panelState {
-                                case .collapsed:
-                                    panelState = skipsCompact ? .expanded : .compact
-                                case .compact:
-                                    panelState = .expanded
-                                case .expanded:
-                                    break
-                                }
-                            }
-                        }
-                    }
-            )
-    }
-
-    @ViewBuilder
     private func statsPage() -> some View {
         VStack(spacing: 8) {
             let columns = [
@@ -552,7 +458,7 @@ struct RideDetailView: View {
                 GridItem(.flexible())
             ]
 
-            let stats = rideStats(compact: panelState == .compact)
+            let stats = rideStats(compact: !expandedPanelPages.contains(0))
             let rows = stats.chunked(into: 3)
 
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
@@ -566,65 +472,24 @@ struct RideDetailView: View {
                     }
                 }
             }
-
-            if hasExtendedStats {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        panelState = panelState == .expanded ? .compact : .expanded
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(panelState == .expanded ? "Less" : "More")
-                            .font(.caption2.weight(.medium))
-
-                        Image(systemName: panelState == .expanded ? "chevron.up" : "chevron.down")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            Spacer(minLength: 0)
         }
     }
 
     @ViewBuilder
     private func chartsPage() -> some View {
-        VStack(spacing: 4) {
-            if !chartData.isEmpty {
-                RideChartsView(
-                    dataPoints: chartData,
-                    hasHeartRate: chartHasHR,
-                    hasPower: chartHasPower,
-                    scrub: scrubState
-                )
-            } else {
-                Text("No chart data")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(height: 140)
-            }
-
-            Spacer(minLength: 0)
+        if !chartData.isEmpty {
+            RideChartsView(
+                dataPoints: chartData,
+                hasHeartRate: chartHasHR,
+                hasPower: chartHasPower,
+                scrub: scrubState
+            )
+        } else {
+            Text("No chart data")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(height: 140)
         }
-    }
-
-    private func panelPageDots() -> some View {
-        HStack(spacing: 6) {
-            ForEach(0..<2, id: \.self) { i in
-                Circle()
-                    .fill(panelPage == i ? Color.primary : Color.secondary.opacity(0.4))
-                    .frame(width: 6, height: 6)
-            }
-        }
-    }
-
-    private func collapsedPanelButton() -> some View {
-        Image(systemName: "chart.bar.xaxis")
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(.primary)
-            .padding(.top, 8)
     }
 
     /// Re-buckets mile markers for the visible span. Does nothing until the track has loaded.

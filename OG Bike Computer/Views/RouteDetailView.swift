@@ -27,12 +27,8 @@ struct RouteDetailView: View {
     var recordingPath: [CLLocationCoordinate2D] = []
     @ObservedObject private var unitState = UnitState.shared
 
-    enum PanelState {
-        case collapsed, compact, expanded
-    }
-
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var panelState: PanelState = .collapsed
+    @State private var isPanelOpen = false
     @State private var showOverwriteAlert = false
     @State private var isExportingGPX = false
     @State private var showPhoneSettings = false
@@ -308,160 +304,34 @@ struct RouteDetailView: View {
                             }
                     }
                 } else {
-                    // Stats overlay — collapsed (button) ↔ compact (stats)
                     VStack(spacing: 0) {
                         Spacer()
-
-                        VStack(spacing: 6) {
-                            if panelState != .collapsed {
-                                Capsule()
-                                    .fill(.secondary)
-                                    .frame(width: 36, height: 4)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 30)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        withAnimation(
-                                            .spring(response: 0.35, dampingFraction: 0.85)
-                                        ) {
-                                            panelState = .collapsed
-                                        }
-                                    }
-                                    .gesture(
-                                        DragGesture(minimumDistance: 10)
-                                            .onEnded { value in
-                                                guard abs(value.translation.height) > 10 else {
-                                                    return
-                                                }
-                                                let skipsCompact = (panelPage == 1)
-                                                withAnimation(
-                                                    .spring(response: 0.35, dampingFraction: 0.85)
-                                                ) {
-                                                    if value.translation.height > 0 {
-                                                        switch panelState {
-                                                        case .expanded:
-                                                            panelState =
-                                                                skipsCompact ? .collapsed : .compact
-                                                        case .compact: panelState = .collapsed
-                                                        case .collapsed: break
-                                                        }
-                                                    } else {
-                                                        switch panelState {
-                                                        case .collapsed:
-                                                            panelState =
-                                                                skipsCompact ? .expanded : .compact
-                                                        case .compact: panelState = .expanded
-                                                        case .expanded: break
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                    )
-
-                                Text(route.name)
-                                    .font(.headline)
-                                    .multilineTextAlignment(.center)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.horizontal)
-
-                                TabView(selection: $panelPage) {
-                                    // Page 0: Stats
-                                    VStack {
-                                        LazyVGrid(
-                                            columns: [
-                                                GridItem(.flexible()), GridItem(.flexible()),
-                                                GridItem(.flexible()),
-                                            ], spacing: 10
-                                        ) {
-                                            StatItem(
-                                                label: "Distance",
-                                                value: formatDistance(route.distance))
-                                            if route.elevationGain > 0 {
-                                                StatItem(
-                                                    label: "Elev Gain",
-                                                    value: formatElevation(route.elevationGain))
-                                            }
-                                            if route.elevationLoss > 0 {
-                                                StatItem(
-                                                    label: "Elev Loss",
-                                                    value: formatElevation(route.elevationLoss))
-                                            }
-                                        }
-                                        Spacer(minLength: 0)
-                                    }
-                                    .tag(0)
-
-                                    // Page 1: Elevation Chart
-                                    if !cachedElevationData.isEmpty {
-                                        VStack {
-                                            RouteElevationChartView(
-                                                points: cachedElevationData, scrub: scrubState)
-                                            Spacer(minLength: 0)
-                                        }
-                                        .tag(1)
-                                    }
+                        MapStatsPanel(
+                            isOpen: $isPanelOpen,
+                            page: $panelPage,
+                            expandedPages: .constant([]),
+                            pageCount: cachedElevationData.isEmpty ? 1 : 2,
+                            title: route.name
+                        ) {
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.flexible()), GridItem(.flexible()),
+                                    GridItem(.flexible()),
+                                ], spacing: 10
+                            ) {
+                                StatItem(label: "Distance", value: formatDistance(route.distance))
+                                if route.elevationGain > 0 {
+                                    StatItem(label: "Elev Gain", value: formatElevation(route.elevationGain))
                                 }
-                                .tabViewStyle(.page(indexDisplayMode: .never))
-                                .frame(
-                                    height: panelState == .expanded
-                                        ? 170 : (route.elevationGain > 0 ? 70 : 60)
-                                )
-                                .onChange(of: panelPage) { _, newPage in
-                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                        panelState = newPage == 1 ? .expanded : .compact
-                                    }
+                                if route.elevationLoss > 0 {
+                                    StatItem(label: "Elev Loss", value: formatElevation(route.elevationLoss))
                                 }
-
-                                // Page dots (only if chart data exists)
-                                if !cachedElevationData.isEmpty {
-                                    HStack(spacing: 6) {
-                                        ForEach(0..<2, id: \.self) { i in
-                                            Circle()
-                                                .fill(
-                                                    panelPage == i
-                                                        ? Color.primary
-                                                        : Color.secondary.opacity(0.4)
-                                                )
-                                                .frame(width: 6, height: 6)
-                                        }
-                                    }
-                                }
-                            } else {
-                                Image(systemName: "chart.bar.xaxis")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(.primary)
-                                    .padding(.top, 8)
                             }
-                        }
-                        .padding(.horizontal, panelState != .collapsed ? 16 : 0)
-                        .padding(.bottom, panelState != .collapsed ? 8 : 8)
-                        .frame(
-                            maxWidth: panelState != .collapsed ? .infinity : nil,
-                            alignment: panelState != .collapsed ? .center : .trailing
-                        )
-                        .frame(
-                            width: panelState != .collapsed ? nil : 48,
-                            height: panelState != .collapsed ? nil : 48
-                        )
-                        .background(
-                            RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                                .fill(.ultraThinMaterial)
-                                .shadow(radius: 12, y: 4)
-                        )
-                        .padding(.horizontal, panelState != .collapsed ? 12 : 0)
-                        .padding(.bottom, panelState != .collapsed ? 12 : 24)
-                        .padding(.trailing, panelState != .collapsed ? 0 : 16)
-                        .frame(
-                            maxWidth: .infinity,
-                            alignment: panelState != .collapsed ? .center : .trailing
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if panelState == .collapsed {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                    panelState = panelPage == 1 ? .expanded : .compact
-                                }
+                            .statsPanelPage(0)
+
+                            if !cachedElevationData.isEmpty {
+                                RouteElevationChartView(points: cachedElevationData, scrub: scrubState)
+                                    .statsPanelPage(1)
                             }
                         }
                     }
