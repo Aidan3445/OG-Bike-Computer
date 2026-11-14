@@ -97,9 +97,9 @@ struct MultiRideDetailView: View {
                         position: $mapPosition,
                         bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)
                     ) {
-                        ForEach(renders) { r in
-                            MapPolyline(coordinates: r.coords)
-                                .stroke(r.color, lineWidth: 4)
+                        ForEach(renderPieces) { piece in
+                            MapPolyline(coordinates: piece.coords)
+                                .stroke(piece.color, lineWidth: 4)
                         }
                         ForEach(connectors) { c in
                             if c.dashed {
@@ -113,7 +113,7 @@ struct MultiRideDetailView: View {
                         }
 
                         if let chartZoom {
-                            ChartZoomMapHighlight(range: chartZoom, coordinateAt: coordinate(atCombinedDistance:))
+                            ChartZoomMapHighlight(segments: zoomSegments(chartZoom))
                         }
 
                         if let first = renders.first, let coord = first.coords.first {
@@ -447,6 +447,36 @@ struct MultiRideDetailView: View {
 
     /// Background load — each ride's track publishes as soon as it decodes,
     /// so lines appear progressively
+
+    /// Each ride's line, cut around the chart zoom so its highlight is drawn
+    /// in place of that stretch instead of on top of it.
+    private var renderPieces: [MapLinePiece] {
+        renders.flatMap { render -> [MapLinePiece] in
+            let whole = [MapLinePiece(id: render.id.uuidString, coords: render.coords, color: render.color)]
+            guard let zoom = chartZoom, render.cumulativeDistances.count == render.coords.count else { return whole }
+            let lo = zoom.lowerBound - render.startDistance
+            let hi = zoom.upperBound - render.startDistance
+            guard hi > lo else { return whole }
+            return trackPieces(
+                outside: lo...hi, from: 0, to: render.coords.count - 1, count: render.coords.count,
+                distance: { render.cumulativeDistances[$0] }, coordinate: { render.coords[$0] }
+            ).enumerated().map { MapLinePiece(id: "\(render.id)-\($0.offset)", coords: $0.element, color: render.color) }
+        }
+    }
+
+    /// The zoomed stretch as one run of real track points per ride it covers.
+    private func zoomSegments(_ range: ClosedRange<Double>) -> [[CLLocationCoordinate2D]] {
+        renders.compactMap { render in
+            let length = render.cumulativeDistances.last ?? 0
+            let lo = max(range.lowerBound - render.startDistance, 0)
+            let hi = min(range.upperBound - render.startDistance, length)
+            guard hi > lo, render.cumulativeDistances.count == render.coords.count else { return nil }
+            return trackCoordinates(
+                in: lo...hi, count: render.coords.count,
+                distance: { render.cumulativeDistances[$0] },
+                coordinate: { render.coords[$0] })
+        }
+    }
 
     /// Track coordinate for a distance on the combined chart.
     private func coordinate(atCombinedDistance distance: Double) -> CLLocationCoordinate2D? {

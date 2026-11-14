@@ -107,9 +107,9 @@ struct RideDetailView: View {
                             .stroke(.blue, lineWidth: 4)
                     }
                 } else {
-                    ForEach(visibleColoredSegments) { seg in
-                        MapPolyline(coordinates: seg.coords)
-                            .stroke(seg.color, lineWidth: 4)
+                    ForEach(trackLinePieces) { piece in
+                        MapPolyline(coordinates: piece.coords)
+                            .stroke(piece.color, lineWidth: 4)
                     }
                 }
                 // Pause/hold jumps (long elapsed-time gaps) drawn as dashed grey.
@@ -119,7 +119,7 @@ struct RideDetailView: View {
                 }
 
                 if let chartZoom {
-                    ChartZoomMapHighlight(range: chartZoom, coordinateAt: interpolateCoordinate)
+                    ChartZoomMapHighlight(segments: [zoomCoordinates(chartZoom)])
                 }
 
                 if let first = startCoord {
@@ -646,8 +646,9 @@ struct RideDetailView: View {
             // colored polyline doesn't draw a straight line across a pause/
             // hold jump. The gaps themselves render as dashed grey.
             let split = splitAtPauseGaps(locations: locations, gapSeconds: 30)
-            let fine = buildColoredSegments(runs: split.runs, chunkBudget: 500)
-            let coarseRaw = buildColoredSegments(runs: split.runs, chunkBudget: 120, colorSteps: 6)
+            let fine = buildColoredSegments(runs: split.runs, runStarts: split.runStarts, chunkBudget: 500)
+            let coarseRaw = buildColoredSegments(
+                runs: split.runs, runStarts: split.runStarts, chunkBudget: 120, colorSteps: 6)
             let coarse = downsampleSegments(coarseRaw, totalPointBudget: 1500)
 
             let chart = buildRideChartData(points: fullPoints)
@@ -696,6 +697,35 @@ struct RideDetailView: View {
 
     /// Binary-search the precomputed cumulative distances, then interpolate
     /// within the bracketing segment.
+    /// The visible colored lines, cut around the chart zoom so its highlight
+    /// is drawn in place of that stretch instead of on top of it.
+    private var trackLinePieces: [MapLinePiece] {
+        let segments = visibleColoredSegments
+        guard let zoom = chartZoom, cumulativeDistances.count == allLocations.count else {
+            return segments.map { MapLinePiece(id: $0.id.uuidString, coords: $0.coords, color: $0.color) }
+        }
+        let cum = cumulativeDistances, locations = allLocations
+        return segments.flatMap { seg -> [MapLinePiece] in
+            let d0 = cum[seg.firstIndex], d1 = cum[seg.lastIndex]
+            if d1 <= zoom.lowerBound || d0 >= zoom.upperBound {
+                return [MapLinePiece(id: seg.id.uuidString, coords: seg.coords, color: seg.color)]
+            }
+            return trackPieces(
+                outside: zoom, from: seg.firstIndex, to: seg.lastIndex, count: locations.count,
+                distance: { cum[$0] }, coordinate: { locations[$0].coordinate }
+            ).enumerated().map { MapLinePiece(id: "\(seg.id)-\($0.offset)", coords: $0.element, color: seg.color) }
+        }
+    }
+
+    /// The track's own points across the zoomed stretch.
+    private func zoomCoordinates(_ range: ClosedRange<Double>) -> [CLLocationCoordinate2D] {
+        guard cumulativeDistances.count == allLocations.count else { return [] }
+        return trackCoordinates(
+            in: range, count: allLocations.count,
+            distance: { cumulativeDistances[$0] },
+            coordinate: { allLocations[$0].coordinate })
+    }
+
     private func interpolateCoordinate(at targetDistance: Double) -> CLLocationCoordinate2D? {
         let cumDist = cumulativeDistances
         guard allLocations.count >= 2, cumDist.count == allLocations.count else { return nil }
@@ -767,6 +797,8 @@ private func downsampleSegments(
         return ColoredSegment(
             coords: downsampleCoordinates(seg.coords, maxPoints: budget),
             color: seg.color,
+            firstIndex: seg.firstIndex,
+            lastIndex: seg.lastIndex,
             bbox: seg.bbox)
     }
 }
@@ -814,6 +846,10 @@ private struct ColoredSegment: Identifiable {
     let id = UUID()
     let coords: [CLLocationCoordinate2D]
     let color: Color
+    /// The span of the track it covers, as indices into the ride's points,
+    /// so a chart zoom can cut it exactly at the zoomed stretch's ends.
+    let firstIndex: Int
+    let lastIndex: Int
     /// Pre-computed bounding box for visible-region filtering. Long rides
     /// can produce hundreds of segments; computing the bbox once at build
     /// time keeps the Map body's per-render filter O(N).
@@ -835,16 +871,18 @@ private func splitAtPauseGaps(
     gapSeconds: TimeInterval = 30,
     minRunMeters: Double = 3.048,      // ~10 feet
     minRunSeconds: TimeInterval = 3
-) -> (runs: [[CLLocation]], gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)]) {
-    guard locations.count >= 2 else { return (runs: [locations], gaps: []) }
+) -> (runs: [[CLLocation]], runStarts: [Int], gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)]) {
+    guard locations.count >= 2 else { return (runs: [locations], runStarts: [0], gaps: []) }
 
-    // 1. Carve into raw runs at every >gapSeconds break.
+    // 1. Carve into raw runs at every >gapSeconds break, noting where each starts.
     var rawRuns: [[CLLocation]] = []
+    var rawStarts: [Int] = [0]
     var current: [CLLocation] = [locations[0]]
     for i in 1..<locations.count {
         let dt = locations[i].timestamp.timeIntervalSince(locations[i - 1].timestamp)
         if dt > gapSeconds {
             rawRuns.append(current)
+            rawStarts.append(i)
             current = [locations[i]]
         } else {
             current.append(locations[i])
@@ -853,7 +891,8 @@ private func splitAtPauseGaps(
     rawRuns.append(current)
 
     // 2. Keep only runs that are meaningful in both distance and time.
-    let meaningfulRuns: [[CLLocation]] = rawRuns.filter { run in
+    let kept = rawRuns.indices.filter { idx in
+        let run = rawRuns[idx]
         guard run.count >= 2,
               let first = run.first,
               let last = run.last else { return false }
@@ -864,6 +903,7 @@ private func splitAtPauseGaps(
         }
         return duration >= minRunSeconds && dist >= minRunMeters
     }
+    let meaningfulRuns = kept.map { rawRuns[$0] }
 
     // 3. Rebuild gaps as connectors between consecutive *meaningful* runs.
     var gaps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)] = []
@@ -873,7 +913,7 @@ private func splitAtPauseGaps(
         gaps.append((prevEnd, nextStart))
     }
 
-    return (runs: meaningfulRuns, gaps: gaps)
+    return (runs: meaningfulRuns, runStarts: kept.map { rawStarts[$0] }, gaps: gaps)
 }
 
 /// Speed-colored polylines for every ridden run. The chunk budget is shared
@@ -882,26 +922,32 @@ private func splitAtPauseGaps(
 /// run so a color means the same speed everywhere. Adjacent chunks with the
 /// same color merge, so the polyline count is the number of color changes.
 /// `colorSteps` sets color resolution: 20 gives 5% increments.
+/// `runStarts` holds each run's index in the ride's points.
 private func buildColoredSegments(
-    runs: [[CLLocation]],
+    runs allRuns: [[CLLocation]],
+    runStarts allStarts: [Int],
     chunkBudget: Int,
     colorSteps: Int = 20
 ) -> [ColoredSegment] {
-    let runs = runs.filter { $0.count >= 2 }
+    let keep = allRuns.indices.filter { allRuns[$0].count >= 2 }
+    let runs = keep.map { allRuns[$0] }
+    let runStarts = keep.map { allStarts[$0] }
     let totalPoints = runs.reduce(0) { $0 + $1.count }
     guard totalPoints > 0 else { return [] }
 
-    let runChunks = runs.map { run in
+    let runChunks = zip(runs, runStarts).map { run, start in
         let share = Double(chunkBudget) * Double(run.count) / Double(totalPoints)
-        return speedChunks(locations: run, segmentCount: max(1, Int(share.rounded())))
+        return speedChunks(locations: run, baseIndex: start, segmentCount: max(1, Int(share.rounded())))
     }
 
     // Normalize speeds to p10–p90 of the whole ride.
     let speeds = runChunks.flatMap { $0.map(\.avgSpeed) }.filter { $0 > 0.5 }.sorted()
     guard !speeds.isEmpty else {
-        return runs.map { run in
+        return zip(runs, runStarts).map { run, start in
             let coords = run.map(\.coordinate)
-            return ColoredSegment(coords: coords, color: .blue, bbox: SegmentBBox.compute(coords))
+            return ColoredSegment(
+                coords: coords, color: .blue, firstIndex: start, lastIndex: start + run.count - 1,
+                bbox: SegmentBBox.compute(coords))
         }
     }
     let p10   = speeds[speeds.count / 10]
@@ -912,10 +958,12 @@ private func buildColoredSegments(
         let ratio = max(0.0, min(1.0, (speed - p10) / range))
         return Int((ratio * Double(colorSteps - 1)).rounded())
     }
-    func segment(_ coords: [CLLocationCoordinate2D], step: Int) -> ColoredSegment {
+    func segment(_ coords: [CLLocationCoordinate2D], step: Int, first: Int, last: Int) -> ColoredSegment {
         ColoredSegment(
             coords: coords,
             color:  rideSpeedColor(ratio: Double(step) / Double(colorSteps - 1)),
+            firstIndex: first,
+            lastIndex: last,
             bbox:   SegmentBBox.compute(coords))
     }
 
@@ -924,32 +972,41 @@ private func buildColoredSegments(
         guard let first = chunks.first else { continue }
         var batchCoords = first.coords
         var batchStep   = stepFor(speed: first.avgSpeed)
+        var batchFirst  = first.firstIndex
+        var batchLast   = first.lastIndex
         for chunk in chunks.dropFirst() {
             let step = stepFor(speed: chunk.avgSpeed)
             if step == batchStep {
                 // Same color: extend the batch, dropping the shared endpoint
                 batchCoords.append(contentsOf: chunk.coords.dropFirst())
+                batchLast = chunk.lastIndex
             } else {
-                segments.append(segment(batchCoords, step: batchStep))
+                segments.append(segment(batchCoords, step: batchStep, first: batchFirst, last: batchLast))
                 batchCoords = chunk.coords
                 batchStep   = step
+                batchFirst  = chunk.firstIndex
+                batchLast   = chunk.lastIndex
             }
         }
-        segments.append(segment(batchCoords, step: batchStep))
+        segments.append(segment(batchCoords, step: batchStep, first: batchFirst, last: batchLast))
     }
     return segments
 }
 
+private typealias SpeedChunk = (coords: [CLLocationCoordinate2D], avgSpeed: Double, firstIndex: Int, lastIndex: Int)
+
 /// Splits a run into `segmentCount` equal chunks with their average speed.
 /// Each chunk's last point is the next chunk's first, so polylines connect.
+/// Indices count from `baseIndex`, the run's place in the ride's points.
 private func speedChunks(
     locations: [CLLocation],
+    baseIndex: Int,
     segmentCount: Int
-) -> [(coords: [CLLocationCoordinate2D], avgSpeed: Double)] {
+) -> [SpeedChunk] {
     guard locations.count >= 2 else { return [] }
     let chunkSize = max(1, locations.count / segmentCount)
 
-    var chunks: [(coords: [CLLocationCoordinate2D], avgSpeed: Double)] = []
+    var chunks: [SpeedChunk] = []
     var i = 0
     while i < locations.count - 1 {
         let end   = min(i + chunkSize + 1, locations.count)
@@ -963,7 +1020,9 @@ private func speedChunks(
             if dt > 0 { totalTime += dt }
         }
         chunks.append((coords: slice.map(\.coordinate),
-                       avgSpeed: totalTime > 0 ? totalDist / totalTime : 0))
+                       avgSpeed: totalTime > 0 ? totalDist / totalTime : 0,
+                       firstIndex: baseIndex + i,
+                       lastIndex: baseIndex + end - 1))
         i += chunkSize
     }
     return chunks

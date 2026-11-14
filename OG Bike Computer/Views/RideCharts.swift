@@ -85,25 +85,43 @@ struct ChartScrubRule: View {
 
 /// Screen-space scrub dot layered over the map (not a map Annotation) so
 /// moving it never touches the map's content. `coordinateFor` maps the scrub
-/// distance to a track coordinate.
+/// distance to a track coordinate. While pinching a chart it shows A and B at
+/// the two fingers' spots instead.
 struct MapScrubDot: View {
     @ObservedObject var scrub: ChartScrubState
     let proxy: MapProxy
     let coordinateFor: (Double) -> CLLocationCoordinate2D?
 
     var body: some View {
-        if let dist = scrub.distance,
-            let coord = coordinateFor(dist),
-            let point = proxy.convert(coord, to: .local)
-        {
-            Circle()
-                .fill(.white)
-                .frame(width: 12, height: 12)
-                .overlay(Circle().stroke(scrub.color, lineWidth: 3))
-                .shadow(radius: 3)
-                .position(point)
-                .allowsHitTesting(false)
+        ZStack {
+            if let range = scrub.pinch {
+                ForEach([("A", range.lowerBound), ("B", range.upperBound)], id: \.0) { letter, distance in
+                    if let coord = coordinateFor(distance),
+                        let point = proxy.convert(coord, to: .local)
+                    {
+                        Text(letter)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 20, height: 20)
+                            .background(Circle().fill(scrub.color))
+                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                            .shadow(radius: 3)
+                            .position(point)
+                    }
+                }
+            } else if let dist = scrub.distance,
+                let coord = coordinateFor(dist),
+                let point = proxy.convert(coord, to: .local)
+            {
+                Circle()
+                    .fill(.white)
+                    .frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(scrub.color, lineWidth: 3))
+                    .shadow(radius: 3)
+                    .position(point)
+            }
         }
+        .allowsHitTesting(false)
     }
 }
 
@@ -1394,25 +1412,97 @@ func formatChartDuration(_ seconds: Double) -> String {
     return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
 }
 
-/// The zoomed stretch on a map: a white-cased line with A and B at its ends.
-/// Samples the track through `coordinateAt`, so it follows curves.
+/// The zoomed stretch on a map: a white-cased black line with A and B at
+/// its ends. Each segment is a run of the track's real points, so the line
+/// sits right on top of the track through every bend.
 struct ChartZoomMapHighlight: MapContent {
-    let range: ClosedRange<Double>
-    let coordinateAt: (Double) -> CLLocationCoordinate2D?
+    let segments: [[CLLocationCoordinate2D]]
 
     var body: some MapContent {
-        let samples = 120
-        let step = (range.upperBound - range.lowerBound) / Double(samples)
-        let coords = (0...samples).compactMap { coordinateAt(range.lowerBound + Double($0) * step) }
-        if coords.count >= 2 {
-            MapPolyline(coordinates: coords)
-                .stroke(.white, style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
-            MapPolyline(coordinates: coords)
-                .stroke(.black, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-            Annotation("", coordinate: coords[0]) { ChartZoomPin(letter: "A") }
-            Annotation("", coordinate: coords[coords.count - 1]) { ChartZoomPin(letter: "B") }
+        ForEach(Array(segments.enumerated()), id: \.offset) { _, coords in
+            if coords.count >= 2 {
+                MapPolyline(coordinates: coords)
+                    .stroke(.white, style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
+                MapPolyline(coordinates: coords)
+                    .stroke(.black, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+            }
+        }
+        if let first = segments.first?.first {
+            Annotation("", coordinate: first) { ChartZoomPin(letter: "A") }
+        }
+        if let last = segments.last?.last {
+            Annotation("", coordinate: last) { ChartZoomPin(letter: "B") }
         }
     }
+}
+
+/// The track's own points between `range`'s ends, with the two ends
+/// interpolated onto the track. `distance(i)` must rise with `i`.
+func trackCoordinates(
+    in range: ClosedRange<Double>,
+    count: Int,
+    distance: (Int) -> Double,
+    coordinate: (Int) -> CLLocationCoordinate2D
+) -> [CLLocationCoordinate2D] {
+    guard count >= 2 else { return [] }
+
+    func firstIndex(atLeast value: Double) -> Int {
+        var lo = 0, hi = count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if distance(mid) < value { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
+    }
+
+    func point(at value: Double) -> CLLocationCoordinate2D {
+        let i = min(max(firstIndex(atLeast: value), 1), count - 1)
+        let span = distance(i) - distance(i - 1)
+        let t = span > 0 ? max(0, min(1, (value - distance(i - 1)) / span)) : 0
+        let a = coordinate(i - 1), b = coordinate(i)
+        return CLLocationCoordinate2D(
+            latitude: a.latitude + (b.latitude - a.latitude) * t,
+            longitude: a.longitude + (b.longitude - a.longitude) * t)
+    }
+
+    let start = firstIndex(atLeast: range.lowerBound)
+    let end = firstIndex(atLeast: range.upperBound)  // first point past the stretch
+    let inner = (start..<max(start, min(end, count))).map(coordinate)
+    return [point(at: range.lowerBound)] + inner + [point(at: range.upperBound)]
+}
+
+/// The parts of a run of track points (`start...end`) that fall outside
+/// `zoom`, cut exactly at its ends. Drawing these and the zoom highlight
+/// for the middle, rather than the whole run under the highlight, keeps the
+/// two from overlapping. A run that misses the zoom comes back whole.
+func trackPieces(
+    outside zoom: ClosedRange<Double>,
+    from start: Int,
+    to end: Int,
+    count: Int,
+    distance: (Int) -> Double,
+    coordinate: (Int) -> CLLocationCoordinate2D
+) -> [[CLLocationCoordinate2D]] {
+    guard start < end, end < count else { return [] }
+    let d0 = distance(start), d1 = distance(end)
+    if d1 <= zoom.lowerBound || d0 >= zoom.upperBound {
+        return [(start...end).map(coordinate)]
+    }
+    var pieces: [[CLLocationCoordinate2D]] = []
+    if d0 < zoom.lowerBound {
+        pieces.append(trackCoordinates(in: d0...zoom.lowerBound, count: count, distance: distance, coordinate: coordinate))
+    }
+    if d1 > zoom.upperBound {
+        pieces.append(trackCoordinates(in: zoom.upperBound...d1, count: count, distance: distance, coordinate: coordinate))
+    }
+    return pieces
+}
+
+/// One piece of a track line to draw.
+struct MapLinePiece: Identifiable {
+    let id: String
+    let coords: [CLLocationCoordinate2D]
+    let color: Color
 }
 
 private struct ChartZoomPin: View {

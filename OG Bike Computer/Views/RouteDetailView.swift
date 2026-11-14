@@ -102,9 +102,12 @@ struct RouteDetailView: View {
                             position: $mapPosition,
                             bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)
                         ) {
-                            // Route polyline
-                            MapPolyline(coordinates: cachedCoordinates)
-                                .stroke(.blue, lineWidth: 4)
+                            // Route polyline, cut around a chart zoom so the
+                            // highlight replaces that stretch
+                            ForEach(routeLinePieces) { piece in
+                                MapPolyline(coordinates: piece.coords)
+                                    .stroke(piece.color, lineWidth: 4)
+                            }
 
                             // In-progress recording breadcrumb, above the route
                             if recordingPath.count >= 2 {
@@ -208,7 +211,7 @@ struct RouteDetailView: View {
                             }
 
                             if let chartZoom {
-                                ChartZoomMapHighlight(range: chartZoom, coordinateAt: interpolateRouteCoordinate)
+                                ChartZoomMapHighlight(segments: [zoomCoordinates(chartZoom)])
                             }
 
                             // Waypoints / POIs — including user edits + user-added POIs
@@ -1119,6 +1122,26 @@ struct RouteDetailView: View {
 
     /// Binary-search the processed points' cumulative distances, then
     /// interpolate within the bracketing segment.
+    private var routeLinePieces: [MapLinePiece] {
+        let pts = cachedProcessedPoints
+        guard let zoom = chartZoom, pts.count == cachedCoordinates.count, pts.count >= 2 else {
+            return [MapLinePiece(id: "route", coords: cachedCoordinates, color: .blue)]
+        }
+        return trackPieces(
+            outside: zoom, from: 0, to: pts.count - 1, count: pts.count,
+            distance: { pts[$0].distanceFromStart }, coordinate: { pts[$0].coordinate }
+        ).enumerated().map { MapLinePiece(id: "route-\($0.offset)", coords: $0.element, color: .blue) }
+    }
+
+    /// The route's own points across the zoomed stretch.
+    private func zoomCoordinates(_ range: ClosedRange<Double>) -> [CLLocationCoordinate2D] {
+        let pts = cachedProcessedPoints
+        return trackCoordinates(
+            in: range, count: pts.count,
+            distance: { pts[$0].distanceFromStart },
+            coordinate: { pts[$0].coordinate })
+    }
+
     private func interpolateRouteCoordinate(at targetDist: Double) -> CLLocationCoordinate2D? {
         let pts = cachedProcessedPoints
         guard pts.count >= 2 else { return nil }
