@@ -86,6 +86,17 @@ struct ContentView: View {
                                 }
                             }
                         }
+                        .dragToSelect(
+                            isEnabled: isSelectingRoutes,
+                            orderedIDs: routeSections.flatMap { $0.1.map(\.id) },
+                            isSelected: { selectedRouteIDs.contains($0) },
+                            setSelected: { id, selected in
+                                if selected {
+                                    selectedRouteIDs.insert(id)
+                                } else {
+                                    selectedRouteIDs.remove(id)
+                                }
+                            })
                     }
                 }
                 .navigationTitle(
@@ -371,6 +382,7 @@ extension ContentView {
                         selectedRouteIDs.insert(route.id)
                     }
                 }, including: isSelectingRoutes ? .all : .subviews)
+            .dragSelectRow(route.id)
         }
         .onDelete { indices in
             guard !isSelectingRoutes else { return }

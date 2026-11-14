@@ -110,6 +110,18 @@ struct RideHistoryView: View {
                         }
                     }
                 }
+                .dragToSelect(
+                    isEnabled: isSelectionMode,
+                    orderedIDs: sections.flatMap { $0.1.map(\.id) },
+                    isSelected: { selectedIDs.contains($0) },
+                    setSelected: { id, selected in
+                        if selected {
+                            guard !selectedIDs.contains(id), selectedIDs.count < Self.maxSelection else { return }
+                            selectedIDs.append(id)
+                        } else {
+                            selectedIDs.removeAll { $0 == id }
+                        }
+                    })
             }
         }
         .navigationTitle(
@@ -234,6 +246,7 @@ struct RideHistoryView: View {
                  including: isSelectionMode ? .all : .subviews)
         // Disable swipe-actions while selecting so they don't interfere with taps.
         .deleteDisabled(isSelectionMode)
+        .dragSelectRow(ride.id)
     }
 
     @ViewBuilder
