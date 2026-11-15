@@ -55,16 +55,19 @@ struct RouteMapData {
     var hasRoute: Bool { processedRoute != nil }
 }
 
+extension Color {
+    /// Completed part of a route. Dark enough that it never matches any hue
+    /// in the rainbow route color.
+    static let riddenRoute = Color(red: 0, green: 0.45, blue: 0.15)
+}
+
 // MARK: - Rainbow route
 
 /// Colors for the rainbow route. Hue is measured in cycles along the line and
-/// wraps red to red, so the fade has no bands or seam. Each spot's hue is set
-/// once and never changes, so riding faster just moves you through the colors
-/// faster.
+/// wraps red to red, so the fade has no bands or seam. Hue is pinned to the
+/// line rather than animated, so riding faster just moves you through the
+/// colors faster.
 enum RouteRainbow {
-    /// Planned routes: meters per full trip through the rainbow.
-    static let routeWavelength: Double = 800
-
     /// Free-ride trails: each stretch adds hue based on how fast it was
     /// ridden. Meters per cycle is this divided by speed in m/s, which works
     /// out to 2.5 mi per rainbow at 20 mph and 5 mi at 10 mph.
@@ -75,8 +78,14 @@ enum RouteRainbow {
         var cycle: Double
     }
 
-    static func routeCycle(at distance: Double) -> Double {
-        distance / routeWavelength
+    /// Planned routes: one full rainbow every two screen heights, so 1/4 mi
+    /// of zoom cycles every 1/2 mi.
+    static func routeWavelength(viewDistance: Double) -> Double {
+        viewDistance * 2
+    }
+
+    static func routeCycle(at distance: Double, viewDistance: Double) -> Double {
+        distance / routeWavelength(viewDistance: viewDistance)
     }
 
     static func color(cycle: Double) -> Color {
@@ -86,12 +95,14 @@ enum RouteRainbow {
     }
 
     /// Gradient stops covering `start...end` meters of a route, for MapKit polylines.
-    static func gradient(from start: Double, to end: Double) -> Gradient {
+    static func gradient(from start: Double, to end: Double, viewDistance: Double) -> Gradient {
         let span = max(end - start, 1)
-        let count = min(max(Int(span / (routeWavelength / 16)), 2), 200)
+        let count = min(max(Int(span / (routeWavelength(viewDistance: viewDistance) / 16)), 2), 200)
         let stops = (0...count).map { i in
             let t = Double(i) / Double(count)
-            return Gradient.Stop(color: color(cycle: routeCycle(at: start + span * t)), location: t)
+            return Gradient.Stop(
+                color: color(cycle: routeCycle(at: start + span * t, viewDistance: viewDistance)),
+                location: t)
         }
         return Gradient(stops: stops)
     }
@@ -215,7 +226,7 @@ struct RouteMapFullRouteCanvas: View {
                         done.addLine(to: project(points[i].coordinate, transform: transform))
                     }
                     done.addLine(to: project(points[min(segIdx, points.count - 1)].coordinate, transform: transform))
-                    context.stroke(done, with: .color(.green),
+                    context.stroke(done, with: .color(.riddenRoute),
                                    style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 }
 
@@ -555,7 +566,7 @@ struct RouteMapBreadcrumbCanvas: View {
             }
         }
 
-        context.stroke(distantGreenPath, with: .color(.green.opacity(0.4)),
+        context.stroke(distantGreenPath, with: .color(.riddenRoute.opacity(0.6)),
                        style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
         context.stroke(distantGrayPath, with: .color(.gray.opacity(0.4)),
                        style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
@@ -597,7 +608,7 @@ struct RouteMapBreadcrumbCanvas: View {
                     if let bp = bridgePoint {
                         aheadPath.move(to: bp)
                         aheadPath.addLine(to: pt)
-                        if rainbow { aheadVertices.append(.init(point: bp, cycle: RouteRainbow.routeCycle(at: bridgeDist))) }
+                        if rainbow { aheadVertices.append(.init(point: bp, cycle: RouteRainbow.routeCycle(at: bridgeDist, viewDistance: viewDistance))) }
                     } else {
                         aheadPath.move(to: pt)
                     }
@@ -605,12 +616,12 @@ struct RouteMapBreadcrumbCanvas: View {
                 } else {
                     aheadPath.addLine(to: pt)
                 }
-                if rainbow { aheadVertices.append(.init(point: pt, cycle: RouteRainbow.routeCycle(at: point.distanceFromStart))) }
+                if rainbow { aheadVertices.append(.init(point: pt, cycle: RouteRainbow.routeCycle(at: point.distanceFromStart, viewDistance: viewDistance))) }
             }
         }
 
         let style = StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round)
-        context.stroke(behindPath, with: .color(.green.opacity(0.4)), style: style)
+        context.stroke(behindPath, with: .color(.riddenRoute), style: style)
         if rainbow {
             RouteRainbow.stroke(aheadVertices, in: context, style: style)
         } else {

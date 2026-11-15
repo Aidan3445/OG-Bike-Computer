@@ -440,7 +440,8 @@ private struct BreadcrumbMapView: View {
     private func rainbowStyle(_ near: ArraySlice<ProcessedPoint>) -> LinearGradient {
         let gradient = RouteRainbow.gradient(
             from: near.first?.distanceFromStart ?? 0,
-            to: near.last?.distanceFromStart ?? 0)
+            to: near.last?.distanceFromStart ?? 0,
+            viewDistance: viewDistance)
         return LinearGradient(gradient: gradient, startPoint: .leading, endPoint: .trailing)
     }
 
@@ -454,7 +455,7 @@ private struct BreadcrumbMapView: View {
             if segIdx > 0 {
                 let behindCoords = points[0...segIdx].map(\.coordinate)
                 MapPolyline(coordinates: behindCoords)
-                    .stroke(.green, lineWidth: 6)
+                    .stroke(Color.riddenRoute, lineWidth: 6)
             }
 
             // Ahead portion: near segment (configured color) + far segment (grey)
