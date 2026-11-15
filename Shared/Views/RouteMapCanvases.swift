@@ -55,6 +55,119 @@ struct RouteMapData {
     var hasRoute: Bool { processedRoute != nil }
 }
 
+// MARK: - Rainbow route
+
+/// Colors for the rainbow route. Hue is measured in cycles along the line and
+/// wraps red to red, so the fade has no bands or seam. Each spot's hue is set
+/// once and never changes, so riding faster just moves you through the colors
+/// faster.
+enum RouteRainbow {
+    /// Planned routes: meters per full trip through the rainbow.
+    static let routeWavelength: Double = 800
+
+    /// Free-ride trails: each stretch adds hue based on how fast it was
+    /// ridden. Meters per cycle is this divided by speed in m/s, which works
+    /// out to 2.5 mi per rainbow at 20 mph and 5 mi at 10 mph.
+    static let trailCycleConstant: Double = 35_972
+
+    struct Vertex {
+        var point: CGPoint
+        var cycle: Double
+    }
+
+    static func routeCycle(at distance: Double) -> Double {
+        distance / routeWavelength
+    }
+
+    static func color(cycle: Double) -> Color {
+        var hue = cycle.truncatingRemainder(dividingBy: 1)
+        if hue < 0 { hue += 1 }
+        return Color(hue: hue, saturation: 0.85, brightness: 1)
+    }
+
+    /// Gradient stops covering `start...end` meters of a route, for MapKit polylines.
+    static func gradient(from start: Double, to end: Double) -> Gradient {
+        let span = max(end - start, 1)
+        let count = min(max(Int(span / (routeWavelength / 16)), 2), 200)
+        let stops = (0...count).map { i in
+            let t = Double(i) / Double(count)
+            return Gradient.Stop(color: color(cycle: routeCycle(at: start + span * t)), location: t)
+        }
+        return Gradient(stops: stops)
+    }
+
+    private static var trailCycles: [Double] = []
+    private static var trailStart: Date?
+
+    /// Hue position of every trail point. The trail only grows during a ride,
+    /// so new points are added onto the cached values instead of redoing the
+    /// whole ride each redraw.
+    static func cycles(for trail: [CLLocation]) -> [Double] {
+        if trail.first?.timestamp != trailStart || trail.count < trailCycles.count {
+            trailCycles = []
+            trailStart = trail.first?.timestamp
+        }
+        guard !trail.isEmpty else { return [] }
+        if trailCycles.isEmpty { trailCycles.append(0) }
+        for i in trailCycles.count..<trail.count {
+            let a = trail[i - 1], b = trail[i]
+            let meters = b.distance(from: a)
+            let dt = b.timestamp.timeIntervalSince(a.timestamp)
+            let speed = b.speed >= 0 ? b.speed : (dt > 0 ? meters / dt : 0)
+            // Cap GPS spikes so one bad fix can't spin through the whole rainbow.
+            trailCycles.append(trailCycles[i - 1] + meters * min(speed, 25) / trailCycleConstant)
+        }
+        return trailCycles
+    }
+
+    /// Strokes a line that fades through the rainbow along its length. The line
+    /// is drawn in short chunks, each with a linear gradient between its end
+    /// colors. A chunk only covers a small slice of hue, so the result reads
+    /// as one continuous fade.
+    static func stroke(_ vertices: [Vertex], in context: GraphicsContext, style: StrokeStyle) {
+        guard vertices.count >= 2 else { return }
+        let step = 1.0 / 24
+
+        func draw(_ path: Path, from a: Vertex, to b: Vertex) {
+            let gradient = Gradient(colors: [color(cycle: a.cycle), color(cycle: b.cycle)])
+            context.stroke(path, with: .linearGradient(gradient, startPoint: a.point, endPoint: b.point),
+                           style: style)
+        }
+
+        var chunkStart = vertices[0]
+        var chunk = Path()
+        chunk.move(to: chunkStart.point)
+        var chunkOpen = false
+        var last = chunkStart
+
+        for v in vertices.dropFirst() {
+            // Split long straight segments so the hue can't skip across them.
+            let span = v.cycle - last.cycle
+            let pieces = max(1, Int((abs(span) / step).rounded(.up)))
+            for k in 1...pieces {
+                let t = Double(k) / Double(pieces)
+                let p = Vertex(
+                    point: CGPoint(x: last.point.x + (v.point.x - last.point.x) * t,
+                                   y: last.point.y + (v.point.y - last.point.y) * t),
+                    cycle: last.cycle + span * t)
+                chunk.addLine(to: p.point)
+                chunkOpen = true
+                if abs(p.cycle - chunkStart.cycle) >= step {
+                    draw(chunk, from: chunkStart, to: p)
+                    chunkStart = p
+                    chunk = Path()
+                    chunk.move(to: p.point)
+                    chunkOpen = false
+                }
+            }
+            last = v
+        }
+        if chunkOpen {
+            draw(chunk, from: chunkStart, to: last)
+        }
+    }
+}
+
 // MARK: - Full route canvas
 
 /// Renders the entire planned route (or recorded free-ride trail) fitted to
@@ -201,14 +314,25 @@ struct RouteMapFullRouteCanvas: View {
                     size: size, insetTop: insetTop, insetBottom: insetBottom, insetSide: insetSide)
                 let stride = max(1, trail.count / 500)
 
-                var path = Path()
-                path.move(to: project(trail[0].coordinate, transform: transform))
-                for i in Swift.stride(from: 1, to: trail.count, by: stride) {
-                    path.addLine(to: project(trail[i].coordinate, transform: transform))
+                let trailStyle = StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
+                if routeAheadColor == .rainbow {
+                    var indices = Array(Swift.stride(from: 0, to: trail.count, by: stride))
+                    if indices.last != trail.count - 1 { indices.append(trail.count - 1) }
+                    let cycles = RouteRainbow.cycles(for: trail)
+                    let vertices = indices.map {
+                        RouteRainbow.Vertex(point: project(trail[$0].coordinate, transform: transform),
+                                            cycle: cycles[$0])
+                    }
+                    RouteRainbow.stroke(vertices, in: context, style: trailStyle)
+                } else {
+                    var path = Path()
+                    path.move(to: project(trail[0].coordinate, transform: transform))
+                    for i in Swift.stride(from: 1, to: trail.count, by: stride) {
+                        path.addLine(to: project(trail[i].coordinate, transform: transform))
+                    }
+                    path.addLine(to: project(trail[trail.count - 1].coordinate, transform: transform))
+                    context.stroke(path, with: .color(routeAheadColor.color), style: trailStyle)
                 }
-                path.addLine(to: project(trail[trail.count - 1].coordinate, transform: transform))
-                context.stroke(path, with: .color(routeAheadColor.color),
-                               style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
 
                 if let loc = data.currentLocation {
                     let pos = project(loc.coordinate, transform: transform)
@@ -445,6 +569,9 @@ struct RouteMapBreadcrumbCanvas: View {
         var lastSY: Double = .greatestFiniteMagnitude
 
         var bridgePoint: CGPoint?
+        var bridgeDist = currentDist
+        let rainbow = routeAheadColor == .rainbow
+        var aheadVertices: [RouteRainbow.Vertex] = []
 
         for point in points {
             guard point.distanceFromStart >= minDist - 200,
@@ -464,11 +591,13 @@ struct RouteMapBreadcrumbCanvas: View {
                     behindPath.addLine(to: pt)
                 }
                 bridgePoint = pt
+                bridgeDist = point.distanceFromStart
             } else {
                 if !startedAhead {
                     if let bp = bridgePoint {
                         aheadPath.move(to: bp)
                         aheadPath.addLine(to: pt)
+                        if rainbow { aheadVertices.append(.init(point: bp, cycle: RouteRainbow.routeCycle(at: bridgeDist))) }
                     } else {
                         aheadPath.move(to: pt)
                     }
@@ -476,12 +605,17 @@ struct RouteMapBreadcrumbCanvas: View {
                 } else {
                     aheadPath.addLine(to: pt)
                 }
+                if rainbow { aheadVertices.append(.init(point: pt, cycle: RouteRainbow.routeCycle(at: point.distanceFromStart))) }
             }
         }
 
         let style = StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round)
         context.stroke(behindPath, with: .color(.green.opacity(0.4)), style: style)
-        context.stroke(aheadPath, with: .color(routeAheadColor.color), style: style)
+        if rainbow {
+            RouteRainbow.stroke(aheadVertices, in: context, style: style)
+        } else {
+            context.stroke(aheadPath, with: .color(routeAheadColor.color), style: style)
+        }
 
         // POI pins (breadcrumb view)
         if data.showWaypointsOnRouteMap {

@@ -64,8 +64,10 @@ enum MapStatType: String, Codable, CaseIterable, Identifiable, Hashable {
 // MARK: - Route Ahead Color
 
 enum RouteColor: String, Codable, CaseIterable, Hashable {
-    case pink, red, orange, yellow, mint, cyan, blue, purple, white, brown
+    case pink, red, orange, yellow, mint, cyan, blue, indigo, purple, white, brown, rainbow
 
+    /// Solid color for this choice. Rainbow has no single color, so renderers
+    /// check for it and draw a gradient instead; red is only a stand-in.
     var color: Color {
         switch self {
         case .pink: return .pink
@@ -75,9 +77,11 @@ enum RouteColor: String, Codable, CaseIterable, Hashable {
         case .mint: return .mint
         case .cyan: return .cyan
         case .blue: return .blue
+        case .indigo: return .indigo
         case .purple: return .purple
         case .white: return .white
         case .brown: return .brown
+        case .rainbow: return .red
         }
     }
 
@@ -230,7 +234,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         zoomMin: 200,
         zoomMax: 1600,
         defaultZoom: 400,
-        routeAheadColor: .white,
+        routeAheadColor: .rainbow,
         showTurnOverlay: true,
         mapDetail: .off,
         waypointDisplay: .both
@@ -262,7 +266,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         zoomMin: Double = 200,
         zoomMax: Double = 1600,
         defaultZoom: Double = 400,
-        routeAheadColor: RouteColor = .white,
+        routeAheadColor: RouteColor = .rainbow,
         showTurnOverlay: Bool = true,
         mapDetail: MapDetail = .off,
         waypointDisplay: WaypointDisplay = .both
@@ -293,7 +297,7 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         zoomMin = try c.decodeIfPresent(Double.self, forKey: .zoomMin) ?? 200
         zoomMax = try c.decodeIfPresent(Double.self, forKey: .zoomMax) ?? 1600
         defaultZoom = try c.decodeIfPresent(Double.self, forKey: .defaultZoom) ?? 400
-        routeAheadColor = try c.decodeIfPresent(RouteColor.self, forKey: .routeAheadColor) ?? .white
+        routeAheadColor = try c.decodeIfPresent(RouteColor.self, forKey: .routeAheadColor) ?? .rainbow
         showTurnOverlay = try c.decodeIfPresent(Bool.self, forKey: .showTurnOverlay) ?? true
         mapDetail = try c.decodeIfPresent(MapDetail.self, forKey: .mapDetail) ?? .off
         waypointDisplay = try c.decodeIfPresent(WaypointDisplay.self, forKey: .waypointDisplay) ?? .both

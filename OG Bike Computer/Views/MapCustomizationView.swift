@@ -318,20 +318,28 @@ struct MapCustomizationView: View {
     @ViewBuilder
     private var routeColorSection: some View {
         Section {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 6), spacing: 12) {
                 ForEach(RouteColor.allCases, id: \.self) { color in
                     Button {
                         userSettings.settings.ridePreferences.mapScreen.routeAheadColor = color
                     } label: {
                         ZStack {
-                            Circle()
-                                .fill(color.color)
-                                .strokeBorder(
-                                    color == .white && colorScheme == .light ? .black : .clear,
-                                    lineWidth: 1,
-                                )
-                                .frame(width: 36, height: 36)
-                        
+                            if color == .rainbow {
+                                Circle()
+                                    .fill(AngularGradient(
+                                        colors: (0...12).map { Color(hue: Double($0) / 12, saturation: 0.85, brightness: 1) },
+                                        center: .center))
+                                    .frame(width: 36, height: 36)
+                            } else {
+                                Circle()
+                                    .fill(color.color)
+                                    .strokeBorder(
+                                        color == .white && colorScheme == .light ? .black : .clear,
+                                        lineWidth: 1,
+                                    )
+                                    .frame(width: 36, height: 36)
+                            }
+
                             if userSettings.settings.ridePreferences.mapScreen.routeAheadColor == color {
                                 Circle()
                                     .strokeBorder(
@@ -352,7 +360,7 @@ struct MapCustomizationView: View {
         } header: {
             Label("Route Line Color", systemImage: "paintbrush")
         } footer: {
-            Text("The color of the route ahead on the breadcrumb map. Completed route is always shown in green.")
+            Text("The color of the route ahead on the breadcrumb map. Completed route is always shown in green. Rainbow fades along the route as you ride.")
         }
     }
 
@@ -1063,6 +1071,20 @@ struct ElevationScreenPreview: View {
         showFullRouteToggle: true,
         showHeading: true,
         routeAheadColor: .yellow
+    ))
+    .padding()
+    .background(Color(white: 0.12))
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Map Preview — Rainbow") {
+    MapScreenPreview(config: MapScreenConfig(
+        primaryStat: .speed,
+        secondaryStats: [.distance],
+        showTurnInfo: false,
+        showFullRouteToggle: true,
+        showHeading: true,
+        routeAheadColor: .rainbow
     ))
     .padding()
     .background(Color(white: 0.12))

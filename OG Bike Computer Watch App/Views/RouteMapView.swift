@@ -436,6 +436,14 @@ private struct BreadcrumbMapView: View {
         }
     }
 
+    /// MapKit spreads a polyline's gradient along the line from start to end.
+    private func rainbowStyle(_ near: ArraySlice<ProcessedPoint>) -> LinearGradient {
+        let gradient = RouteRainbow.gradient(
+            from: near.first?.distanceFromStart ?? 0,
+            to: near.last?.distanceFromStart ?? 0)
+        return LinearGradient(gradient: gradient, startPoint: .leading, endPoint: .trailing)
+    }
+
     @MapContentBuilder
     private func routeContent(location: CLLocation) -> some MapContent {
         if let processed = workout.navigation.processedRoute {
@@ -461,9 +469,15 @@ private struct BreadcrumbMapView: View {
 
                 // Near ahead (configured color)
                 if farStartIdx > segIdx {
-                    let nearCoords = points[segIdx..<farStartIdx].map(\.coordinate)
-                    MapPolyline(coordinates: nearCoords)
-                        .stroke(routeAheadColor.color, lineWidth: 6)
+                    let near = points[segIdx..<farStartIdx]
+                    let nearCoords = near.map(\.coordinate)
+                    if routeAheadColor == .rainbow {
+                        MapPolyline(coordinates: nearCoords)
+                            .stroke(rainbowStyle(near), lineWidth: 6)
+                    } else {
+                        MapPolyline(coordinates: nearCoords)
+                            .stroke(routeAheadColor.color, lineWidth: 6)
+                    }
                 }
 
                 // Far ahead (grey, thinner)
