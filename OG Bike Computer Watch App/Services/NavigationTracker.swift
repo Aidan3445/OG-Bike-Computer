@@ -202,6 +202,11 @@ class NavigationTracker: ObservableObject {
         startedNearRouteStart = false
     }
 
+    private func logRouteState(_ change: String, location: CLLocation, nearest: Double,
+                               index: Int, riderDistance: Double, extra: String = "") {
+        DiagnosticsLog.event("Route", "\(change) nearest=\(Int(nearest))m threshold=\(Int(offRouteThreshold))m rejoin=\(Int(rejoinThreshold))m samples=\(offRouteSampleCount)/\(offRouteGraceSamples) segment=\(index) rider=\(Int(riderDistance))m hAcc=\(Int(location.horizontalAccuracy))m speed=\(String(format: "%.1f", location.speed))m/s \(extra)")
+    }
+
     func update(location: CLLocation, riderDistance: Double = 0) -> TurnAlert? {
         guard let route = route, route.points.count >= 2 else { return nil }
 
@@ -218,6 +223,8 @@ class NavigationTracker: ObservableObject {
         }
 
         nearestRouteDistance = nearestDistance
+
+        let samplesBefore = offRouteSampleCount
 
         // Grace period: require consecutive off-route samples before triggering
         if nearestDistance > offRouteThreshold {
@@ -240,9 +247,18 @@ class NavigationTracker: ObservableObject {
         if isOffRoute && !wasOffRoute {
             offRouteLocation = location
             missedTurn = findMissedTurn(at: location, in: route)
+            logRouteState("off route", location: location, nearest: nearestDistance,
+                          index: nearestIndex, riderDistance: riderDistance,
+                          extra: "missed=\(missedTurn.map { "\($0.index)" } ?? "none")")
         } else if !isOffRoute && wasOffRoute {
             missedTurn = nil
             offRouteLocation = nil
+            logRouteState("back on route", location: location, nearest: nearestDistance,
+                          index: nearestIndex, riderDistance: riderDistance)
+        } else if !isOffRoute && samplesBefore > 0 && offRouteSampleCount == 0 {
+            logRouteState("off route grace reset", location: location, nearest: nearestDistance,
+                          index: nearestIndex, riderDistance: riderDistance,
+                          extra: "after=\(samplesBefore)")
         }
         wasOffRoute = isOffRoute
 

@@ -77,6 +77,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     // Alert queue
     private let alertQueue = VoiceAlertQueue()
     private var isProcessingAlert = false
+    private var currentAlertLabel: String?
 
     // Identity of the alert currently in-flight on VoiceAlertTransport.
     // Used to ignore late completions for an alert that's been superseded
@@ -125,6 +126,7 @@ class VoiceNavigator: NSObject, ObservableObject {
 
         alertQueue.cancelAll()
         isProcessingAlert = false
+        currentAlertLabel = nil
         clearInFlight()
         clearLocalSpeech()
 
@@ -221,6 +223,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                 } else {
                     text = "Off route."
                 }
+                DiagnosticsLog.event("Voice", "off route alert mode=\(navEvents.offRouteAlert) nearest=\(Int(nav.nearestRouteDistance))m missed=\(nav.missedTurn.map { "\($0.index)" } ?? "none") busy=\(isProcessingAlert) queued=\(alertQueue.count)")
                 enqueueAlert(VoiceAlert(
                     priority: .navEvent,
                     text: text,
@@ -257,6 +260,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             } else {
                 backOnRouteText = "Back on route. \(continueDirection.capitalized)."
             }
+            DiagnosticsLog.event("Voice", "back on route alert mode=\(navEvents.backOnRouteAlert) nearest=\(Int(nav.nearestRouteDistance))m busy=\(isProcessingAlert) queued=\(alertQueue.count)")
             enqueueAlert(VoiceAlert(
                 priority: .navEvent,
                 text: backOnRouteText,
@@ -979,17 +983,23 @@ class VoiceNavigator: NSObject, ObservableObject {
         // Relevance gate — drop stale alerts (e.g. a turn-approach for a turn
         // we've already passed, or an off-route alert when we're back on route).
         if let check = alert.relevanceCheck, !check() {
-            // Skip silently and try the next alert in the same processing tick.
+            DiagnosticsLog.event("Voice", "dropped stale \(alert.logLabel)")
             processQueue()
             return
         }
 
         isProcessingAlert = true
+        currentAlertLabel = alert.logLabel
+        DiagnosticsLog.event("Voice", "start \(alert.logLabel) mode=\(alert.mode) queue=\(alertQueue.count) \"\(alert.text)\"")
         audioSpeak(alert.text, mode: alert.mode, category: alert.category, priority: alert.priority,
                    ignoresVoiceToggle: alert.ignoresVoiceToggle)
     }
 
     fileprivate func finishCurrentAlert() {
+        if let label = currentAlertLabel {
+            DiagnosticsLog.event("Voice", "finished \(label)")
+            currentAlertLabel = nil
+        }
         isProcessingAlert = false
         if alertQueue.isEmpty {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -1005,6 +1015,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     private func audioSpeak(_ text: String, mode: AlertMode, category: String?, priority: AlertPriority,
                             ignoresVoiceToggle: Bool = false) {
         guard isEnabled || ignoresVoiceToggle, !isStopped else {
+            DiagnosticsLog.event("Voice", "silent: voice off or stopped")
             finishCurrentAlert()
             return
         }
@@ -1020,12 +1031,14 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
 
         guard mode.includesVoice else {
+            DiagnosticsLog.event("Voice", "no voice for mode=\(mode)")
             finishCurrentAlert()
             return
         }
 
         switch resolveAudioRoute() {
         case .watchLocal:
+            DiagnosticsLog.event("Voice", "route=watch")
             speakLocally(text)
 
         case .phoneMirror:
@@ -1039,11 +1052,15 @@ class VoiceNavigator: NSObject, ObservableObject {
                 ttl: 15
             )
             inFlightAlertID = payload.id
+            DiagnosticsLog.event("Voice", "route=phone payload=\(payload.id.uuidString.prefix(8)) kind=\(payload.kind)")
             VoiceAlertTransport.shared.deliver(payload) { [weak self] outcome in
                 guard let self, !self.isStopped else { return }
                 // Stale completion (e.g. ride reset between deliver and
                 // outcome) — drop silently to avoid double-advance.
-                guard self.inFlightAlertID == payload.id else { return }
+                guard self.inFlightAlertID == payload.id else {
+                    DiagnosticsLog.event("Voice", "late phone outcome ignored payload=\(payload.id.uuidString.prefix(8))")
+                    return
+                }
                 self.inFlightAlertID = nil
                 switch outcome {
                 case .phoneSpoke:
@@ -1051,10 +1068,12 @@ class VoiceNavigator: NSObject, ObservableObject {
                     // immediately. AVSpeechSynthesizer on the phone owns
                     // ordering of any subsequent utterances we send while
                     // it's still mid-stream.
+                    DiagnosticsLog.event("Voice", "phone started payload=\(payload.id.uuidString.prefix(8))")
                     self.finishCurrentAlert()
                 case .localFallback(let fallbackText, _):
                     // Phone path failed. Speak on watch; speechSynthesizer
                     // didFinish will call finishCurrentAlert.
+                    DiagnosticsLog.event("Voice", "phone failed, watch fallback payload=\(payload.id.uuidString.prefix(8))")
                     self.speakLocally(fallbackText)
                 }
             }
@@ -1220,11 +1239,11 @@ class VoiceNavigator: NSObject, ObservableObject {
             }
             if !self.synthesizer.isSpeaking {
                 // Nothing came out. Swap in a fresh synthesizer so the next alert isn't lost too.
-                logger.warning("Watch speech never finished, replacing synthesizer")
+                DiagnosticsLog.event("Voice", "watch speech never started, replacing synthesizer")
                 self.synthesizer = AVSpeechSynthesizer()
                 self.synthesizer.delegate = self
             } else {
-                logger.warning("Watch speech ran past its limit, releasing the queue")
+                DiagnosticsLog.event("Voice", "watch speech ran past its limit, releasing the queue")
             }
             self.finishLocalSpeech(utterance)
         }
