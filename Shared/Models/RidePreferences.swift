@@ -108,6 +108,9 @@ struct AutoPausePreferences: Codable, Equatable, Hashable {
     /// feeding location updates shortly after a pause, so the watch must
     /// periodically wake GPS to detect that the rider is moving again.
     var resumeProbeInterval: TimeInterval
+    /// With auto-pause off, leave standing still, walking and stairs out of
+    /// moving time, distance and climbing. Read through `mode`.
+    var stopDetection: Bool
 
     static let resumeProbeIntervalRange: ClosedRange<TimeInterval> = 5...90
 
@@ -116,10 +119,16 @@ struct AutoPausePreferences: Codable, Equatable, Hashable {
         speedThreshold: 0.894 // ~2 mph
     )
 
-    init(enabled: Bool = true, speedThreshold: Double = 0.894, resumeProbeInterval: TimeInterval = 15) {
+    init(
+        enabled: Bool = true,
+        speedThreshold: Double = 0.894,
+        resumeProbeInterval: TimeInterval = 15,
+        stopDetection: Bool = true
+    ) {
         self.enabled = enabled
         self.speedThreshold = speedThreshold
         self.resumeProbeInterval = resumeProbeInterval
+        self.stopDetection = stopDetection
     }
 
     init(from decoder: Decoder) throws {
@@ -127,6 +136,39 @@ struct AutoPausePreferences: Codable, Equatable, Hashable {
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         speedThreshold = try c.decodeIfPresent(Double.self, forKey: .speedThreshold) ?? 0.894
         resumeProbeInterval = try c.decodeIfPresent(TimeInterval.self, forKey: .resumeProbeInterval) ?? 15
+        stopDetection = try c.decodeIfPresent(Bool.self, forKey: .stopDetection) ?? true
+    }
+
+    var mode: StopMode {
+        get {
+            if enabled { return .autoPause }
+            return stopDetection ? .detectStops : .recordAll
+        }
+        set {
+            enabled = newValue == .autoPause
+            if newValue != .autoPause {
+                stopDetection = newValue == .detectStops
+            }
+        }
+    }
+}
+
+/// How the ride treats stops.
+enum StopMode: String, CaseIterable, Hashable {
+    /// Pauses the ride below the pause speed.
+    case autoPause
+    /// Keeps recording, but standing still adds no moving time or distance,
+    /// and walking or stairs add no climbing.
+    case detectStops
+    /// Counts everything recorded. Only clear GPS and barometer errors are filtered.
+    case recordAll
+
+    var label: String {
+        switch self {
+        case .autoPause: return "Auto-Pause"
+        case .detectStops: return "Detect Stops"
+        case .recordAll: return "Record All"
+        }
     }
 }
 

@@ -95,9 +95,7 @@ struct SettingsView: View {
     private var rideSettingsSummary: String {
         let ride = userSettings.settings.ridePreferences
         var parts: [String] = []
-        parts.append(
-            ride.autoPause.enabled ? "Auto-Pause On" : "Auto-Pause Off"
-        )
+        parts.append(ride.autoPause.mode.label)
         parts.append("GPS \(ride.gpsAccuracyFloor.label)")
         parts.append(ride.mapRotation.label)
         return bulletJoined(parts)
