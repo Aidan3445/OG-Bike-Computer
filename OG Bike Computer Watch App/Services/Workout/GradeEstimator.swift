@@ -14,11 +14,11 @@ struct GradeEstimator {
 
     private var window: [CLLocation] = []
 
-    /// The next grade, smoothed from `current`. Nil when the GPS window starts
-    /// on a fix with no usable altitude.
+    /// The next grade, smoothed from `current`. Stays at `current` when the
+    /// GPS window can't give one.
     mutating func update(
         location: CLLocation, routeGrade: Double?, current: Double, smoothing: ElevationSmoothing
-    ) -> Double? {
+    ) -> Double {
         if let routeGrade {
             let alpha = smoothing.routeGradeAlpha
             return current * (1 - alpha) + routeGrade * alpha
@@ -31,9 +31,9 @@ struct GradeEstimator {
             window.removeFirst()
         }
 
-        guard window.count >= 2, Self.hasUsableAltitude(location) else { return current }
         let first = window[0]
-        guard Self.hasUsableAltitude(first) else { return nil }
+        guard window.count >= 2, Self.hasUsableAltitude(first), Self.hasUsableAltitude(location)
+        else { return current }
         let run = Self.horizontalDistance(from: first, to: location)
         guard run > 10 else { return current }
         let rawGrade = (location.altitude - first.altitude) / run * 100

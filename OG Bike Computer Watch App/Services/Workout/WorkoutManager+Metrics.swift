@@ -14,14 +14,11 @@ extension WorkoutManager {
 
         updateGPSElevation(location)
 
-        // Power waits for the next fix when the grade window has no usable altitude.
-        guard
-            let grade = gradeEstimator.update(
-                location: location,
-                routeGrade: GradeEstimator.routeGrade(from: navigation),
-                current: currentGrade,
-                smoothing: ridePreferences.elevationSmoothing)
-        else { return }
+        let grade = gradeEstimator.update(
+            location: location,
+            routeGrade: GradeEstimator.routeGrade(from: navigation),
+            current: currentGrade,
+            smoothing: ridePreferences.elevationSmoothing)
         if grade != currentGrade { currentGrade = grade }
 
         updatePower(speed: fixSpeed)
