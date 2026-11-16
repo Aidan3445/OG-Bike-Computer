@@ -157,8 +157,8 @@ struct AutoPausePreferences: Codable, Equatable, Hashable {
 enum StopMode: String, CaseIterable, Hashable {
     /// Pauses the ride below the pause speed.
     case autoPause
-    /// Keeps recording, but standing still adds no moving time or distance,
-    /// and walking or stairs add no climbing.
+    /// Keeps recording, but standing still or walking around adds no moving
+    /// time, distance or track, and stairs add no climbing.
     case detectStops
     /// Counts everything recorded. Only clear GPS and barometer errors are filtered.
     case recordAll

@@ -330,6 +330,21 @@ class WorkoutManager: NSObject, ObservableObject {
     private let baroRidingWindow: TimeInterval = 3
     private var lastRidingSpeedAt: Date?
 
+    /// Step counter, to tell walking around a stop from slow riding.
+    private let pedometer = CMPedometer()
+    private var pedometerRunning = false
+    private var stepCount = 0
+    private var stepCadence: Double?
+    private var lastStepSample: (steps: Int, at: Date)?
+    private var lastWalkingStepsAt: Date?
+    /// Steps per second that count as walking. A slow walk is about 1.5.
+    private let walkingCadence = 1.0
+    /// How recent (s) walking steps have to be. The pedometer reports in batches.
+    private let walkingStepsWindow: TimeInterval = 15
+    /// How long (s) under riding speed before steps count as walking, so a
+    /// false step or two while riding never stops the ride.
+    private let walkingRidingWindow: TimeInterval = 10
+
     @Published var movingTime: TimeInterval = 0
 
     // Telemetry for phone Live Activity
@@ -540,6 +555,8 @@ class WorkoutManager: NSObject, ObservableObject {
             case .moving:
                 self.accumulateDistance(location)
                 self.checkSplit()
+                // Stops leave no track, so the map shows no scribble at a store.
+                if self.isStandingStill { break }
                 recorded = true
                 self.recordedLocations.append(location)
                 self.recordedHeartRates.append(self.heartRate > 0 ? self.heartRate : nil)
@@ -859,6 +876,7 @@ class WorkoutManager: NSObject, ObservableObject {
         baroElevationGain = liveElevationGain
         baroElevationLoss = liveElevationLoss
         startAltimeter()
+        startPedometer()
 
         workoutStartDate = Date()
         timerStart = workoutStartDate
@@ -1003,13 +1021,24 @@ class WorkoutManager: NSObject, ObservableObject {
     /// Position-buffer speed under this counts as standing still (m/s).
     private let standingStillSpeed = 0.7
 
-    /// True when the rider is effectively stationary in Detect Stops. Auto-pause
-    /// handles stops itself, and Record All counts them.
+    /// True when the rider is stopped or walking around a stop in Detect Stops.
+    /// Auto-pause handles stops itself, and Record All counts them.
     private var isStandingStill: Bool {
         guard !isSimulating, ridePreferences.autoPause.mode == .detectStops
         else { return false }
-        return isHoldingPoorFix
+        return isHoldingPoorFix || isWalking
             || (positionBufferReady && positionBufferSpeed() < standingStillSpeed)
+    }
+
+    /// Steps with no riding speed for a while. Slow riding has no steps, so a
+    /// climb at walking pace keeps counting.
+    private var isWalking: Bool {
+        let now = Date()
+        guard let lastWalkingStepsAt,
+            now.timeIntervalSince(lastWalkingStepsAt) <= walkingStepsWindow
+        else { return false }
+        guard let lastRidingSpeedAt else { return true }
+        return now.timeIntervalSince(lastRidingSpeedAt) > walkingRidingWindow
     }
 
     /// Record All: every second and every real height change counts. Only
@@ -1273,6 +1302,7 @@ class WorkoutManager: NSObject, ObservableObject {
         stopTelemetryTimer()
         stopCheckpointTimer()
         stopAltimeter()
+        stopPedometer()
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
 
@@ -1599,6 +1629,42 @@ class WorkoutManager: NSObject, ObservableObject {
             absoluteAltimeter.stopAbsoluteAltitudeUpdates()
         #endif
         altimeterRunning = false
+    }
+
+    private func startPedometer() {
+        guard !pedometerRunning, CMPedometer.isStepCountingAvailable() else { return }
+        pedometerRunning = true
+        stepCount = 0
+        stepCadence = nil
+        lastStepSample = nil
+        lastWalkingStepsAt = nil
+        pedometer.startUpdates(from: Date()) { [weak self] data, _ in
+            guard let data else { return }
+            DispatchQueue.main.async { self?.handlePedometer(data) }
+        }
+    }
+
+    private func stopPedometer() {
+        guard pedometerRunning else { return }
+        pedometer.stopUpdates()
+        pedometerRunning = false
+        lastWalkingStepsAt = nil
+    }
+
+    private func handlePedometer(_ data: CMPedometerData) {
+        let steps = data.numberOfSteps.intValue
+        let cadence = data.currentCadence?.doubleValue
+        defer {
+            stepCount = steps
+            stepCadence = cadence
+            lastStepSample = (steps, data.endDate)
+        }
+        guard let last = lastStepSample, steps > last.steps else { return }
+        let span = data.endDate.timeIntervalSince(last.at)
+        let rate = cadence ?? (span > 0 ? Double(steps - last.steps) / span : 0)
+        if rate >= walkingCadence {
+            lastWalkingStepsAt = data.endDate
+        }
     }
 
     /// Re-anchor the barometer reference so a stretch where we're not
@@ -2244,6 +2310,7 @@ class WorkoutManager: NSObject, ObservableObject {
         // Readings during a hold can sit far off and snap back, so the
         // continuation starts a fresh altimeter session.
         stopAltimeter()
+        stopPedometer()
         stopCheckpointTimer()
         stopTelemetryTimer()
         routeInsertionTimer?.invalidate()
@@ -2884,7 +2951,7 @@ extension WorkoutManager {
         "time", "appState", "hkState", "isPaused", "autoPauseState", "silentProbe",
         "sinceLastFix", "movingTime", "elapsedTime", "totalDistance",
         "mirroringReady", "earlyTelemetry", "sinceTelemetrySend", "telemetryResult",
-        "skippedTelemetrySends", "standingStill",
+        "skippedTelemetrySends", "standingStill", "walking", "steps", "stepCadence",
     ]
     private static let baroHeader = [
         "time", "source", "relativeAltitude", "reference", "delta",
@@ -2900,7 +2967,7 @@ extension WorkoutManager {
         baroCSV = DiagnosticsCSV(rideID: rideID, kind: "baro", header: Self.baroHeader)
         DiagnosticsLog.event(
             "Rules",
-            "mode=\(ridePreferences.autoPause.mode.rawValue) pauseSpeed=\(String(format: "%.1f", ridePreferences.autoPause.speedThreshold * 2.23694))mph positionPause=\(String(format: "%.1f", positionPauseSpeed * 2.23694))mph standingStill=\(String(format: "%.1f", standingStillSpeed * 2.23694))mph poorFix>\(Int(poorFixAccuracy))m maxFixAge=\(Int(maxFixAge))s baroStop=freeze baroRiding=\(String(format: "%.1f", baroRidingSpeed * 2.23694))mph/\(Int(baroRidingWindow))s baroFloor=\(baroFilter.noiseFloor)m"
+            "mode=\(ridePreferences.autoPause.mode.rawValue) pauseSpeed=\(String(format: "%.1f", ridePreferences.autoPause.speedThreshold * 2.23694))mph positionPause=\(String(format: "%.1f", positionPauseSpeed * 2.23694))mph standingStill=\(String(format: "%.1f", standingStillSpeed * 2.23694))mph poorFix>\(Int(poorFixAccuracy))m maxFixAge=\(Int(maxFixAge))s baroStop=freeze baroRiding=\(String(format: "%.1f", baroRidingSpeed * 2.23694))mph/\(Int(baroRidingWindow))s baroFloor=\(baroFilter.noiseFloor)m walking=\(String(format: "%.1f", walkingCadence))steps/s,\(Int(walkingStepsWindow))s+noRiding\(Int(walkingRidingWindow))s pedometer=\(CMPedometer.isStepCountingAvailable())"
         )
         rejectedFixesSinceLast = 0
         staleFixesSinceLast = 0
@@ -2959,7 +3026,8 @@ extension WorkoutManager {
             movingTime, elapsedTime, totalDistance,
             isMirroringReady, earlyTelemetrySessionID != nil,
             lastTelemetrySendAt.map { now.timeIntervalSince($0) }, lastTelemetryResult,
-            skippedTelemetrySends, isStandingStill,
+            skippedTelemetrySends, isStandingStill, isWalking,
+            pedometerRunning ? stepCount : nil, stepCadence,
         ])
     }
 

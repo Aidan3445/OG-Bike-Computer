@@ -99,7 +99,7 @@ struct RideSettingsView: View {
             case .autoPause:
                 Text("Pauses the ride when speed drops below the pause speed. While paused, the watch briefly wakes GPS at the resume check interval to detect movement. Shorter intervals resume faster but use more battery.")
             case .detectStops:
-                Text("Keeps recording through stops, but standing still adds no moving time or distance, and walking or stairs add no climbing.")
+                Text("Keeps recording through stops, but standing still or walking around adds no moving time or distance, and stairs add no climbing. Uses the watch's step counter to tell walking from slow riding.")
             case .recordAll:
                 Text("Counts everything you record. Moving time matches elapsed time, and walking and stairs add to distance and climbing. Only clear GPS and barometer errors are filtered.")
             }
