@@ -32,10 +32,6 @@ struct RideControlView: View {
     @State private var showRouteDetail = false
     @State private var activeRoute: Route?
     @State private var selectedPage = 0
-    /// Rolling (movingTime, totalDistance) samples used to derive a recent
-    /// split average speed for the ETA estimate. Trimmed to the last ~180s
-    /// of moving time on each telemetry update.
-    @State private var recentSpeedSamples: [(movingTime: TimeInterval, distance: Double)] = []
 
     /// Pending state is sourced from `session.pendingCommand` so it survives
     /// view rebuilds and stays consistent with Live Activity / widget intents
@@ -50,6 +46,20 @@ struct RideControlView: View {
     private var controlsBusy: Bool { isHolding || isEnding }
 
     @Environment(\.dismiss) private var dismiss
+
+    /// Pale red in light mode so the dark text on top stays readable.
+    private static let offRouteBackground = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.12, green: 0.02, blue: 0.02, alpha: 1)
+            : UIColor(red: 1.0, green: 0.90, blue: 0.90, alpha: 1)
+    })
+
+    /// System yellow washes out on light backgrounds, so light mode uses amber.
+    private static let autoPausedTint = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? .systemYellow
+            : UIColor(red: 0.70, green: 0.48, blue: 0.0, alpha: 1)
+    })
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,10 +92,8 @@ struct RideControlView: View {
         .onChange(of: telemetry.activeRouteID, initial: true) { _, newID in
             activeRoute = newID.flatMap { id in routeStore.routes.first { $0.id == id } }
         }
-        .onChange(of: telemetry.totalDistance, initial: false) { _, _ in
-            updateRecentSpeedSamples()
-        }
-        .background(telemetry.isOffRoute ? Color(red: 0.12, green: 0.02, blue: 0.02) : Color(.systemGroupedBackground))
+        .background(telemetry.isOffRoute ? Self.offRouteBackground : Color(.systemGroupedBackground))
+        .layoutProbe("RideControl")
         .navigationTitle(session.isPaused ? "Paused" : "Riding")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Discard Ride?", isPresented: $showDiscardAlert) {
@@ -140,10 +148,13 @@ struct RideControlView: View {
                     Text("Off Route")
                         .font(.headline)
                         .foregroundStyle(.red)
+                        .lineLimit(1)
                     if let dist = telemetry.distanceOffRoute {
                         Text("+\(formatDistance(dist)) from route")
                             .font(.subheadline)
                             .foregroundStyle(.red.opacity(0.75))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                 }
                 Spacer()
@@ -160,10 +171,13 @@ struct RideControlView: View {
                     HStack(spacing: 4) {
                         Text(dir.capitalized)
                             .font(.headline)
+                            .lineLimit(1)
                         if let dist = telemetry.distanceToNextTurn {
                             Text("in \(formatDistance(dist))")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                     }
                     if let cue = telemetry.nextTurnCue, !cue.isEmpty {
@@ -183,6 +197,8 @@ struct RideControlView: View {
                 Text("\(formatDistance(remaining)) remaining")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 if let eta = estimatedTimeRemaining {
                     Text("·")
                         .font(.subheadline)
@@ -190,10 +206,12 @@ struct RideControlView: View {
                     Image(systemName: "clock")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    Text("~\(formatTime(eta))")
+                    Text("~\(formatETA(eta))")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 Spacer()
             }
@@ -227,7 +245,8 @@ struct RideControlView: View {
                     Text(activeRoute?.name ?? "Free Ride")
                         .font(.subheadline)
                         .foregroundStyle(activeRoute == nil ? .secondary : .primary)
-                        .lineLimit(1)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption)
@@ -301,30 +320,19 @@ struct RideControlView: View {
             if telemetry.routeDistanceRemaining != nil || telemetry.isAutoPaused {
                 HStack(spacing: 6) {
                     if let remaining = telemetry.routeDistanceRemaining {
-                        Image(systemName: "flag.checkered")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("\(formatDistance(remaining)) remaining")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if let eta = estimatedTimeRemaining {
-                            Text("·")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                            Image(systemName: "clock")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text("~\(formatTime(eta)) left")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
+                        // Drop the words before truncating the numbers.
+                        ViewThatFits(in: .horizontal) {
+                            remainingRow(remaining, withWords: true)
+                            remainingRow(remaining, withWords: false)
                         }
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
                     if telemetry.isAutoPaused {
                         Label("Auto-Paused", systemImage: "pause.circle.fill")
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(Self.autoPausedTint)
+                            .fixedSize()
+                            .layoutPriority(1)
                     }
                 }
                 .padding(.horizontal, 4)
@@ -440,9 +448,36 @@ struct RideControlView: View {
         }
     }
 
-    private func switchRoute(_ route: Route) {
+    private func remainingRow(_ remaining: Double, withWords: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "flag.checkered")
+                .foregroundStyle(.secondary)
+            Text(formatDistance(remaining) + (withWords ? " remaining" : ""))
+                .foregroundStyle(.secondary)
+            if let eta = estimatedTimeRemaining {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Image(systemName: "clock")
+                    .foregroundStyle(.secondary)
+                Text("~\(formatETA(eta))" + (withWords ? " left" : ""))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .font(.caption)
+        .lineLimit(1)
+        .minimumScaleFactor(withWords ? 1 : 0.8)
+    }
+
+    private func switchRoute(_ route: Route?) {
         activeRoute = route
         showRoutePicker = false
+
+        guard let route else {
+            // No routeID tells the watch to drop the route and keep recording.
+            ConnectivityManager.shared.sendRideCommand(["type": "changeRoute"])
+            return
+        }
 
         let message: [String: Any] = [
             "type": "changeRoute",
@@ -473,53 +508,12 @@ struct RideControlView: View {
 
     // MARK: - ETA estimation
 
-    /// Append the latest telemetry sample to the rolling buffer and trim old
-    /// entries. Only appends when moving time has actually advanced, so pauses
-    /// don't pollute the recent-split speed calculation.
-    private func updateRecentSpeedSamples() {
-        let sample = (movingTime: telemetry.movingTime, distance: telemetry.totalDistance)
-        if let last = recentSpeedSamples.last, sample.movingTime <= last.movingTime + 0.5 {
-            return
-        }
-        recentSpeedSamples.append(sample)
-        let cutoff = sample.movingTime - 180
-        recentSpeedSamples.removeAll { $0.movingTime < cutoff }
-    }
-
-    /// Recent split average speed (m/s) derived from the rolling buffer, or nil
-    /// if there isn't yet enough data (need at least ~20s of moving time).
-    private var recentAverageSpeed: Double? {
-        guard let first = recentSpeedSamples.first,
-              let last = recentSpeedSamples.last else { return nil }
-        let dt = last.movingTime - first.movingTime
-        let dd = last.distance - first.distance
-        guard dt >= 20, dd > 0 else { return nil }
-        return dd / dt
-    }
-
-    /// Weighted blend of total-ride avg speed and recent split speed, scaled by
-    /// the net climb/descent of the remaining route. Returns nil while we don't
-    /// have a route remaining distance or enough speed data to be meaningful.
+    /// Remaining route distance at the ride's average moving speed, scaled by
+    /// the net climb or descent ahead. Current speed swings too much to use.
     private var estimatedTimeRemaining: TimeInterval? {
-        guard let remaining = telemetry.routeDistanceRemaining, remaining > 0 else { return nil }
-
-        let totalAvg = telemetry.averageSpeed
-        let recentAvg = recentAverageSpeed
-        let hasTotal = totalAvg > 0.5
-        let hasRecent = (recentAvg ?? 0) > 0.5
-
-        let blendedSpeed: Double
-        if hasTotal, hasRecent, let recent = recentAvg {
-            blendedSpeed = 0.4 * totalAvg + 0.6 * recent
-        } else if hasTotal {
-            blendedSpeed = totalAvg
-        } else if hasRecent, let recent = recentAvg {
-            blendedSpeed = recent
-        } else {
-            return nil
-        }
-
-        let adjusted = blendedSpeed / elevationScalingFactor(remainingDistance: remaining)
+        guard let remaining = telemetry.routeDistanceRemaining, remaining > 0,
+              telemetry.averageSpeed > 0.5 else { return nil }
+        let adjusted = telemetry.averageSpeed / elevationScalingFactor(remainingDistance: remaining)
         guard adjusted > 0.1 else { return nil }
         return remaining / adjusted
     }
@@ -562,9 +556,13 @@ struct RideControlView: View {
             Text(value)
                 .font(.title3.weight(.semibold))
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
     }
@@ -575,6 +573,7 @@ struct RideControlView: View {
 /// Map for free rides — no planned route, just the live recording breadcrumb
 /// and the rider's current position.
 private struct FreeRideMapSheet: View {
+    @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
     @ObservedObject private var telemetry = PhoneTelemetryStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var mapPosition: MapCameraPosition = .userLocation(fallback: .automatic)
@@ -584,7 +583,7 @@ private struct FreeRideMapSheet: View {
             Map(position: $mapPosition) {
                 if telemetry.riderPath.count >= 2 {
                     MapPolyline(coordinates: telemetry.riderPath)
-                        .stroke(.purple.opacity(0.8), lineWidth: 4)
+                        .stroke(.purple.opacity(0.8), style: .roundedLine(4))
                 }
 
                 if let first = telemetry.riderPath.first {
@@ -598,12 +597,13 @@ private struct FreeRideMapSheet: View {
 
                 UserAnnotation()
             }
-            .mapStyle(.standard(elevation: .realistic))
+            .mapStyle(mapStyle.mapStyle)
             .mapControls {
                 MapUserLocationButton()
                 MapCompass()
                 MapScaleView()
             }
+            .layoutProbe("FreeRideMap")
             .navigationTitle("Free Ride")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -621,7 +621,7 @@ private struct RoutePickerSheet: View {
     let routes: [Route]
     let routeIDsOnWatch: Set<UUID>
     let activeRoute: Route?
-    let onSelect: (Route) -> Void
+    let onSelect: (Route?) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -631,15 +631,37 @@ private struct RoutePickerSheet: View {
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
+    /// Skips phone copies of a route that's already on the watch, like the
+    /// same route imported twice under different IDs.
     private var phoneOnly: [Route] {
-        routes
-            .filter { !routeIDsOnWatch.contains($0.id) }
+        let watchKeys = Set(onWatch.map(Self.matchKey))
+        return routes
+            .filter { !routeIDsOnWatch.contains($0.id) && !watchKeys.contains(Self.matchKey($0)) }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    /// Imported routes match on their service ID, GPX files on name and point count.
+    private static func matchKey(_ route: Route) -> String {
+        if let source = route.source {
+            return "\(source.service.rawValue):\(source.remoteID)"
+        }
+        return "\(route.name)|\(route.points.count)"
     }
 
     var body: some View {
         NavigationView {
             List {
+                if activeRoute != nil {
+                    Section {
+                        Button {
+                            onSelect(nil)
+                        } label: {
+                            Label("Free Ride", systemImage: "bicycle")
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+
                 if !onWatch.isEmpty {
                     Section("On Watch") {
                         ForEach(onWatch) { route in
@@ -716,11 +738,22 @@ private struct MetricPageView: View {
     @ObservedObject var telemetry: PhoneTelemetryStore
 
     var body: some View {
+        // Short screens (SE, large text) step down to denser cells so every
+        // metric stays visible without scrolling.
+        ViewThatFits(in: .vertical) {
+            pageContent(.regular)
+            pageContent(.compact)
+            pageContent(.tight)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func pageContent(_ density: MetricCellDensity) -> some View {
         VStack(spacing: 0) {
             Text(page.name)
                 .font(.headline)
                 .foregroundStyle(.secondary)
-                .padding(.top, 8)
+                .padding(.top, density == .regular ? 8 : 2)
 
             LazyVGrid(
                 columns: [
@@ -739,7 +772,8 @@ private struct MetricPageView: View {
                                 icon: slot.type.icon,
                                 label: slot.type.label,
                                 value: value,
-                                unit: slot.type.unit
+                                unit: slot.type.unit,
+                                density: density
                             )
                         }
                     } else {
@@ -748,14 +782,13 @@ private struct MetricPageView: View {
                             icon: slot.type.icon,
                             label: resolved.label,
                             value: resolved.value,
-                            unit: resolved.unit
+                            unit: resolved.unit,
+                            density: density
                         )
                     }
                 }
             }
             .padding(.horizontal)
-
-            Spacer()
         }
     }
 
@@ -767,19 +800,27 @@ private struct MetricPageView: View {
     }
 }
 
+/// Compact drops the icon and tightens padding. Tight also shrinks the value.
+private enum MetricCellDensity {
+    case regular, compact, tight
+}
+
 private struct MetricCell: View {
     let icon: String
     let label: String
     let value: String
     let unit: String
+    let density: MetricCellDensity
 
     var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(spacing: density == .regular ? 4 : 1) {
+            if density == .regular {
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Text(value)
-                .font(.title2.weight(.bold))
+                .font(density == .tight ? .title3.weight(.bold) : .title2.weight(.bold))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
@@ -792,9 +833,67 @@ private struct MetricCell: View {
                 }
             }
             .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .padding(.vertical, density == .regular ? 12 : 4)
     }
+}
+
+// MARK: - Previews
+
+/// Worst-case ride for layout checks: long values, auto-paused, a long route
+/// name, and either off route or approaching a turn.
+private func previewRideControl(offRoute: Bool) -> some View {
+    let route = Route(name: "Saturday Long Loop Through the Blue Hills and Back Along the Neponset River", points: [])
+    let routeStore = RouteStore()
+    routeStore.routes = [route]
+
+    let t = PhoneTelemetryStore.shared
+    t.elapsedTime = 11 * 3600 + 2 * 60 + 37
+    t.movingTime = 10 * 3600 + 45 * 60 + 12
+    t.totalDistance = 181_000
+    t.averageSpeed = 8.4
+    t.currentSpeed = 10.2
+    t.heartRate = 152
+    t.isAutoPaused = true
+    t.activeRouteID = route.id
+    t.routeDistanceRemaining = 154_300
+    t.isOffRoute = offRoute
+    t.distanceOffRoute = offRoute ? 1_840 : nil
+    t.nextTurnDirection = offRoute ? nil : "Slight Right"
+    t.nextTurnIcon = offRoute ? nil : "arrow.turn.up.right"
+    t.distanceToNextTurn = offRoute ? nil : 480
+    t.nextTurnCue = offRoute ? nil : "onto Old Colony Boulevard"
+
+    return NavigationStack {
+        RideControlView(
+            metricConfig: MetricConfigStore(),
+            userSettings: UserSettingsStore(),
+            routeStore: routeStore,
+            rideStore: RideStore()
+        )
+    }
+}
+
+#Preview("Off route, XL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewRideControl(offRoute: true)
+        .environment(\.dynamicTypeSize, .xLarge)
+}
+
+#Preview("Off route, XXL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewRideControl(offRoute: true)
+        .environment(\.dynamicTypeSize, .xxLarge)
+}
+
+#Preview("Turn ahead, XL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewRideControl(offRoute: false)
+        .environment(\.dynamicTypeSize, .xLarge)
+}
+
+#Preview("Turn ahead, XXL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewRideControl(offRoute: false)
+        .environment(\.dynamicTypeSize, .xxLarge)
 }
 #endif

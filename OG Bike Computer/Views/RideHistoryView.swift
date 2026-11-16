@@ -15,7 +15,6 @@ struct RideHistoryView: View {
     static let maxSelection = 32
 
     @State private var isSelectionMode = false
-    /// Ordered list of selected ride IDs — position in the array = displayed number.
     @State private var selectedIDs: [UUID] = []
     @State private var showDeleteConfirm = false
     @State private var navigateToMulti = false
@@ -45,14 +44,22 @@ struct RideHistoryView: View {
     /// Held rides count as "arrived" — if one is already showing, the placeholder
     /// is redundant and should be hidden even if the awaiting flag is still set.
     private var showAwaitingPlaceholder: Bool {
-        connectivity.isAwaitingIncomingRide &&
-            connectivity.pendingTransferRideIDs.isEmpty &&
-            heldRides.isEmpty
+        connectivity.isAwaitingIncomingRide && connectivity.pendingTransferRideIDs.isEmpty
+            && heldRides.isEmpty
     }
 
+    /// Oldest first, whatever order they were tapped in. The numbers, the
+    /// combined view and merged exports all follow it, since Strava rejects a
+    /// merged track whose times run backwards.
     private var selectedRides: [RideSummary] {
-        // Honor user-selection order, not list order.
-        selectedIDs.compactMap { id in completedRides.first(where: { $0.id == id }) }
+        selectedIDs
+            .compactMap { id in completedRides.first(where: { $0.id == id }) }
+            .sorted { $0.date < $1.date }
+    }
+
+    /// Each selected ride's 1-based place in date order.
+    private var selectionNumbers: [UUID: Int] {
+        Dictionary(uniqueKeysWithValues: selectedRides.enumerated().map { ($1.id, $0 + 1) })
     }
 
     var body: some View {
@@ -86,10 +93,11 @@ struct RideHistoryView: View {
                         }
                     }
 
+                    let numbers = selectionNumbers
                     ForEach(sections, id: \.0) { section, rides in
                         Section {
                             ForEach(rides) { ride in
-                                rideListRow(ride: ride)
+                                rideListRow(ride: ride, selectionNumber: numbers[ride.id])
                             }
                             .onDelete { indices in
                                 guard !isSelectionMode else { return }
@@ -102,9 +110,23 @@ struct RideHistoryView: View {
                         }
                     }
                 }
+                .dragToSelect(
+                    isEnabled: isSelectionMode,
+                    orderedIDs: sections.flatMap { $0.1.map(\.id) },
+                    isSelected: { selectedIDs.contains($0) },
+                    setSelected: { id, selected in
+                        if selected {
+                            guard !selectedIDs.contains(id), selectedIDs.count < Self.maxSelection else { return }
+                            selectedIDs.append(id)
+                        } else {
+                            selectedIDs.removeAll { $0 == id }
+                        }
+                    })
             }
         }
-        .navigationTitle(isSelectionMode ? "\(selectedIDs.count)/\(Self.maxSelection) Selected" : "Rides")
+        .navigationTitle(
+            isSelectionMode ? "\(selectedIDs.count)/\(Self.maxSelection) Selected" : "Rides"
+        )
         .navigationBarTitleDisplayMode(isSelectionMode ? .inline : .automatic)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -147,10 +169,12 @@ struct RideHistoryView: View {
                     Color.black.opacity(0.25).ignoresSafeArea()
                     VStack(spacing: 12) {
                         ProgressView()
-                        Text(isUploadingMerged
-                             ? "Uploading \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides") to Strava…"
-                             : "Zipping \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides")…")
-                            .font(.footnote)
+                        Text(
+                            isUploadingMerged
+                                ? "Uploading \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides") to Strava…"
+                                : "Zipping \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides")…"
+                        )
+                        .font(.footnote)
                     }
                     .padding(20)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
@@ -158,18 +182,24 @@ struct RideHistoryView: View {
                 .transition(.opacity)
             }
         }
-        .alert("Upload Error", isPresented: .init(
-            get: { mergedUploadError != nil },
-            set: { if !$0 { mergedUploadError = nil } }
-        )) {
+        .alert(
+            "Upload Error",
+            isPresented: .init(
+                get: { mergedUploadError != nil },
+                set: { if !$0 { mergedUploadError = nil } }
+            )
+        ) {
             Button("OK") { mergedUploadError = nil }
         } message: {
             Text(mergedUploadError ?? "")
         }
-        .alert("Uploaded to Strava", isPresented: .init(
-            get: { mergedUploadWebURL != nil },
-            set: { if !$0 { mergedUploadWebURL = nil } }
-        )) {
+        .alert(
+            "Uploaded to Strava",
+            isPresented: .init(
+                get: { mergedUploadWebURL != nil },
+                set: { if !$0 { mergedUploadWebURL = nil } }
+            )
+        ) {
             if let urlString = mergedUploadWebURL, let url = URL(string: urlString) {
                 Link("View on Strava", destination: url)
             }
@@ -180,57 +210,43 @@ struct RideHistoryView: View {
         .onAppear {
             hasStravaAuth = KeychainHelper.loadTokens(for: .strava) != nil
         }
-        .confirmationDialog(
-            "Delete \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides")?",
-            isPresented: $showDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                let toDelete = selectedRides
-                for ride in toDelete { rideStore.delete(ride) }
-                exitSelectionMode()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This cannot be undone.")
-        }
     }
 
     @ViewBuilder
-    private func rideListRow(ride: RideSummary) -> some View {
+    private func rideListRow(ride: RideSummary, selectionNumber: Int?) -> some View {
         let isTransferring = connectivity.pendingTransferRideIDs.contains(ride.id)
-        let selectionIndex = selectedIDs.firstIndex(of: ride.id).map { $0 + 1 }
+        let canOpen = !isSelectionMode && !isTransferring
 
-        if isSelectionMode {
-            HStack(spacing: 12) {
-                SelectionIndicator(index: selectionIndex)
-                RideRow(
-                    ride: ride,
-                    onRename: { newName in rideStore.rename(ride, to: newName) },
-                    isTransferring: isTransferring
-                )
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { toggleSelection(ride) }
-            // Disable swipe-actions while selecting so they don't interfere with taps.
-            .deleteDisabled(true)
-        } else if isTransferring {
+        HStack(spacing: 8) {
             RideRow(
                 ride: ride,
                 onRename: { newName in rideStore.rename(ride, to: newName) },
-                isTransferring: true
+                isTransferring: isTransferring
             )
-        } else {
-            NavigationLink {
-                RideDetailView(ride: ride, rideStore: rideStore)
-            } label: {
-                RideRow(
-                    ride: ride,
-                    onRename: { newName in rideStore.rename(ride, to: newName) },
-                    isTransferring: false
-                )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            RowTrailingSlot(isSelecting: isSelectionMode, showsChevron: canOpen) {
+                SelectionIndicator(index: selectionNumber)
             }
         }
+        .contentShape(Rectangle())
+        // A hidden link keeps the whole row tappable without the system
+        // chevron, whose space would come and go with Select mode.
+        .background {
+            if canOpen {
+                NavigationLink {
+                    RideDetailView(ride: ride, rideStore: rideStore)
+                } label: {
+                    EmptyView()
+                }
+                .opacity(0)
+            }
+        }
+        // Only claims taps in Select mode, so outside it the row opens.
+        .gesture(TapGesture().onEnded { toggleSelection(ride) },
+                 including: isSelectionMode ? .all : .subviews)
+        // Disable swipe-actions while selecting so they don't interfere with taps.
+        .deleteDisabled(isSelectionMode)
+        .dragSelectRow(ride.id)
     }
 
     @ViewBuilder
@@ -283,6 +299,22 @@ struct RideHistoryView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.regularMaterial)
+        // On the whole bar, so the dialog opens above it rather than beside
+        // a narrow button at the screen edge.
+        .confirmationDialog(
+            "Delete \(selectedIDs.count) \(selectedIDs.count == 1 ? "ride" : "rides")?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                let toDelete = selectedRides
+                for ride in toDelete { rideStore.delete(ride) }
+                exitSelectionMode()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone.")
+        }
     }
 
     private func exportSelectedAsZip() {
@@ -339,8 +371,30 @@ struct RideHistoryView: View {
     }
 }
 
-/// Ordered numbered-circle indicator. Empty circle when `index == nil`,
-/// filled accent circle with the 1-based position when selected.
+/// Fixed width slot at the end of a list row: the disclosure chevron
+/// normally, the selection mark in Select mode. Same width either way, so
+/// entering Select never re-wraps names and shifts the scroll position.
+struct RowTrailingSlot<Selection: View>: View {
+    let isSelecting: Bool
+    let showsChevron: Bool
+    @ViewBuilder let selection: () -> Selection
+
+    var body: some View {
+        ZStack {
+            if isSelecting {
+                selection()
+            } else if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(width: 24)
+    }
+}
+
+/// Numbered circle for a selected ride, its place in date order. Empty
+/// circle when `index == nil`.
 struct SelectionIndicator: View {
     let index: Int?
 

@@ -19,8 +19,9 @@ struct SelectSettingsPresetIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         await MainActor.run {
-            let store = UserSettingsStore()
+            let store = UserSettingsStore.shared
             store.switchToPreset(id: preset.id)
+            store.commitNow()
         }
         return .result(dialog: "Switched to \(preset.name) preset.")
     }
@@ -37,8 +38,9 @@ struct SelectBikeIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         await MainActor.run {
-            let store = UserSettingsStore()
+            let store = UserSettingsStore.shared
             store.settings.activeBikeID = bike.id
+            store.commitNow()
         }
         return .result(dialog: "Switched to \(bike.name).")
     }

@@ -5,14 +5,13 @@
 //  Created by Aidan Weinberg on 2/28/26.
 //
 
-import Foundation
-import HealthKit
+import Combine
 import CoreLocation
 import CoreMotion
-import Combine
-
-import WatchKit
+import Foundation
+import HealthKit
 import UserNotifications
+import WatchKit
 
 enum AutoPauseState {
     case moving
@@ -40,6 +39,7 @@ private struct CheckpointMeta: Codable, Sendable {
     let highestElevation: Double?
     let lowestElevation: Double?
     let pointCount: Int
+    let splitProgress: SplitProgress?
 }
 
 private func decodeCheckpointMeta(_ data: Data) -> CheckpointMeta? {
@@ -60,9 +60,16 @@ class WorkoutManager: NSObject, ObservableObject {
     var hasRoute: Bool { navigation.processedRoute != nil }
     private var needsAnchor = false
 
-    /// Guards against the HK delegate double-handling local pause/resume/stop actions.
-    /// Set true before local session control calls, reset in the delegate callback.
-    private var isLocalStateChange = false
+    /// Session states this device just asked for, so the delegate can tell
+    /// them apart from changes made on the phone. They expire so a call that
+    /// changed nothing can't hide the phone's next command.
+    private var expectedSessionStates: Set<HKWorkoutSessionState> = []
+    private var expectedSessionStatesAt = Date.distantPast
+
+    private func expectSessionStates(_ states: Set<HKWorkoutSessionState>) {
+        expectedSessionStates = states
+        expectedSessionStatesAt = Date()
+    }
 
     // Extended metrics
     @Published var maxSpeed: Double = 0
@@ -80,7 +87,9 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Grade + power computation state
     private var gradeWindowLocations: [CLLocation] = []
-    private var gradeWindowDistance: Double { ridePreferences.elevationSmoothing.gradeWindowDistance }
+    private var gradeWindowDistance: Double {
+        ridePreferences.elevationSmoothing.gradeWindowDistance
+    }
     private var heartRateSum: Double = 0
     private var heartRateSampleCount: Int = 0
     private var powerSum: Double = 0
@@ -95,19 +104,29 @@ class WorkoutManager: NSObject, ObservableObject {
     // the barometer delta so the on-screen number tracks the trusted signal).
     private let altimeter = CMAltimeter()
     private var altimeterRunning = false
-    private var baroRefRelativeAltitude: Double?
-    private var lastBaroRelativeAltitude: Double?
+    private var baroFilter = BarometerGainFilter()
     private var baroElevationGain: Double = 0
     private var baroElevationLoss: Double = 0
-    private let baroMinDelta: Double = 0.5  // meters — barometric noise floor
     private var hasBarometer: Bool { CMAltimeter.isRelativeAltitudeAvailable() }
 
     // User-configurable mass for power estimate (synced from phone)
     var riderMass: Double = 75  // kg
-    var bikeMass: Double = 10   // kg
+    var bikeMass: Double = 10  // kg
     var totalMass: Double { riderMass + bikeMass }
 
-    var ridePreferences: RidePreferences = .default
+    var ridePreferences: RidePreferences = .default {
+        didSet {
+            let was = oldValue.autoPause
+            let now = ridePreferences.autoPause
+            guard isActive,
+                was.mode != now.mode || was.speedThreshold != now.speedThreshold
+            else { return }
+            DiagnosticsLog.event(
+                "Rules",
+                "stop mode changed mode=\(now.mode.rawValue) pauseSpeed=\(String(format: "%.1f", now.speedThreshold * 2.23694))mph positionPause=\(String(format: "%.1f", positionPauseSpeed * 2.23694))mph"
+            )
+        }
+    }
     var healthKitAutoUpload: Bool = true
 
     // Route name captured at ride start (survives mid-ride route swaps)
@@ -129,12 +148,17 @@ class WorkoutManager: NSObject, ObservableObject {
     private var splitMaxHR: Double = 0
     private var splitHRSum: Double = 0
     private var splitHRCount: Int = 0
+    /// Split saved with a held ride, applied when the ride continues.
+    private var heldSplitProgress: SplitProgress?
+    /// Calories from before a hold. Each workout session counts from zero.
+    private var caloriesBase: Double = 0
     var navigationAlerts: NavigationAlertPreferences = .default {
         didSet {
             // When split distance changes mid-ride, re-anchor to the nearest split
             // boundary at-or-below current distance
             guard isActive,
-                  navigationAlerts.splitAlerts.splitDistance != oldValue.splitAlerts.splitDistance else { return }
+                navigationAlerts.splitAlerts.splitDistance != oldValue.splitAlerts.splitDistance
+            else { return }
             let splitDist = navigationAlerts.splitAlerts.splitDistance
             if splitDist > 0 {
                 currentSplitNumber = Int(totalDistance / splitDist)
@@ -161,6 +185,56 @@ class WorkoutManager: NSObject, ObservableObject {
         splitHRCount = 0
     }
 
+    private func currentSplitProgress() -> SplitProgress {
+        SplitProgress(
+            splitLength: navigationAlerts.splitAlerts.splitDistance,
+            number: currentSplitNumber,
+            lastSplitDistance: lastSplitDistance,
+            startDistance: splitStartDistance,
+            startMovingTime: splitStartMovingTime,
+            startElapsedTime: splitStartElapsedTime,
+            startElevationGain: splitStartElevationGain,
+            startElevationLoss: splitStartElevationLoss,
+            startCalories: splitStartCalories,
+            maxSpeed: splitMaxSpeed,
+            maxHeartRate: splitMaxHR,
+            heartRateSum: splitHRSum,
+            heartRateCount: splitHRCount
+        )
+    }
+
+    /// Picks the split back up where it was when the ride was held. Older
+    /// held rides didn't save it, so the split start is estimated from the
+    /// ride's averages.
+    private func restoreHeldSplit(splitDist: Double) {
+        if let saved = heldSplitProgress, saved.splitLength == splitDist {
+            currentSplitNumber = saved.number
+            lastSplitDistance = saved.lastSplitDistance
+            splitStartDistance = saved.startDistance
+            splitStartMovingTime = saved.startMovingTime
+            splitStartElapsedTime = saved.startElapsedTime
+            splitStartElevationGain = saved.startElevationGain
+            splitStartElevationLoss = saved.startElevationLoss
+            splitStartCalories = saved.startCalories
+            splitMaxSpeed = saved.maxSpeed
+            splitMaxHR = saved.maxHeartRate
+            splitHRSum = saved.heartRateSum
+            splitHRCount = saved.heartRateCount
+        } else {
+            currentSplitNumber = Int(totalDistance / splitDist)
+            lastSplitDistance = Double(currentSplitNumber) * splitDist
+            let fraction = totalDistance > 0 ? lastSplitDistance / totalDistance : 0
+            resetSplitAccumulators()
+            splitStartDistance = lastSplitDistance
+            splitStartMovingTime = movingTime * fraction
+            splitStartElapsedTime = timerAccumulated * fraction
+            splitStartElevationGain = liveElevationGain * fraction
+            splitStartElevationLoss = liveElevationLoss * fraction
+            splitStartCalories = activeCalories * fraction
+        }
+        heldSplitProgress = nil
+    }
+
     /// Set after ride ends, cleared when user dismisses summary screen
     @Published var completedRideSummary: WatchRideSummary?
     /// Set when healthKitAutoUpload is off — prompts the user to save or discard the HK workout
@@ -185,7 +259,7 @@ class WorkoutManager: NSObject, ObservableObject {
     private var builder: HKLiveWorkoutBuilder?
     private var routeBuilder: HKWorkoutRouteBuilder?
     // Tracks every in-flight insertRouteData call so finishRoute(with:) only
-    // runs after they've all completed. 
+    // runs after they've all completed.
     private let routeInsertGroup = DispatchGroup()
 
     private let locationManager = CLLocationManager()
@@ -194,7 +268,7 @@ class WorkoutManager: NSObject, ObservableObject {
     private var timerAccumulated: TimeInterval = 0
     private var displayTimer: Timer?
     private var workoutStartDate: Date?
-    /// Set once at the very beginning of a ride 
+    /// Set once at the very beginning of a ride
     /// Elapsed time is always relative to this.
     private var initialRideStartDate: Date?
 
@@ -230,8 +304,12 @@ class WorkoutManager: NSObject, ObservableObject {
     // actual positions, and force-pause when displacement is near zero.
     private var positionBuffer: [(loc: CLLocation, t: Date)] = []
     private let positionBufferWindow: TimeInterval = 8.0
-    private let stationaryDistanceThreshold: Double = 6.0  // meters over window → paused
-    private let resumeDistanceThreshold: Double = 15.0     // meters of tentative buffer travel to confirm resume
+    /// Buffer speed under which auto-pause pauses (m/s): the rider's pause
+    /// speed, capped at 6 m per 8 s window.
+    private var positionPauseSpeed: Double {
+        min(ridePreferences.autoPause.speedThreshold, 0.75)
+    }
+    private let resumeDistanceThreshold: Double = 15.0  // meters of tentative buffer travel to confirm resume
 
     private var lastLocationUpdateAt: Date?
     /// Seconds of GPS silence before the displayTimer fallback treats the
@@ -241,11 +319,82 @@ class WorkoutManager: NSObject, ObservableObject {
     // Gap-safe distance tracking
     private var lastCommittedLocation: CLLocation?
     private var skipNextDistanceGap = false
-    
+    /// Fixes vaguer than this (m) need GPS speed or real travel to count.
+    private let poorFixAccuracy: Double = 20
+    private var isHoldingPoorFix = false
+
+    /// GPS speed (m/s) the barometer needs to see before it books climbing.
+    /// Walking to a door, stairs and elevators all stay under it.
+    private let baroRidingSpeed = 2.0
+    /// How recent (s) that speed has to be.
+    private let baroRidingWindow: TimeInterval = 3
+    private var lastRidingSpeedAt: Date?
+
+    /// Step counter, to tell walking around a stop from slow riding.
+    private let pedometer = CMPedometer()
+    private var pedometerRunning = false
+    private var stepCount = 0
+    private var stepCadence: Double?
+    private var lastStepSample: (steps: Int, at: Date)?
+    private var lastWalkingStepsAt: Date?
+    /// Steps per second that count as walking. A slow walk is about 1.5.
+    private let walkingCadence = 1.0
+    /// How recent (s) walking steps have to be. The pedometer reports in batches.
+    private let walkingStepsWindow: TimeInterval = 15
+    /// How long (s) under riding speed before steps count as walking, so a
+    /// false step or two while riding never stops the ride.
+    private let walkingRidingWindow: TimeInterval = 10
+
+    /// A new ride waits until the rider has clearly set off. Until then GPS
+    /// wander adds no track or distance, and outside Record All no moving
+    /// time. The run-up is added back on departure, so a ride started while
+    /// rolling still draws from the start.
+    private var isAwaitingDeparture = false
+    private var departureFixes: [CLLocation] = []
+    private var departureFixesTrimmed = false
+    private var departureStart: CLLocation?
+    private var departureWaitStartedAt: Date?
+    /// Fixes in a row at riding speed (`baroRidingSpeed`) that confirm departure.
+    private let departureFastFixes = 3
+    /// How far (m) the run-up has to carry the rider too. Stationary fixes
+    /// at start-up can report riding speed while barely moving.
+    private let departureDistance: Double = 20
+    /// Straight-line distance (m) that confirms departure on its own, for
+    /// fixes with no GPS speed.
+    private let departureFallbackDistance: Double = 100
+    /// GPS speed (m/s) a fix needs to count as part of the run-up.
+    private let runUpSpeed = 1.0
+    private let maxDepartureFixes = 180
+
     @Published var movingTime: TimeInterval = 0
 
     // Telemetry for phone Live Activity
     private var telemetryTimer: Timer?
+    /// HealthKit can hold back the phone's mirrored session for about a
+    /// minute after the previous ride, so telemetry also goes straight over
+    /// WatchConnectivity until the phone says it has the session.
+    private var earlyTelemetrySessionID: String?
+    private var earlyTelemetryUntil = Date.distantPast
+
+    // Ride trace for DEBUG builds. The CSVs are nil in release.
+    private var fixesCSV: DiagnosticsCSV?
+    private var ticksCSV: DiagnosticsCSV?
+    private var baroCSV: DiagnosticsCSV?
+    #if DEBUG
+        private let absoluteAltimeter = CMAltimeter()
+    #endif
+    // Last values updateAutoPause worked from, kept for the trace.
+    private var traceBufferSpeedMPH: Double = 0
+    private var traceBufferDisplacement: Double = 0
+    private var traceCLSpeedMPH: Double = 0
+    private var rejectedFixesSinceLast = 0
+    private var staleFixesSinceLast = 0
+    /// Fixes older than this when they arrive are cached, not live (seconds).
+    private let maxFixAge: TimeInterval = 10
+    private var lastTelemetrySendAt: Date?
+    private var lastTelemetryResult = ""
+    private var skippedTelemetrySends = 0
+    private var probeDueAt: Date?
 
     // Checkpoint / crash recovery
     private var checkpointTimer: Timer?
@@ -262,76 +411,101 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // SIM — only available in debug builds
     #if DEBUG
-    @Published var isSimulating = false
+        @Published var isSimulating = false
 
-    func startSimulation(activity: ActivityType) {
-        self.currentActivity = activity
-        isSimulating = true
+        func startSimulation(activity: ActivityType) {
+            self.currentActivity = activity
+            isSimulating = true
 
-        let config = HKWorkoutConfiguration()
-        config.activityType = activity.hkType
-        config.locationType = .outdoor
+            let config = HKWorkoutConfiguration()
+            config.activityType = activity.hkType
+            config.locationType = .outdoor
 
-        do {
-            session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
-            session?.delegate = self
-        } catch {
-            print("[Sim] Failed to create workout session: \(error)")
-        }
+            do {
+                session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
+                session?.delegate = self
+            } catch {
+                print("[Sim] Failed to create workout session: \(error)")
+            }
 
-        isMirroringReady = false
-        session?.startMirroringToCompanionDevice { [weak self] success, error in
-            if let error = error {
-                print("[Sim] Mirroring failed: \(error)")
-            } else {
-                print("[Sim] Mirroring started: \(success)")
-                if success {
-                    DispatchQueue.main.async {
-                        self?.isMirroringReady = true
-                        print("[Sim] Mirroring ready for speech routing")
+            isMirroringReady = false
+            let mirrorRequested = Date()
+            DiagnosticsLog.event("Mirroring", "sim start requested")
+            session?.startMirroringToCompanionDevice { [weak self] success, error in
+                let wait = String(format: "%.1f", Date().timeIntervalSince(mirrorRequested))
+                DiagnosticsLog.event(
+                    "Mirroring", "sim start result success=\(success) after=\(wait)s")
+                if let error = error {
+                    print("[Sim] Mirroring failed: \(error)")
+                } else {
+                    print("[Sim] Mirroring started: \(success)")
+                    if success {
+                        DispatchQueue.main.async {
+                            self?.isMirroringReady = true
+                            print("[Sim] Mirroring ready for speech routing")
+                        }
                     }
                 }
             }
+
+            session?.startActivity(with: Date())
+
+            // reset() THEN configureAudioSession() — order matters!
+            // reset() sets isStopped=true, configureAudioSession() sets it false
+            VoiceNavigator.shared.reset()
+            VoiceNavigator.shared.configureAudioSession()
+            VoiceNavigator.shared.workoutManager = self
+            VoiceAlertTransport.shared.start()
+
+            workoutStartDate = Date()
+            timerStart = workoutStartDate
+            timerAccumulated = 0
+            initialRideStartDate = workoutStartDate
+            startDisplayTimer()
+
+            isActive = true
+            isPaused = false
+            autoPauseState = .moving
+            slowSampleCount = 0
+            positionBuffer = []
+            lastLocationUpdateAt = nil
+            lastCommittedLocation = nil
+            skipNextDistanceGap = false
+            isHoldingPoorFix = false
+            lastRidingSpeedAt = nil
+            resetDeparture(awaiting: false)
+            lastSplitDistance = 0
+            currentSplitNumber = 0
+            resetSplitAccumulators()
+            initialRouteName = navigation.processedRoute?.name
+            baroElevationGain = 0
+            baroElevationLoss = 0
+            // Sim rides have no ride ID, so their trace gets its own.
+            openTraceFiles(rideID: UUID())
+            startAltimeter()
+            startTelemetryTimer()
         }
-
-        session?.startActivity(with: Date())
-
-        // reset() THEN configureAudioSession() — order matters!
-        // reset() sets isStopped=true, configureAudioSession() sets it false
-        VoiceNavigator.shared.reset()
-        VoiceNavigator.shared.configureAudioSession()
-        VoiceNavigator.shared.workoutManager = self
-        VoiceAlertTransport.shared.start()
-
-        workoutStartDate = Date()
-        timerStart = workoutStartDate
-        timerAccumulated = 0
-        initialRideStartDate = workoutStartDate
-        startDisplayTimer()
-
-        isActive = true
-        isPaused = false
-        autoPauseState = .moving
-        slowSampleCount = 0
-        positionBuffer = []
-        lastLocationUpdateAt = nil
-        lastCommittedLocation = nil
-        skipNextDistanceGap = false
-        lastSplitDistance = 0
-        currentSplitNumber = 0
-        resetSplitAccumulators()
-        initialRouteName = navigation.processedRoute?.name
-        baroElevationGain = 0
-        baroElevationLoss = 0
-        startAltimeter()
-        startTelemetryTimer()
-    }
     #else
-    let isSimulating = false
+        let isSimulating = false
     #endif
 
     func processLocation(_ location: CLLocation) {
+        let receivedAt = Date()
         DispatchQueue.main.async {
+            let previousFix = self.currentLocation
+            let stateBefore = self.autoPauseState
+            let distanceBefore = self.totalDistance
+            let gapPending = self.skipNextDistanceGap
+            var recorded = false
+            var gpsMode: BatteryManager.GPSMode?
+            defer {
+                self.traceFix(
+                    location, receivedAt: receivedAt, previousFix: previousFix,
+                    stateBefore: stateBefore, recorded: recorded,
+                    distanceAdded: self.totalDistance - distanceBefore,
+                    gapSkipped: gapPending && !self.skipNextDistanceGap,
+                    gpsMode: gpsMode)
+            }
             self.currentLocation = location
             self.lastLocationUpdateAt = Date()
             self.appendToPositionBuffer(location)
@@ -363,7 +537,9 @@ class WorkoutManager: NSObject, ObservableObject {
                     self.navigation.anchorToLocation(location)
                 }
 
-                if let alert = self.navigation.update(location: location, riderDistance: self.totalDistance) {
+                if let alert = self.navigation.update(
+                    location: location, riderDistance: self.totalDistance)
+                {
                     self.handleTurnAlert(alert)
                 }
                 VoiceNavigator.shared.update(
@@ -373,13 +549,21 @@ class WorkoutManager: NSObject, ObservableObject {
                     isActivelyMoving: self.autoPauseState == .moving)
             }
 
-            // Accumulate distance in simulation mode too
+            // Sim rides skip auto-pause and never save. They still record
+            // locations so the map has a trail to draw.
             if self.isSimulating {
                 self.accumulateDistance(location)
                 self.checkSplit()
+                self.recordedLocations.append(location)
+                self.simulateBodyMetrics(location, previousFix: previousFix)
                 return
             }
 
+            if location.speedAccuracy >= 0, location.speed >= self.baroRidingSpeed {
+                self.lastRidingSpeedAt = location.timestamp
+            }
+
+            if self.isAwaitingDeparture { self.awaitDeparture(location) }
             self.updateAutoPause()
 
             // Re-clamp after updateAutoPause in case state transitioned this tick
@@ -392,8 +576,12 @@ class WorkoutManager: NSObject, ObservableObject {
             // Recording + distance based on auto-pause state
             switch self.autoPauseState {
             case .moving:
+                if self.isAwaitingDeparture { break }
                 self.accumulateDistance(location)
                 self.checkSplit()
+                // Stops leave no track, so the map shows no scribble at a store.
+                if self.isStandingStill { break }
+                recorded = true
                 self.recordedLocations.append(location)
                 self.recordedHeartRates.append(self.heartRate > 0 ? self.heartRate : nil)
                 self.recordedPowers.append(self.estimatedPower > 0 ? self.estimatedPower : nil)
@@ -419,9 +607,38 @@ class WorkoutManager: NSObject, ObservableObject {
                 floor: self.ridePreferences.gpsAccuracyFloor,
                 dynamicOptimization: self.ridePreferences.dynamicGPSOptimization)
             self.battery.apply(mode: mode, to: self.locationManager)
+            gpsMode = mode
         }
     }
     // END SIM
+
+    /// The sim track's heart rate for the point being replayed, if it has one.
+    var simTrackHeartRate: Double?
+
+    /// Sim rides have no workout builder. Heart rate comes from the track
+    /// when it has it, otherwise it and calories are made up from the power
+    /// estimate. Rough on purpose.
+    private func simulateBodyMetrics(_ location: CLLocation, previousFix: CLLocation?) {
+        if let trackHR = simTrackHeartRate {
+            heartRate = trackHR
+        } else {
+            let target = min(185, 75 + estimatedPower * 0.4)
+            heartRate = heartRate == 0 ? target : heartRate + (target - heartRate) * 0.1
+        }
+        heartRateSum += heartRate
+        heartRateSampleCount += 1
+        averageHeartRate = heartRateSum / Double(heartRateSampleCount)
+        if heartRate > maxHeartRate { maxHeartRate = heartRate }
+        splitHRSum += heartRate
+        splitHRCount += 1
+        if heartRate > splitMaxHR { splitMaxHR = heartRate }
+
+        // About 1 kcal burned per kJ of work at the pedals.
+        if let previousFix {
+            let dt = min(5, max(0, location.timestamp.timeIntervalSince(previousFix.timestamp)))
+            activeCalories += estimatedPower * dt / 1000
+        }
+    }
 
     override init() {
         super.init()
@@ -433,15 +650,16 @@ class WorkoutManager: NSObject, ObservableObject {
     func requestPermissions() {
         let typesToShare: Set<HKSampleType> = [
             HKQuantityType.workoutType(),
-            HKSeriesType.workoutRoute()
+            HKSeriesType.workoutRoute(),
         ]
         let typesToRead: Set<HKObjectType> = [
             HKQuantityType(.heartRate),
             HKQuantityType(.activeEnergyBurned),
-            HKQuantityType(.distanceCycling)
+            HKQuantityType(.distanceCycling),
         ]
 
-        healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) { success, error in
+        healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) {
+            success, error in
             if let error = error {
                 print("HealthKit auth error: \(error)")
             }
@@ -449,7 +667,8 @@ class WorkoutManager: NSObject, ObservableObject {
 
         locationManager.requestWhenInUseAuthorization()
 
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
+        }
     }
 
     private func flushRouteLocations() {
@@ -469,18 +688,134 @@ class WorkoutManager: NSObject, ObservableObject {
             self?.routeInsertGroup.leave()
         }
     }
-    
-    
+
     private func accumulateDistance(_ location: CLLocation) {
         if skipNextDistanceGap {
             skipNextDistanceGap = false
+            isHoldingPoorFix = false
             lastCommittedLocation = location
             return
         }
         if let prev = lastCommittedLocation {
+            isHoldingPoorFix = isPoorStationaryFix(location, from: prev)
+        }
+        // Remove wandering while stationary
+        if isStandingStill || isHoldingPoorFix { return }
+        if let prev = lastCommittedLocation {
             totalDistance += location.distance(from: prev)
         }
         lastCommittedLocation = location
+    }
+
+    /// Indoors the watch gets sparse fixes tens of metres out that hop around
+    /// with no GPS speed. One that hasn't left its own accuracy radius is noise.
+    private func isPoorStationaryFix(_ location: CLLocation, from prev: CLLocation) -> Bool {
+        guard !isSimulating, location.horizontalAccuracy > poorFixAccuracy else { return false }
+        let hasSpeed = location.speedAccuracy >= 0 && location.speed >= standingStillSpeed
+        guard !hasSpeed else { return false }
+        let radius = max(location.horizontalAccuracy, prev.horizontalAccuracy)
+        return location.distance(from: prev) < radius
+    }
+
+    /// Holds a new ride's fixes until the rider sets off: the last few fixes
+    /// at riding speed, with the run-up carrying them `departureDistance`
+    /// from where they stood. The run-up then joins the ride, the wander
+    /// before it is dropped, and this fix records as usual.
+    private func awaitDeparture(_ location: CLLocation) {
+        departureFixes.append(location)
+        if departureFixes.count > maxDepartureFixes {
+            departureFixes.removeFirst()
+            departureFixesTrimmed = true
+        }
+        if departureStart == nil, location.horizontalAccuracy <= poorFixAccuracy {
+            departureStart = location
+        }
+
+        // The run of fixes at bike pace that ends at this one.
+        var runStart = departureFixes.count
+        while runStart > 0, isRunUpFix(departureFixes[runStart - 1]) { runStart -= 1 }
+        let run = departureFixes[runStart...]
+        let fast = run.suffix(departureFastFixes).filter { $0.speed >= baroRidingSpeed }
+        let origin: CLLocation? = runStart > 0 ? departureFixes[runStart - 1] : run.first
+        let bySpeed =
+            fast.count == departureFastFixes
+            && origin.map { location.distance(from: $0) >= departureDistance } == true
+        let byDistance =
+            !bySpeed && location.horizontalAccuracy <= poorFixAccuracy
+            && departureStart.map { location.distance(from: $0) >= departureFallbackDistance } == true
+        guard bySpeed || byDistance else { return }
+
+        var runUp: [CLLocation] = []
+        var movingSince = location.timestamp
+        var rolledFromStart = false
+        if bySpeed {
+            // Walking the step counter saw just before isn't part of the ride.
+            var drawFrom = runStart
+            if let lastWalkingStepsAt {
+                while drawFrom < departureFixes.count - 1,
+                    departureFixes[drawFrom].timestamp <= lastWalkingStepsAt
+                {
+                    drawFrom += 1
+                }
+            }
+            if drawFrom > 0, departureFixes[drawFrom - 1].horizontalAccuracy <= poorFixAccuracy {
+                runUp.append(departureFixes[drawFrom - 1])
+            }
+            runUp.append(contentsOf: departureFixes[drawFrom..<(departureFixes.count - 1)])
+            movingSince = departureFixes[drawFrom].timestamp
+            // Nothing before the run showed the rider standing, so they
+            // started the ride already rolling.
+            rolledFromStart =
+                drawFrom == runStart && !departureFixesTrimmed
+                && departureFixes[..<runStart].allSatisfy { $0.speedAccuracy < 0 }
+            if rolledFromStart, let departureWaitStartedAt { movingSince = departureWaitStartedAt }
+        } else if let departureStart {
+            runUp.append(departureStart)
+            let lastNearStart = departureFixes.last {
+                $0.distance(from: departureStart) < departureDistance
+            }
+            movingSince = lastNearStart?.timestamp ?? location.timestamp
+        }
+
+        for fix in runUp {
+            if let prev = lastCommittedLocation { totalDistance += fix.distance(from: prev) }
+            lastCommittedLocation = fix
+            recordedLocations.append(fix)
+            recordedHeartRates.append(heartRate > 0 ? heartRate : nil)
+            recordedPowers.append(estimatedPower > 0 ? estimatedPower : nil)
+            pendingRouteLocations.append(fix)
+        }
+        skipNextDistanceGap = false
+        // Record All counted the wait already.
+        let credit = isRecordingEverything ? 0 : max(0, Date().timeIntervalSince(movingSince))
+        movingTime += credit
+
+        // The wait would read as a stop to auto-pause and Detect Stops.
+        positionBuffer.removeAll { $0.loc.timestamp < movingSince }
+        slowSampleCount = 0
+        resumeGraceUntil = Date().addingTimeInterval(5)
+        isAwaitingDeparture = false
+
+        let waited = departureWaitStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        DiagnosticsLog.event(
+            "Start",
+            "departed reason=\(bySpeed ? "speed" : "distance") waited=\(String(format: "%.1f", waited))s held=\(departureFixes.count) runUp=\(runUp.count) rolling=\(rolledFromStart) movingCredit=\(String(format: "%.1f", credit))s"
+        )
+        departureFixes = []
+        departureStart = nil
+    }
+
+    /// Moving at bike pace by GPS speed.
+    private func isRunUpFix(_ fix: CLLocation) -> Bool {
+        fix.speedAccuracy >= 0 && fix.speed >= runUpSpeed
+    }
+
+    private func resetDeparture(awaiting: Bool) {
+        isAwaitingDeparture = awaiting
+        departureFixes = []
+        departureFixesTrimmed = false
+        departureStart = nil
+        departureWaitStartedAt = awaiting ? Date() : nil
     }
 
     private func checkSplit() {
@@ -575,7 +910,8 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func startRouteInsertion() {
-        routeInsertionTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        routeInsertionTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) {
+            [weak self] _ in
             self?.flushRouteLocations()
         }
     }
@@ -609,8 +945,14 @@ class WorkoutManager: NSObject, ObservableObject {
 
         // Watch-initiated ride → mirror to phone for telemetry/speech
         isMirroringReady = false
+        let mirrorRequested = Date()
+        DiagnosticsLog.event("Mirroring", "start requested")
         session?.startMirroringToCompanionDevice { [weak self] success, error in
-            print("[Mirroring] Start mirroring result: success=\(success), error=\(String(describing: error))")
+            let wait = String(format: "%.1f", Date().timeIntervalSince(mirrorRequested))
+            DiagnosticsLog.event(
+                "Mirroring",
+                "start result success=\(success) after=\(wait)s error=\(error?.localizedDescription ?? "none")"
+            )
             if success {
                 DispatchQueue.main.async {
                     // Mirroring is what launches and keeps the phone app alive.
@@ -651,11 +993,15 @@ class WorkoutManager: NSObject, ObservableObject {
 
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
-        // When continuing a held ride, carry the prior gain/loss totals so
-        // barometric deltas continue accumulating from where we left off.
+        // A continued ride carries its gain/loss, a new one starts from zero.
+        if continuationBase == nil {
+            liveElevationGain = 0
+            liveElevationLoss = 0
+        }
         baroElevationGain = liveElevationGain
         baroElevationLoss = liveElevationLoss
         startAltimeter()
+        startPedometer()
 
         workoutStartDate = Date()
         timerStart = workoutStartDate
@@ -663,6 +1009,7 @@ class WorkoutManager: NSObject, ObservableObject {
         if continuationBase == nil {
             timerAccumulated = 0
             initialRideStartDate = workoutStartDate
+            caloriesBase = 0
         }
         startDisplayTimer()
 
@@ -672,21 +1019,22 @@ class WorkoutManager: NSObject, ObservableObject {
         slowSampleCount = 0
         positionBuffer = []
         lastLocationUpdateAt = nil
-        // Seed lastCommittedLocation from restored track end when continuing
+        // Seed lastCommittedLocation from restored track end when continuing.
+        // The rider may have moved since the hold, so that gap isn't ridden distance.
         lastCommittedLocation = continuationBase != nil ? recordedLocations.last : nil
-        skipNextDistanceGap = false
-        // Split tracking anchors to current accumulated distance when continuing.
-        // When resuming a held ride, restore the split number and last-split boundary
-        // so numbering and timing carry over correctly (e.g. 12 mi in at 5mi splits → split 3 fires at 15mi).
+        skipNextDistanceGap = continuationBase != nil
+        isHoldingPoorFix = false
+        lastRidingSpeedAt = nil
+        // A continued ride picks up where the rider stood, so only a new one waits.
+        resetDeparture(awaiting: continuationBase == nil)
         let splitDist = navigationAlerts.splitAlerts.splitDistance
         if continuationBase != nil && splitDist > 0 {
-            currentSplitNumber = Int(totalDistance / splitDist)
-            lastSplitDistance = Double(currentSplitNumber) * splitDist
+            restoreHeldSplit(splitDist: splitDist)
         } else {
             currentSplitNumber = 0
             lastSplitDistance = totalDistance
+            resetSplitAccumulators()
         }
-        resetSplitAccumulators()
         initialRouteName = navigation.processedRoute?.name
         startTelemetryTimer()
 
@@ -695,12 +1043,13 @@ class WorkoutManager: NSObject, ObservableObject {
             currentRideID = UUID()
             lastCheckpointLocationCount = 0
         }
+        if let currentRideID { openTraceFiles(rideID: currentRideID) }
         startCheckpointTimer()
         continuationBase = nil  // clear after use
     }
 
     func pauseSession() {
-        isLocalStateChange = true
+        expectSessionStates([.paused])
         session?.pause()
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
@@ -711,6 +1060,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func pause() {
+        DiagnosticsLog.event("AutoPause", "manual pause while \(autoPauseState)")
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
 
@@ -719,12 +1069,12 @@ class WorkoutManager: NSObject, ObservableObject {
             discardTentativeBuffer()
         }
         cancelPauseProbe()
-        autoPauseState = .moving // manual pause resets auto-pause state
+        autoPauseState = .moving  // manual pause resets auto-pause state
         pauseSession()
     }
-    
+
     func resumeSession() {
-        isLocalStateChange = true
+        expectSessionStates([.running])
         session?.resume()
         timerStart = Date()
         startDisplayTimer()
@@ -740,6 +1090,7 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func resume() {
+        DiagnosticsLog.event("AutoPause", "manual resume while \(autoPauseState)")
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
 
@@ -775,8 +1126,9 @@ class WorkoutManager: NSObject, ObservableObject {
     /// Returns 0 when the buffer doesn't yet span a meaningful interval.
     private func positionBufferDisplacement() -> Double {
         guard let first = positionBuffer.first,
-              let last = positionBuffer.last,
-              last.t.timeIntervalSince(first.t) >= positionBufferWindow * 0.6 else {
+            let last = positionBuffer.last,
+            last.t.timeIntervalSince(first.t) >= positionBufferWindow * 0.6
+        else {
             return 0
         }
         return last.loc.distance(from: first.loc)
@@ -786,16 +1138,53 @@ class WorkoutManager: NSObject, ObservableObject {
     /// time span. Independent of CLLocation.speed, so immune to stuck readings.
     private func positionBufferSpeed() -> Double {
         guard let first = positionBuffer.first,
-              let last = positionBuffer.last else { return 0 }
+            let last = positionBuffer.last
+        else { return 0 }
         let dt = last.t.timeIntervalSince(first.t)
         guard dt >= positionBufferWindow * 0.6 else { return 0 }
         return last.loc.distance(from: first.loc) / dt
     }
 
+    /// Position-buffer speed under this counts as standing still (m/s).
+    private let standingStillSpeed = 0.7
+
+    /// True when the rider is stopped or walking around a stop in Detect Stops.
+    /// Auto-pause handles stops itself, and Record All counts them.
+    private var isStandingStill: Bool {
+        guard !isSimulating, ridePreferences.autoPause.mode == .detectStops
+        else { return false }
+        return isHoldingPoorFix || isWalking
+            || (positionBufferReady && positionBufferSpeed() < standingStillSpeed)
+    }
+
+    /// Steps with no riding speed for a while. Slow riding has no steps, so a
+    /// climb at walking pace keeps counting.
+    private var isWalking: Bool {
+        let now = Date()
+        guard let lastWalkingStepsAt,
+            now.timeIntervalSince(lastWalkingStepsAt) <= walkingStepsWindow
+        else { return false }
+        guard let lastRidingSpeedAt else { return true }
+        return now.timeIntervalSince(lastRidingSpeedAt) > walkingRidingWindow
+    }
+
+    /// Record All: every second and every real height change counts. Only
+    /// clear errors (stale or vague fixes, barometer jumps and noise) are
+    /// still filtered.
+    private var isRecordingEverything: Bool {
+        ridePreferences.autoPause.mode == .recordAll
+    }
+
+    private var isAtBaroRidingSpeed: Bool {
+        guard let lastRidingSpeedAt else { return false }
+        return Date().timeIntervalSince(lastRidingSpeedAt) <= baroRidingWindow
+    }
+
     /// True once the buffer spans enough time to trust its displacement signal.
     private var positionBufferReady: Bool {
         guard let first = positionBuffer.first,
-              let last = positionBuffer.last else { return false }
+            let last = positionBuffer.last
+        else { return false }
         return last.t.timeIntervalSince(first.t) >= positionBufferWindow * 0.6
     }
 
@@ -804,12 +1193,22 @@ class WorkoutManager: NSObject, ObservableObject {
     /// interval unless something cancels it first (manual resume, real
     /// movement, stop).
     private func schedulePauseProbe() {
-        let interval = min(max(ridePreferences.autoPause.resumeProbeInterval,
-                               AutoPausePreferences.resumeProbeIntervalRange.lowerBound),
-                           AutoPausePreferences.resumeProbeIntervalRange.upperBound)
+        let interval = min(
+            max(
+                ridePreferences.autoPause.resumeProbeInterval,
+                AutoPausePreferences.resumeProbeIntervalRange.lowerBound),
+            AutoPausePreferences.resumeProbeIntervalRange.upperBound)
         pauseProbeTimer?.invalidate()
-        pauseProbeTimer = Timer.scheduledTimer(withTimeInterval: interval,
-                                               repeats: false) { [weak self] _ in
+        let due = Date().addingTimeInterval(interval)
+        probeDueAt = due
+        DiagnosticsLog.event(
+            "AutoPause",
+            "probe scheduled interval=\(Int(interval))s due=\(String(format: "%.3f", due.timeIntervalSince1970))"
+        )
+        pauseProbeTimer = Timer.scheduledTimer(
+            withTimeInterval: interval,
+            repeats: false
+        ) { [weak self] _ in
             self?.beginSilentProbe()
         }
     }
@@ -821,6 +1220,7 @@ class WorkoutManager: NSObject, ObservableObject {
         pauseProbeTimer = nil
         isSilentProbe = false
         probeStartedAt = nil
+        probeDueAt = nil
     }
 
     /// Silently wake the HK session + GPS so we can sample whether the rider
@@ -828,18 +1228,21 @@ class WorkoutManager: NSObject, ObservableObject {
     /// flicker — the probe is invisible unless real movement promotes it.
     private func beginSilentProbe() {
         guard isActive,
-              autoPauseState == .paused,
-              ridePreferences.autoPause.enabled else {
+            autoPauseState == .paused,
+            ridePreferences.autoPause.enabled
+        else {
+            DiagnosticsLog.event("AutoPause", "probe fired but skipped, state=\(autoPauseState)")
             cancelPauseProbe()
             return
         }
 
-        print("[AutoPause] Starting silent probe")
+        let late = probeDueAt.map { Date().timeIntervalSince($0) } ?? 0
+        DiagnosticsLog.event("AutoPause", "probe fired late=\(String(format: "%.1f", late))s")
 
         // Wake HK (and indirectly CL) without going through resumeSession() —
         // that flips isPaused / autoPauseState and announces an auto-resume.
         // We want the ride to look paused while we sample underneath.
-        isLocalStateChange = true
+        expectSessionStates([.running])
         session?.resume()
         locationManager.startUpdatingLocation()
 
@@ -862,11 +1265,11 @@ class WorkoutManager: NSObject, ObservableObject {
     /// gathered during the probe, silently re-pause HK, and schedule the
     /// next probe attempt.
     private func endSilentProbeAndRePause() {
-        print("[AutoPause] Silent probe found no movement, re-pausing")
+        DiagnosticsLog.event("AutoPause", "probe timed out after \(Int(probeWindow))s, re-paused")
 
         discardTentativeBuffer()
 
-        isLocalStateChange = true
+        expectSessionStates([.paused])
         session?.pause()
 
         isSilentProbe = false
@@ -879,8 +1282,23 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func updateAutoPause() {
+        // Trust the position buffer over CL.speed for the pause decisions.
+        // CL.speed can freeze at a stale value when stationary (sometimes well
+        // above threshold, sometimes just below it), breaking the velocity-only
+        // logic. Buffer speed/displacement are derived from actual movement.
+        // Traced even with auto-pause off, where the standing-still check uses them.
+        let bufferSpeed = positionBufferSpeed()
+        let bufferSpeedMPH = bufferSpeed * 2.23694
+        let bufferDisplacement = positionBufferDisplacement()
+        let clSpeedMPH = speed * 2.23694
+        traceBufferSpeedMPH = bufferSpeedMPH
+        traceBufferDisplacement = bufferDisplacement
+        traceCLSpeedMPH = clSpeedMPH
+
         guard ridePreferences.autoPause.enabled else {
             if autoPauseState == .paused || autoPauseState == .tentativeResume {
+                DiagnosticsLog.event(
+                    "AutoPause", "auto-pause turned off while \(autoPauseState), resumed")
                 if autoPauseState == .tentativeResume {
                     commitTentativeBuffer()
                 }
@@ -894,17 +1312,10 @@ class WorkoutManager: NSObject, ObservableObject {
         let pauseThreshold = ridePreferences.autoPause.speedThreshold * 2.23694
         let resumeThreshold = pauseThreshold + 1.0
 
-        // Trust the position buffer over CL.speed for the pause decisions.
-        // CL.speed can freeze at a stale value when stationary (sometimes well
-        // above threshold, sometimes just below it), breaking the velocity-only
-        // logic. Buffer speed/displacement are derived from actual movement.
-        let bufferSpeedMPH = positionBufferSpeed() * 2.23694
-        let bufferDisplacement = positionBufferDisplacement()
-        let clSpeedMPH = speed * 2.23694
-
         switch autoPauseState {
         case .moving:
-            guard Date() >= resumeGraceUntil else { return }
+            // Waiting to set off isn't a stop to announce.
+            guard Date() >= resumeGraceUntil, !isAwaitingDeparture else { return }
 
             // Velocity-based trigger (unchanged): consecutive slow CL samples.
             if clSpeedMPH < pauseThreshold {
@@ -914,18 +1325,23 @@ class WorkoutManager: NSObject, ObservableObject {
             }
             let velocitySaysPaused = slowSampleCount >= slowSamplesForPause
 
-            // Position-based trigger: rolling-window displacement near zero.
+            // Position-based trigger: buffer speed under the pause speed.
             // Catches the case where CL.speed is frozen above threshold while
             // the rider is actually stationary.
-            let positionSaysPaused = positionBufferReady &&
-                bufferDisplacement < stationaryDistanceThreshold
+            let positionSaysPaused = positionBufferReady && bufferSpeed < positionPauseSpeed
 
             if (velocitySaysPaused || positionSaysPaused) && !isPaused {
+                let reason = velocitySaysPaused ? "velocity" : "position"
+                DiagnosticsLog.event(
+                    "AutoPause",
+                    "paused reason=\(reason) slowSamples=\(slowSampleCount) clSpeed=\(String(format: "%.1f", clSpeedMPH))mph bufferSpeed=\(String(format: "%.1f", bufferSpeedMPH))mph cutoff=\(String(format: "%.1f", positionPauseSpeed * 2.23694))mph displacement=\(String(format: "%.1f", bufferDisplacement))m"
+                )
                 autoPauseState = .paused
                 pauseSession()
                 slowSampleCount = 0
                 if navigationAlerts.autoPauseAlerts.enabled {
-                    VoiceNavigator.shared.announceAutoPause(mode: navigationAlerts.autoPauseAlerts.pauseMode)
+                    VoiceNavigator.shared.announceAutoPause(
+                        mode: navigationAlerts.autoPauseAlerts.pauseMode)
                 }
                 schedulePauseProbe()
             }
@@ -937,6 +1353,9 @@ class WorkoutManager: NSObject, ObservableObject {
                 // Natural detection from a live CL stream — abandon any
                 // pending probe; if we regress back to .paused we'll
                 // reschedule a fresh probe at that point.
+                DiagnosticsLog.event(
+                    "AutoPause",
+                    "tentative started bufferSpeed=\(String(format: "%.1f", bufferSpeedMPH))mph")
                 cancelPauseProbe()
                 autoPauseState = .tentativeResume
                 tentativeStartTime = Date()
@@ -953,33 +1372,44 @@ class WorkoutManager: NSObject, ObservableObject {
             if bufferSpeedMPH >= resumeThreshold {
                 fastSampleCount += 1
 
-                let elapsed = tentativeStartTime
+                let elapsed =
+                    tentativeStartTime
                     .map { Date().timeIntervalSince($0) } ?? 0
 
                 // Require sustained fast samples, minimum duration, *and*
-                // enough real displacement in the tentative buffer. 
+                // enough real displacement in the tentative buffer.
                 if fastSampleCount >= fastSamplesForResume,
-                   elapsed >= minTentativeDuration,
-                   tentativeDistance >= resumeDistanceThreshold {
+                    elapsed >= minTentativeDuration,
+                    tentativeDistance >= resumeDistanceThreshold
+                {
+                    DiagnosticsLog.event(
+                        "AutoPause",
+                        "resume confirmed samples=\(fastSampleCount) elapsed=\(String(format: "%.1f", elapsed))s distance=\(String(format: "%.1f", tentativeDistance))m silentProbe=\(isSilentProbe)"
+                    )
                     cancelPauseProbe()
                     commitTentativeBuffer()
                     resumeSession()
                     autoPauseState = .moving
                     if navigationAlerts.autoPauseAlerts.enabled {
-                        VoiceNavigator.shared.announceAutoResume(mode: navigationAlerts.autoPauseAlerts.resumeMode)
+                        VoiceNavigator.shared.announceAutoResume(
+                            mode: navigationAlerts.autoPauseAlerts.resumeMode)
                     }
                 }
             } else if !isSilentProbe {
                 // Normal (non-silent) tentative resume that fell back below
-                // threshold — regress to paused immediately. 
+                // threshold — regress to paused immediately.
                 // The probe-window timeout is handled in tickAutoPauseFallback().
+                DiagnosticsLog.event(
+                    "AutoPause",
+                    "tentative regressed bufferSpeed=\(String(format: "%.1f", bufferSpeedMPH))mph samples=\(fastSampleCount)"
+                )
                 discardTentativeBuffer()
                 autoPauseState = .paused
                 schedulePauseProbe()
             }
         }
     }
-    
+
     func setHeadingUpdates(enabled: Bool) {
         if enabled {
             locationManager.startUpdatingHeading()
@@ -989,7 +1419,9 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     func stop(save: Bool) {
-        isLocalStateChange = true
+        DiagnosticsLog.event("Mirroring", "stop save=\(save) sim=\(isSimulating)")
+        closeTraceFiles()
+        expectSessionStates([.stopped, .ended])
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
         }
@@ -998,9 +1430,11 @@ class WorkoutManager: NSObject, ObservableObject {
         stopTelemetryTimer()
         stopCheckpointTimer()
         stopAltimeter()
+        stopPedometer()
+        resetDeparture(awaiting: false)
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
-        
+
         if autoPauseState == .tentativeResume {
             // Silent-probe samples are unverified — the rider was paused, the
             // probe just happened to be in progress. Don't commit those to
@@ -1023,16 +1457,16 @@ class WorkoutManager: NSObject, ObservableObject {
         mirroringRetryWorkItem?.cancel()
         mirroringRetryWorkItem = nil
 
+        // A discard tells the phone before the session ends, so its Live
+        // Activity shows the red banner and no "Waiting for ride" row appears.
+        // Sim rides never save, so they always count as discarded.
+        if !save || isSimulating {
+            ConnectivityManager.shared.sendRideTerminalIntent("discarded")
+        }
+
         if !isSimulating {
             locationManager.stopUpdatingLocation()
             locationManager.stopUpdatingHeading()
-            // Discard path (save == false) needs the phone to flip its Live
-            // Activity to the red "Ride Discarded" banner before HK teardown
-            // races in and stamps the default `.completed`. The save==true
-            // path is a normal completion and intentionally sends no intent.
-            if !save {
-                ConnectivityManager.shared.sendRideTerminalIntent("discarded")
-            }
             session?.end()
         }
 
@@ -1100,7 +1534,8 @@ class WorkoutManager: NSObject, ObservableObject {
 
                             print("[stop] workout saved, attaching route...")
 
-                            pendingRouteBuilder?.finishRoute(with: workout, metadata: nil) { route, error in
+                            pendingRouteBuilder?.finishRoute(with: workout, metadata: nil) {
+                                route, error in
                                 if let error = error {
                                     print("[stop] finish route error: \(error)")
                                 } else {
@@ -1154,6 +1589,14 @@ class WorkoutManager: NSObject, ObservableObject {
         isActive = false
     }
 
+    /// The summary keeps `isActive` true until it's dismissed, so phone
+    /// commands clear it first or they'd see a ride that already ended.
+    func dismissSummaryIfShowing() {
+        if completedRideSummary != nil {
+            dismissSummary()
+        }
+    }
+
     private func cleanup() {
         DispatchQueue.main.async {
             // Don't set isActive = false here — summary screen handles that via dismissSummary()
@@ -1163,7 +1606,7 @@ class WorkoutManager: NSObject, ObservableObject {
             }
             self.isPaused = false
             #if DEBUG
-            self.isSimulating = false
+                self.isSimulating = false
             #endif
             self.isMirroringReady = false
             self.recordedLocations = []
@@ -1176,6 +1619,8 @@ class WorkoutManager: NSObject, ObservableObject {
             self.positionBuffer = []
             self.lastCommittedLocation = nil
             self.skipNextDistanceGap = false
+            self.isHoldingPoorFix = false
+            self.lastRidingSpeedAt = nil
             self.clearTentativeBuffer()
             self.speed = 0
             self.totalDistance = 0
@@ -1222,11 +1667,14 @@ class WorkoutManager: NSObject, ObservableObject {
                 if let origin = self.initialRideStartDate {
                     self.elapsedTime = Date().timeIntervalSince(origin)
                 }
-                // Moving time only ticks while not paused
-                if !self.isAutoPaused && !self.isPaused {
+                // Moving time only ticks while not paused or standing still.
+                // Before departure only Record All counts.
+                let waiting = self.isAwaitingDeparture && !self.isRecordingEverything
+                if !self.isAutoPaused && !self.isPaused && !self.isStandingStill && !waiting {
                     self.movingTime += 1
                 }
                 self.tickAutoPauseFallback()
+                self.traceTick()
             }
         }
     }
@@ -1234,21 +1682,23 @@ class WorkoutManager: NSObject, ObservableObject {
     /// Runs every second from the displayTimer. Catches the case where the
     /// rider has stopped moving and CoreLocation has throttled GPS updates
     /// to the point that updateAutoPause() stops being called from
-    /// processLocation(). 
+    /// processLocation().
     private func tickAutoPauseFallback() {
-        guard isActive, ridePreferences.autoPause.enabled else { return }
+        // Sims skip auto-pause, and a pause here would start real GPS.
+        guard isActive, !isSimulating, ridePreferences.autoPause.enabled else { return }
 
         // Silent probe timeout: if the probe window has elapsed without
-        // confirming movement 
+        // confirming movement
         if isSilentProbe,
-           autoPauseState == .tentativeResume,
-           let probeStart = probeStartedAt,
-           Date().timeIntervalSince(probeStart) >= probeWindow {
+            autoPauseState == .tentativeResume,
+            let probeStart = probeStartedAt,
+            Date().timeIntervalSince(probeStart) >= probeWindow
+        {
             endSilentProbeAndRePause()
             return
         }
 
-        guard !isPaused, autoPauseState == .moving else { return }
+        guard !isPaused, autoPauseState == .moving, !isAwaitingDeparture else { return }
 
         // Shrink the position buffer using wall-clock time so stale "moving"
         // entries from before the stop age out even when no new GPS arrives.
@@ -1257,18 +1707,22 @@ class WorkoutManager: NSObject, ObservableObject {
         guard let last = lastLocationUpdateAt else { return }
         let silence = Date().timeIntervalSince(last)
         guard silence >= gpsSilenceForcedPauseSeconds,
-              Date() >= resumeGraceUntil else { return }
+            Date() >= resumeGraceUntil
+        else { return }
 
         // No fresh GPS for several seconds → treat as stationary. Drive the
         // state machine through its normal pause path so all the existing
         // side-effects (HK pause, voice cue, slowSampleCount reset) run.
+        DiagnosticsLog.event(
+            "AutoPause", "paused reason=gpsSilence silence=\(String(format: "%.1f", silence))s")
         speed = 0
         autoPauseState = .paused
         pauseSession()
         slowSampleCount = 0
         positionBuffer = []
         if navigationAlerts.autoPauseAlerts.enabled {
-            VoiceNavigator.shared.announceAutoPause(mode: navigationAlerts.autoPauseAlerts.pauseMode)
+            VoiceNavigator.shared.announceAutoPause(
+                mode: navigationAlerts.autoPauseAlerts.pauseMode)
         }
         schedulePauseProbe()
     }
@@ -1281,57 +1735,131 @@ class WorkoutManager: NSObject, ObservableObject {
     private func startAltimeter() {
         guard hasBarometer, !altimeterRunning else { return }
         altimeterRunning = true
-        baroRefRelativeAltitude = nil
-        lastBaroRelativeAltitude = nil
+        baroFilter.reset()
         altimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, _ in
             guard let self = self, let data = data else { return }
-            self.handleBarometerUpdate(relativeAltitude: data.relativeAltitude.doubleValue)
+            self.handleBarometerUpdate(
+                relativeAltitude: data.relativeAltitude.doubleValue,
+                timestamp: data.timestamp)
         }
+        #if DEBUG
+            // Trace only. Never feeds the live numbers.
+            if DiagnosticsLog.isEnabled, CMAltimeter.isAbsoluteAltitudeAvailable() {
+                absoluteAltimeter.startAbsoluteAltitudeUpdates(to: .main) { [weak self] data, _ in
+                    guard let data else { return }
+                    self?.traceAbsoluteAltitude(data)
+                }
+            }
+        #endif
     }
 
     private func stopAltimeter() {
         guard altimeterRunning else { return }
         altimeter.stopRelativeAltitudeUpdates()
+        #if DEBUG
+            absoluteAltimeter.stopAbsoluteAltitudeUpdates()
+        #endif
         altimeterRunning = false
+    }
+
+    private func startPedometer() {
+        guard !pedometerRunning, CMPedometer.isStepCountingAvailable() else { return }
+        pedometerRunning = true
+        stepCount = 0
+        stepCadence = nil
+        lastStepSample = nil
+        lastWalkingStepsAt = nil
+        pedometer.startUpdates(from: Date()) { [weak self] data, _ in
+            guard let data else { return }
+            DispatchQueue.main.async { self?.handlePedometer(data) }
+        }
+    }
+
+    private func stopPedometer() {
+        guard pedometerRunning else { return }
+        pedometer.stopUpdates()
+        pedometerRunning = false
+        lastWalkingStepsAt = nil
+    }
+
+    private func handlePedometer(_ data: CMPedometerData) {
+        let steps = data.numberOfSteps.intValue
+        let cadence = data.currentCadence?.doubleValue
+        defer {
+            stepCount = steps
+            stepCadence = cadence
+            lastStepSample = (steps, data.endDate)
+        }
+        guard let last = lastStepSample, steps > last.steps else { return }
+        let span = data.endDate.timeIntervalSince(last.at)
+        let rate = cadence ?? (span > 0 ? Double(steps - last.steps) / span : 0)
+        if rate >= walkingCadence {
+            lastWalkingStepsAt = data.endDate
+        }
     }
 
     /// Re-anchor the barometer reference so a stretch where we're not
     /// accumulating (manual pause, auto-pause, ride start) doesn't roll its
     /// pressure drift into the next accumulating sample.
     private func rebaseBarometer() {
-        baroRefRelativeAltitude = lastBaroRelativeAltitude
+        baroFilter.rebase()
     }
 
-    private func handleBarometerUpdate(relativeAltitude: Double) {
-        lastBaroRelativeAltitude = relativeAltitude
+    private func handleBarometerUpdate(relativeAltitude: Double, timestamp: TimeInterval) {
+        let ref = baroFilter.reference
+        let gainBefore = baroElevationGain
+        let lossBefore = baroElevationLoss
+        var skipReason: String?
+        defer {
+            traceBarometer(
+                relativeAltitude: relativeAltitude, reference: ref,
+                skipReason: skipReason,
+                gainBooked: baroElevationGain - gainBefore,
+                lossBooked: baroElevationLoss - lossBefore,
+                sensorTime: timestamp)
+        }
 
-        // Don't accumulate while the ride isn't actively recording. Keep the
-        // reference glued to the latest reading so pause-window pressure
-        // drift doesn't get booked as gain when we resume.
+        // Only accumulate while actively recording. The filter follows the
+        // readings otherwise, so pause-window drift isn't booked on resume.
         guard isActive, !isPaused, autoPauseState == .moving else {
-            baroRefRelativeAltitude = relativeAltitude
+            skipReason = !isActive ? "inactive" : isPaused ? "paused" : "autoPause"
+            baroFilter.hold(relativeAltitude, at: timestamp)
             return
         }
 
-        guard let ref = baroRefRelativeAltitude else {
-            baroRefRelativeAltitude = relativeAltitude
+        // Standing still books nothing, but a real change made meanwhile
+        // (stairs, a curb) books once moving again.
+        if isAwaitingDeparture || isStandingStill {
+            let jumpReason = baroFilter.freeze(relativeAltitude, at: timestamp)
+            let label = isAwaitingDeparture ? "waiting" : "stationary"
+            skipReason = jumpReason.map { "\(label)-\($0)" } ?? label
             return
         }
 
-        let delta = relativeAltitude - ref
-        if delta > baroMinDelta {
-            baroElevationGain += delta
-            baroRefRelativeAltitude = relativeAltitude
+        // Below riding pace the barometer mostly sees walking and stairs, so
+        // it books nothing until riding again, then books the net change.
+        if !isSimulating, !isRecordingEverything, !isAtBaroRidingSpeed {
+            let jumpReason = baroFilter.freeze(relativeAltitude, at: timestamp)
+            skipReason = jumpReason.map { "slow-\($0)" } ?? "slow"
+            return
+        }
+
+        switch baroFilter.ingest(relativeAltitude, at: timestamp) {
+        case .skipped(let reason):
+            skipReason = reason
+        case .gain(let climb):
+            baroElevationGain += climb
+            // A sim only books this for the trace's desk test.
+            guard !isSimulating else { return }
             liveElevationGain = baroElevationGain
-            // Keep currentElevation tracking the trusted delta when we have
-            // a GPS-anchored absolute baseline.
-            currentElevation += delta
+            // currentElevation is GPS-anchored and follows the barometer between fixes.
+            currentElevation += climb
             if currentElevation > highestElevation { highestElevation = currentElevation }
-        } else if delta < -baroMinDelta {
-            baroElevationLoss -= delta
-            baroRefRelativeAltitude = relativeAltitude
+        case .loss(let drop):
+            baroElevationLoss += drop
+            guard !isSimulating else { return }
             liveElevationLoss = baroElevationLoss
-            currentElevation += delta
+            currentElevation -= drop
             if currentElevation < lowestElevation { lowestElevation = currentElevation }
         }
     }
@@ -1357,7 +1885,8 @@ class WorkoutManager: NSObject, ObservableObject {
             if alt > highestElevation { highestElevation = alt }
             if alt < lowestElevation { lowestElevation = alt }
 
-            if !hasBarometer && location.verticalAccuracy < 10 {
+            // A sim's climbing is in its track, not the barometer.
+            if (!hasBarometer || isSimulating) && location.verticalAccuracy < 10 {
                 if let ref = liveElevRefAltitude {
                     let delta = alt - ref
                     if delta > liveElevMinDelta {
@@ -1395,12 +1924,13 @@ class WorkoutManager: NSObject, ObservableObject {
             }
 
             if gradeWindowLocations.count >= 2,
-               location.verticalAccuracy >= 0,
-               location.verticalAccuracy < 20 { // Only use good GPS altitude
+                location.verticalAccuracy >= 0,
+                location.verticalAccuracy < 20
+            {  // Only use good GPS altitude
                 let first = gradeWindowLocations[0]
                 guard first.verticalAccuracy >= 0, first.verticalAccuracy < 20 else { return }
                 let horizDist = horizontalDistance(from: first, to: location)
-                if horizDist > 10 { // Need at least 10m horizontal to compute grade
+                if horizDist > 10 {  // Need at least 10m horizontal to compute grade
                     let elevChange = location.altitude - first.altitude
                     let rawGrade = (elevChange / horizDist) * 100
                     // Smooth and clamp: steepest paved road is ~35%
@@ -1413,12 +1943,12 @@ class WorkoutManager: NSObject, ObservableObject {
 
         // Power estimate (cycling physics model)
         // P = (Fg + Fr + Fa) * v
-        if spd > 0.5 { // Only estimate when moving
+        if spd > 0.5 {  // Only estimate when moving
             let mass = totalMass
             let g: Double = 9.81
-            let crr: Double = 0.005 // rolling resistance
-            let cdA: Double = 0.4 // drag area m^2
-            let rho: Double = 1.225 // air density kg/m^3
+            let crr: Double = 0.005  // rolling resistance
+            let cdA: Double = 0.4  // drag area m^2
+            let rho: Double = 1.225  // air density kg/m^3
 
             let gradeRad = atan(currentGrade / 100)
             let fg = mass * g * sin(gradeRad)
@@ -1446,7 +1976,8 @@ class WorkoutManager: NSObject, ObservableObject {
     /// Uses a ~50m window of route points around the current position.
     private func computeRouteGrade() -> Double? {
         guard let route = navigation.processedRoute,
-              !navigation.isOffRoute else { return nil }
+            !navigation.isOffRoute
+        else { return nil }
 
         let points = route.points
         let segIdx = navigation.currentSegmentIndex
@@ -1462,12 +1993,15 @@ class WorkoutManager: NSObject, ObservableObject {
             behindIdx -= 1
         }
         var aheadIdx = segIdx
-        while aheadIdx < points.count - 1 && (points[aheadIdx].distanceFromStart - currentDist) < lookahead {
+        while aheadIdx < points.count - 1
+            && (points[aheadIdx].distanceFromStart - currentDist) < lookahead
+        {
             aheadIdx += 1
         }
 
         guard let elevBehind = points[behindIdx].elevation,
-              let elevAhead = points[aheadIdx].elevation else { return nil }
+            let elevAhead = points[aheadIdx].elevation
+        else { return nil }
 
         let horizDist = points[aheadIdx].distanceFromStart - points[behindIdx].distanceFromStart
         guard horizDist > 10 else { return nil }
@@ -1545,10 +2079,10 @@ class WorkoutManager: NSObject, ObservableObject {
             // Free ride — use time-of-day
             let hour = Calendar.current.component(.hour, from: Date())
             switch hour {
-            case 5..<12:  rideName = "Morning Ride"
+            case 5..<12: rideName = "Morning Ride"
             case 12..<17: rideName = "Afternoon Ride"
             case 17..<21: rideName = "Evening Ride"
-            default:      rideName = "Night Ride"
+            default: rideName = "Night Ride"
             }
         }
 
@@ -1574,7 +2108,8 @@ class WorkoutManager: NSObject, ObservableObject {
             for i in 1..<recordedLocations.count {
                 let alt = recordedLocations[i].altitude
                 guard recordedLocations[i].verticalAccuracy >= 0,
-                      recordedLocations[i].verticalAccuracy < 10 else { continue }
+                    recordedLocations[i].verticalAccuracy < 10
+                else { continue }
 
                 let delta = alt - refAltitude
                 if delta > minDelta {
@@ -1591,7 +2126,8 @@ class WorkoutManager: NSObject, ObservableObject {
         let hrsToSave = recordedHeartRates
         let powersToSave = recordedPowers
 
-        let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
+        let trackData = TrackEncoder.encodeV5(
+            locationsToSave, heartRates: hrsToSave, powers: powersToSave)
         let rideID = currentRideID ?? UUID()
         let trackFilename = "\(rideID.uuidString).track"
         let tempURL = FileManager.default.temporaryDirectory
@@ -1623,8 +2159,10 @@ class WorkoutManager: NSObject, ObservableObject {
             maxPower: maxPower > 0 ? maxPower : nil,
             avgHeartRate: heartRateSampleCount > 0 ? averageHeartRate : nil,
             maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
-            highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
-            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil)
+            highestElevation: highestElevation > -Double.greatestFiniteMagnitude
+                ? highestElevation : nil,
+            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude
+                ? lowestElevation : nil)
 
         // If HealthKit workout was saved, mark it in the upload records
         if savedToHealthKit {
@@ -1647,8 +2185,12 @@ class WorkoutManager: NSObject, ObservableObject {
     // MARK: - Telemetry (Phone Live Activity)
 
     private func startTelemetryTimer() {
+        earlyTelemetrySessionID = UUID().uuidString
+        earlyTelemetryUntil = Date().addingTimeInterval(90)
         telemetryTimer?.invalidate()
-        telemetryTimer = Timer.scheduledTimer(withTimeInterval: ridePreferences.telemetryRate.interval, repeats: true) { [weak self] _ in
+        telemetryTimer = Timer.scheduledTimer(
+            withTimeInterval: ridePreferences.telemetryRate.interval, repeats: true
+        ) { [weak self] _ in
             self?.sendTelemetry()
         }
     }
@@ -1656,6 +2198,16 @@ class WorkoutManager: NSObject, ObservableObject {
     private func stopTelemetryTimer() {
         telemetryTimer?.invalidate()
         telemetryTimer = nil
+        if let sessionID = earlyTelemetrySessionID {
+            ConnectivityManager.shared.sendEarlyRideEnded(sessionID: sessionID)
+            earlyTelemetrySessionID = nil
+        }
+    }
+
+    func stopEarlyTelemetry() {
+        guard earlyTelemetrySessionID != nil else { return }
+        DiagnosticsLog.event("Mirroring", "early telemetry stopped, phone has session")
+        earlyTelemetrySessionID = nil
     }
 
     // MARK: - Checkpoint (Crash Recovery)
@@ -1670,7 +2222,8 @@ class WorkoutManager: NSObject, ObservableObject {
     private func startCheckpointTimer() {
         checkpointTimer?.invalidate()
         guard let interval = ridePreferences.checkpointInterval.interval else { return }
-        checkpointTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        checkpointTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) {
+            [weak self] _ in
             self?.saveCheckpoint()
         }
     }
@@ -1708,9 +2261,12 @@ class WorkoutManager: NSObject, ObservableObject {
             maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
             avgPower: powerSampleCount > 0 ? averagePower : nil,
             maxPower: maxPower > 0 ? maxPower : nil,
-            highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
-            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil,
-            pointCount: locations.count
+            highestElevation: highestElevation > -Double.greatestFiniteMagnitude
+                ? highestElevation : nil,
+            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude
+                ? lowestElevation : nil,
+            pointCount: locations.count,
+            splitProgress: currentSplitProgress()
         )
 
         let trackURL = checkpointTrackURL
@@ -1756,7 +2312,8 @@ class WorkoutManager: NSObject, ObservableObject {
         guard !isActive else { return }
         let fm = FileManager.default
         guard fm.fileExists(atPath: checkpointMetaURL.path),
-              fm.fileExists(atPath: checkpointTrackURL.path) else { return }
+            fm.fileExists(atPath: checkpointTrackURL.path)
+        else { return }
 
         print("[Checkpoint] Found checkpoint, attempting recovery...")
 
@@ -1767,7 +2324,8 @@ class WorkoutManager: NSObject, ObservableObject {
             guard let self = self else { return }
 
             guard let metaData = try? Data(contentsOf: metaURL),
-                  let meta = decodeCheckpointMeta(metaData) else {
+                let meta = decodeCheckpointMeta(metaData)
+            else {
                 print("[Checkpoint] Could not decode meta, discarding")
                 self.deleteCheckpointFiles()
                 return
@@ -1813,7 +2371,8 @@ class WorkoutManager: NSObject, ObservableObject {
                 maxHeartRate: meta.maxHeartRate,
                 highestElevation: meta.highestElevation,
                 lowestElevation: meta.lowestElevation,
-                isOnHold: true
+                isOnHold: true,
+                splitProgress: meta.splitProgress
             )
 
             ConnectivityManager.shared.sendRide(summary: summary, trackURL: destURL)
@@ -1832,10 +2391,10 @@ class WorkoutManager: NSObject, ObservableObject {
         if let routeName = initialRouteName { return routeName }
         let hour = Calendar.current.component(.hour, from: Date())
         switch hour {
-        case 5..<12:  return "Morning Ride"
+        case 5..<12: return "Morning Ride"
         case 12..<17: return "Afternoon Ride"
         case 17..<21: return "Evening Ride"
-        default:      return "Night Ride"
+        default: return "Night Ride"
         }
     }
 
@@ -1878,6 +2437,12 @@ class WorkoutManager: NSObject, ObservableObject {
     func holdRide() {
         guard isActive, !isSimulating else { return }
 
+        // Continuing the ride reopens these and appends.
+        closeTraceFiles()
+        // Readings during a hold can sit far off and snap back, so the
+        // continuation starts a fresh altimeter session.
+        stopAltimeter()
+        stopPedometer()
         stopCheckpointTimer()
         stopTelemetryTimer()
         routeInsertionTimer?.invalidate()
@@ -1897,7 +2462,8 @@ class WorkoutManager: NSObject, ObservableObject {
         // Write the track directly to the durable rides directory rather than the
         // temporary directory. Combined with an early RideStore save below, this
         // ensures the held ride survives a crash anywhere in the async HK chain.
-        let persistentTrackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(trackFilename)
+        let persistentTrackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(
+            trackFilename)
 
         let locationsToSave = recordedLocations
         let hrsToSave = recordedHeartRates
@@ -1923,13 +2489,17 @@ class WorkoutManager: NSObject, ObservableObject {
             maxPower: maxPower > 0 ? maxPower : nil,
             avgHeartRate: heartRateSampleCount > 0 ? averageHeartRate : nil,
             maxHeartRate: maxHeartRate > 0 ? maxHeartRate : nil,
-            highestElevation: highestElevation > -Double.greatestFiniteMagnitude ? highestElevation : nil,
-            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude ? lowestElevation : nil,
+            highestElevation: highestElevation > -Double.greatestFiniteMagnitude
+                ? highestElevation : nil,
+            lowestElevation: lowestElevation < Double.greatestFiniteMagnitude
+                ? lowestElevation : nil,
             isOnHold: true,
-            heldRouteID: activeRoute?.id
+            heldRouteID: activeRoute?.id,
+            splitProgress: currentSplitProgress()
         )
 
-        let trackData = TrackEncoder.encodeV5(locationsToSave, heartRates: hrsToSave, powers: powersToSave)
+        let trackData = TrackEncoder.encodeV5(
+            locationsToSave, heartRates: hrsToSave, powers: powersToSave)
         do {
             // Atomic write so we never end up with a half-written track file even
             // if the watch power-cycles during the write.
@@ -1941,12 +2511,12 @@ class WorkoutManager: NSObject, ObservableObject {
 
         // Persist the held ride to disk + RideStore SYNCHRONOUSLY before any of the
         // teardown / async HK work. RideStore.update writes the summary JSON to the
-        // same `rides/` directory ConnectivityManager uses. 
+        // same `rides/` directory ConnectivityManager uses.
         rideStore?.update(summary)
         TransferLedger.shared.recordTransfer(rideID: summary.id)
 
         // Surface a held-ride summary screen so the user sees feedback after the
-        // countdown. 
+        // countdown.
         completedRideSummary = WatchRideSummary(
             distance: totalDistance,
             movingTime: movingTime,
@@ -1970,7 +2540,7 @@ class WorkoutManager: NSObject, ObservableObject {
         mirroringRetryWorkItem?.cancel()
         mirroringRetryWorkItem = nil
 
-        isLocalStateChange = true
+        expectSessionStates([.stopped, .ended])
         if let start = timerStart {
             timerAccumulated += Date().timeIntervalSince(start)
         }
@@ -1981,7 +2551,7 @@ class WorkoutManager: NSObject, ObservableObject {
         // Checkpoint files are only deleted after the held ride is fully durable on
         // disk and we've kicked off the transfer to the phone.
 
-        // Tell the phone before HK tears down 
+        // Tell the phone before HK tears down
         ConnectivityManager.shared.sendRideTerminalIntent("held")
 
         // Finish the HK session for this segment so it saves to Fitness
@@ -2020,7 +2590,8 @@ class WorkoutManager: NSObject, ObservableObject {
                         // The track + summary are already on disk and in RideStore;
                         // sendRide will detect that the destination matches the
                         // source and skip the copy, then notify + transfer to phone.
-                        ConnectivityManager.shared.sendRide(summary: summary, trackURL: persistentTrackURL)
+                        ConnectivityManager.shared.sendRide(
+                            summary: summary, trackURL: persistentTrackURL)
                         self.deleteCheckpointFiles()
                         self.cleanup()
                     }
@@ -2032,7 +2603,8 @@ class WorkoutManager: NSObject, ObservableObject {
     func continueHeldRide(summary: RideSummary, route: Route? = nil) {
         guard !isActive else { return }
 
-        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
+        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(
+            summary.trackFilename)
         guard let trackData = try? Data(contentsOf: trackURL) else {
             print("[Continue] Could not load track for held ride")
             return
@@ -2080,9 +2652,13 @@ class WorkoutManager: NSObject, ObservableObject {
         maxSpeed = summary.maxSpeed ?? 0
         maxHeartRate = summary.maxHeartRate ?? 0
         maxPower = summary.maxPower ?? 0
+        activeCalories = summary.calories
+        caloriesBase = summary.calories
+        heldSplitProgress = summary.splitProgress
         highestElevation = summary.highestElevation ?? -Double.greatestFiniteMagnitude
         lowestElevation = summary.lowestElevation ?? Double.greatestFiniteMagnitude
-        averageHeartRate = heartRateSampleCount > 0 ? heartRateSum / Double(heartRateSampleCount) : 0
+        averageHeartRate =
+            heartRateSampleCount > 0 ? heartRateSum / Double(heartRateSampleCount) : 0
         averagePower = powerSampleCount > 0 ? powerSum / Double(powerSampleCount) : 0
 
         // Stable ID so the final save overwrites the held summary on phone
@@ -2110,7 +2686,8 @@ class WorkoutManager: NSObject, ObservableObject {
         rideStore?.update(completed)
 
         // Re-send to phone so it receives the updated (completed) summary
-        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(summary.trackFilename)
+        let trackURL = ConnectivityManager.ridesDirectory.appendingPathComponent(
+            summary.trackFilename)
         ConnectivityManager.shared.sendRide(summary: completed, trackURL: trackURL)
     }
 
@@ -2129,7 +2706,12 @@ class WorkoutManager: NSObject, ObservableObject {
     }
 
     private func sendTelemetry() {
-        guard isMirroringReady, let workoutSession = session else { return }
+        if earlyTelemetrySessionID != nil, Date() > earlyTelemetryUntil {
+            earlyTelemetrySessionID = nil
+        }
+        let workoutSession = isMirroringReady ? session : nil
+        if workoutSession == nil { skippedTelemetrySends += 1 }
+        guard workoutSession != nil || earlyTelemetrySessionID != nil else { return }
 
         let avgSpeed = movingTime > 0 ? totalDistance / movingTime : 0
 
@@ -2155,7 +2737,9 @@ class WorkoutManager: NSObject, ObservableObject {
         if currentElevation != 0 { payload["elevation"] = String(currentElevation) }
         if liveElevationGain > 0 { payload["elevGain"] = String(liveElevationGain) }
         if liveElevationLoss > 0 { payload["elevLoss"] = String(liveElevationLoss) }
-        if highestElevation > -Double.greatestFiniteMagnitude { payload["highElev"] = String(highestElevation) }
+        if highestElevation > -Double.greatestFiniteMagnitude {
+            payload["highElev"] = String(highestElevation)
+        }
         if currentGrade != 0 { payload["grade"] = String(currentGrade) }
         if estimatedPower > 0 { payload["power"] = String(estimatedPower) }
 
@@ -2184,8 +2768,10 @@ class WorkoutManager: NSObject, ObservableObject {
                     let suffix = (missed.direction == .uTurn) ? "" : " Turn"
                     payload["missedTurnLabel"] = "Missed \(dirWord)\(suffix)"
                     if let desc = missed.description,
-                       let r = desc.range(of: " onto ", options: .caseInsensitive) {
-                        let name = String(desc[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+                        let r = desc.range(of: " onto ", options: .caseInsensitive)
+                    {
+                        let name = String(desc[r.upperBound...]).trimmingCharacters(
+                            in: .whitespaces)
                         if !name.isEmpty {
                             payload["missedTurnCue"] = "onto \(name)"
                         }
@@ -2205,9 +2791,19 @@ class WorkoutManager: NSObject, ObservableObject {
 
         }
 
-        guard let data = try? JSONEncoder().encode(payload) else { return }
+        if let sessionID = earlyTelemetrySessionID {
+            var early = payload
+            early["sessionID"] = sessionID
+            ConnectivityManager.shared.sendEarlyTelemetry(early)
+        }
 
+        guard let workoutSession, let data = try? JSONEncoder().encode(payload) else { return }
+
+        lastTelemetrySendAt = Date()
         workoutSession.sendToRemoteWorkoutSession(data: data) { [weak self] success, error in
+            let result =
+                error.map { "error: \($0.localizedDescription)" } ?? (success ? "ok" : "failed")
+            DispatchQueue.main.async { self?.lastTelemetryResult = result }
             if let error = error {
                 print("[Telemetry] send error: \(error)")
                 self?.markMirroringFailed()
@@ -2218,6 +2814,8 @@ class WorkoutManager: NSObject, ObservableObject {
     private func markMirroringFailed() {
         DispatchQueue.main.async {
             guard self.isActive else { return }
+            DiagnosticsLog.event(
+                "AutoPause", "telemetry send failed, mirroring marked down, retry in 3s")
             self.isMirroringReady = false
             self.scheduleMirroringRetry()
         }
@@ -2230,6 +2828,7 @@ class WorkoutManager: NSObject, ObservableObject {
         mirroringRetryWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.isActive, self.session != nil else { return }
+            DiagnosticsLog.event("AutoPause", "mirroring retry, marked ready")
             self.isMirroringReady = true
             self.mirroringRetryWorkItem = nil
         }
@@ -2240,9 +2839,19 @@ class WorkoutManager: NSObject, ObservableObject {
 
 extension WorkoutManager: CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
+        // A sim feeds its own fixes. Real ones would jump the track to wherever the watch is.
+        guard !isSimulating, let location = locations.last else { return }
         guard location.horizontalAccuracy >= 0,
-              location.horizontalAccuracy < 50 else { return }
+            location.horizontalAccuracy < 50
+        else {
+            DispatchQueue.main.async { self.rejectedFixesSinceLast += 1 }
+            return
+        }
+        // CoreLocation can hand over a cached fix from minutes ago at start-up.
+        guard -location.timestamp.timeIntervalSinceNow < maxFixAge else {
+            DispatchQueue.main.async { self.staleFixesSinceLast += 1 }
+            return
+        }
         // GPS course is more accurate than compass for direction of travel while cycling.
         // Use it whenever the signal is valid and the rider is moving.
         if location.course >= 0 && location.speed > 0.5 {
@@ -2262,10 +2871,12 @@ extension WorkoutManager: CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("Location error: \(error)")
+        DiagnosticsLog.event("AutoPause", "location error: \(error.localizedDescription)")
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        DiagnosticsLog.event(
+            "AutoPause", "location authorization=\(manager.authorizationStatus.rawValue)")
         switch manager.authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
             print("Location authorized")
@@ -2278,23 +2889,33 @@ extension WorkoutManager: CLLocationManagerDelegate {
 }
 
 extension WorkoutManager: HKWorkoutSessionDelegate {
-    func workoutSession(_ workoutSession: HKWorkoutSession,
-                        didChangeTo toState: HKWorkoutSessionState,
-                        from fromState: HKWorkoutSessionState,
-                        date: Date) {
-        print("Workout state: \(fromState.rawValue) → \(toState.rawValue)")
+    func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didChangeTo toState: HKWorkoutSessionState,
+        from fromState: HKWorkoutSessionState,
+        date: Date
+    ) {
+        DiagnosticsLog.event(
+            "Mirroring", "session state \(fromState.rawValue) -> \(toState.rawValue)")
 
-        if isLocalStateChange {
-            // Local action (pause/resume/stop called on this device) —
-            // internal state is already synced, just reset the guard.
-            isLocalStateChange = false
-            return
-        }
-
-        // Remote state change (initiated from phone via mirrored session).
-        // Sync internal WorkoutManager state to match.
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.isActive else { return }
+            guard let self = self else { return }
+
+            // A change this device asked for. Internal state is already in sync.
+            if self.expectedSessionStates.contains(toState),
+                Date().timeIntervalSince(self.expectedSessionStatesAt) < 30
+            {
+                self.expectedSessionStates.remove(toState)
+                return
+            }
+            self.expectedSessionStates = []
+            DiagnosticsLog.event(
+                "AutoPause",
+                "unexpected session state \(fromState.rawValue) -> \(toState.rawValue) active=\(self.isActive)"
+            )
+
+            // Anything else came from the phone through the mirrored session.
+            guard self.isActive else { return }
 
             switch toState {
             case .paused where fromState == .running:
@@ -2337,28 +2958,37 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
         }
     }
 
-    func workoutSession(_ workoutSession: HKWorkoutSession,
-                        didFailWithError error: Error) {
+    func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didFailWithError error: Error
+    ) {
         print("Workout session error: \(error)")
     }
 
-    func workoutSession(_ workoutSession: HKWorkoutSession,
-                        didDisconnectFromRemoteDeviceWithError error: Error?) {
+    func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didDisconnectFromRemoteDeviceWithError error: Error?
+    ) {
         print("[Mirroring] Disconnected from phone: \(error?.localizedDescription ?? "clean")")
         markMirroringFailed()
     }
 
     /// Receive messages from the phone (ack channel for mirrored speech):
-    /// "alertAck" when the phone's synthesizer starts an utterance and
+    /// "alertAck" when the phone's synthesizer starts an utterance,
     /// "alertFinish" when it completes one, so the watch can advance its
-    /// alert queue based on real completion instead of a duration estimate.
-    func workoutSession(_ workoutSession: HKWorkoutSession,
-                        didReceiveDataFromRemoteWorkoutSession data: [Data]) {
+    /// alert queue based on real completion instead of a duration estimate,
+    /// and "alertNack" when the phone dropped one unspoken. "resumeRide" is a
+    /// resume the phone couldn't send as a session state change.
+    func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didReceiveDataFromRemoteWorkoutSession data: [Data]
+    ) {
         let now = Date().timeIntervalSince1970
 
         for item in data {
             guard let payload = try? JSONDecoder().decode([String: String].self, from: item),
-                  let type = payload["type"] else {
+                let type = payload["type"]
+            else {
                 continue
             }
 
@@ -2378,6 +3008,17 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
                 DispatchQueue.main.async {
                     ConnectivityManager.shared.onAlertFinishReceived?(id)
                 }
+            case "alertNack":
+                guard let idStr = payload["id"], let id = UUID(uuidString: idStr) else { continue }
+                DispatchQueue.main.async {
+                    ConnectivityManager.shared.onAlertNackReceived?(id)
+                }
+            case "resumeRide":
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isActive, self.isPaused else { return }
+                    print("[Remote] Resume received from phone during auto-pause")
+                    self.resume()
+                }
             default:
                 break
             }
@@ -2386,8 +3027,10 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
 }
 
 extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
-    func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder,
-                        didCollectDataOf collectedTypes: Set<HKSampleType>) {
+    func workoutBuilder(
+        _ workoutBuilder: HKLiveWorkoutBuilder,
+        didCollectDataOf collectedTypes: Set<HKSampleType>
+    ) {
         for type in collectedTypes {
             guard let quantityType = type as? HKQuantityType else { continue }
             let statistics = workoutBuilder.statistics(for: quantityType)
@@ -2401,7 +3044,8 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
                     if hr > 0 {
                         self.heartRateSum += hr
                         self.heartRateSampleCount += 1
-                        self.averageHeartRate = self.heartRateSum / Double(self.heartRateSampleCount)
+                        self.averageHeartRate =
+                            self.heartRateSum / Double(self.heartRateSampleCount)
                         if hr > self.maxHeartRate { self.maxHeartRate = hr }
                         // Per-split HR accumulation
                         self.splitHRSum += hr
@@ -2410,7 +3054,8 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
                     }
                 case HKQuantityType(.activeEnergyBurned):
                     let unit = HKUnit.kilocalorie()
-                    self.activeCalories = statistics?.sumQuantity()?.doubleValue(for: unit) ?? 0
+                    self.activeCalories =
+                        self.caloriesBase + (statistics?.sumQuantity()?.doubleValue(for: unit) ?? 0)
                 default:
                     break
                 }
@@ -2419,4 +3064,128 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
     }
 
     func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {}
+}
+
+// MARK: - Ride Trace
+
+extension WorkoutManager {
+    private static let fixesHeader = [
+        "fixTime", "receivedAt", "lat", "lon", "hAcc", "altitude", "vAcc",
+        "speed", "speedAcc", "course", "sinceLastFix", "rejectedBefore",
+        "stateBefore", "stateAfter", "silentProbe",
+        "bufferSpeedMPH", "bufferDisplacement", "clSpeedMPH",
+        "slowSamples", "fastSamples", "tentativeDistance",
+        "recorded", "distanceAdded", "gapSkipped",
+        "gpsMode", "desiredAccuracy", "distanceFilter",
+        "staleBefore", "poorFixHeld",
+    ]
+    private static let ticksHeader = [
+        "time", "appState", "hkState", "isPaused", "autoPauseState", "silentProbe",
+        "sinceLastFix", "movingTime", "elapsedTime", "totalDistance",
+        "mirroringReady", "earlyTelemetry", "sinceTelemetrySend", "telemetryResult",
+        "skippedTelemetrySends", "standingStill", "walking", "steps", "stepCadence",
+        "awaitingStart",
+    ]
+    private static let baroHeader = [
+        "time", "source", "relativeAltitude", "reference", "delta",
+        "accumulated", "skipReason", "gainBooked", "lossBooked",
+        "currentElevation", "liveGain", "liveLoss",
+        "absAltitude", "absAccuracy", "absPrecision", "sensorTime",
+    ]
+
+    /// A continued held ride reopens the same files and appends.
+    private func openTraceFiles(rideID: UUID) {
+        fixesCSV = DiagnosticsCSV(rideID: rideID, kind: "fixes", header: Self.fixesHeader)
+        ticksCSV = DiagnosticsCSV(rideID: rideID, kind: "ticks", header: Self.ticksHeader)
+        baroCSV = DiagnosticsCSV(rideID: rideID, kind: "baro", header: Self.baroHeader)
+        DiagnosticsLog.event(
+            "Rules",
+            "mode=\(ridePreferences.autoPause.mode.rawValue) pauseSpeed=\(String(format: "%.1f", ridePreferences.autoPause.speedThreshold * 2.23694))mph positionPause=\(String(format: "%.1f", positionPauseSpeed * 2.23694))mph standingStill=\(String(format: "%.1f", standingStillSpeed * 2.23694))mph poorFix>\(Int(poorFixAccuracy))m maxFixAge=\(Int(maxFixAge))s baroStop=freeze baroRiding=\(String(format: "%.1f", baroRidingSpeed * 2.23694))mph/\(Int(baroRidingWindow))s baroFloor=\(baroFilter.noiseFloor)m walking=\(String(format: "%.1f", walkingCadence))steps/s,\(Int(walkingStepsWindow))s+noRiding\(Int(walkingRidingWindow))s pedometer=\(CMPedometer.isStepCountingAvailable()) start=\(departureFastFixes)fixes@\(String(format: "%.1f", baroRidingSpeed * 2.23694))mph+\(Int(departureDistance))m|\(Int(departureFallbackDistance))m waiting=\(isAwaitingDeparture)"
+        )
+        rejectedFixesSinceLast = 0
+        staleFixesSinceLast = 0
+        skippedTelemetrySends = 0
+        lastTelemetrySendAt = nil
+        lastTelemetryResult = ""
+    }
+
+    /// Writes everything out before the ride transfer sends the files.
+    private func closeTraceFiles() {
+        fixesCSV?.close()
+        ticksCSV?.close()
+        baroCSV?.close()
+        fixesCSV = nil
+        ticksCSV = nil
+        baroCSV = nil
+    }
+
+    private func traceFix(
+        _ location: CLLocation, receivedAt: Date, previousFix: CLLocation?,
+        stateBefore: AutoPauseState, recorded: Bool, distanceAdded: Double,
+        gapSkipped: Bool, gpsMode: BatteryManager.GPSMode?
+    ) {
+        guard let fixesCSV else { return }
+        fixesCSV.append([
+            location.timestamp, receivedAt,
+            location.coordinate.latitude, location.coordinate.longitude,
+            location.horizontalAccuracy, location.altitude, location.verticalAccuracy,
+            location.speed, location.speedAccuracy, location.course,
+            previousFix.map { location.timestamp.timeIntervalSince($0.timestamp) },
+            rejectedFixesSinceLast,
+            "\(stateBefore)", "\(autoPauseState)", isSilentProbe,
+            traceBufferSpeedMPH, traceBufferDisplacement, traceCLSpeedMPH,
+            slowSampleCount, fastSampleCount, tentativeDistance,
+            recorded, distanceAdded, gapSkipped,
+            gpsMode?.rawValue, locationManager.desiredAccuracy, locationManager.distanceFilter,
+            staleFixesSinceLast, isHoldingPoorFix,
+        ])
+        rejectedFixesSinceLast = 0
+        staleFixesSinceLast = 0
+    }
+
+    private func traceTick() {
+        guard let ticksCSV else { return }
+        let now = Date()
+        let appState: String
+        switch WKApplication.shared().applicationState {
+        case .active: appState = "active"
+        case .inactive: appState = "inactive"
+        case .background: appState = "background"
+        @unknown default: appState = "unknown"
+        }
+        ticksCSV.append([
+            now, appState, session?.state.rawValue, isPaused, "\(autoPauseState)", isSilentProbe,
+            lastLocationUpdateAt.map { now.timeIntervalSince($0) },
+            movingTime, elapsedTime, totalDistance,
+            isMirroringReady, earlyTelemetrySessionID != nil,
+            lastTelemetrySendAt.map { now.timeIntervalSince($0) }, lastTelemetryResult,
+            skippedTelemetrySends, isStandingStill, isWalking,
+            pedometerRunning ? stepCount : nil, stepCadence, isAwaitingDeparture,
+        ])
+    }
+
+    private func traceBarometer(
+        relativeAltitude: Double, reference: Double?, skipReason: String?,
+        gainBooked: Double, lossBooked: Double, sensorTime: TimeInterval
+    ) {
+        guard let baroCSV else { return }
+        baroCSV.append([
+            Date(), "relative", relativeAltitude, reference,
+            reference.map { relativeAltitude - $0 },
+            skipReason == nil, skipReason, gainBooked, lossBooked,
+            currentElevation, liveElevationGain, liveElevationLoss,
+            nil, nil, nil, sensorTime,
+        ])
+    }
+
+    #if DEBUG
+        private func traceAbsoluteAltitude(_ data: CMAbsoluteAltitudeData) {
+            guard let baroCSV else { return }
+            baroCSV.append([
+                Date(), "absolute", nil, nil, nil, nil, nil, nil, nil,
+                currentElevation, liveElevationGain, liveElevationLoss,
+                data.altitude, data.accuracy, data.precision, data.timestamp,
+            ])
+        }
+    #endif
 }

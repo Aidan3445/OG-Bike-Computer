@@ -9,19 +9,6 @@ import SwiftUI
 
 // MARK: - Unit-Aware Formatting Helpers
 
-private func zoomLabel(_ meters: Double) -> String {
-    if currentUnits.distance == .miles {
-        let feet = meters * 3.28084
-        if feet >= 2640 {
-            let miles = meters / 1609.34
-            if miles == Double(Int(miles)) { return "\(Int(miles)) mi" }
-            return String(format: "%.1f mi", miles)
-        }
-        return "\(Int(round(feet))) ft"
-    }
-    return "\(Int(meters))m"
-}
-
 private func weightLabel(_ kg: Double) -> String {
     if currentUnits.weight == .pounds {
         return "\(String(format: "%.0f", kg * 2.20462)) lbs"
@@ -35,12 +22,16 @@ struct SettingsView: View {
     @ObservedObject var integrationSettings: IntegrationSettingsStore
     @ObservedObject var rideStore: RideStore
     @ObservedObject var routeStore: RouteStore
+    /// Redraws the unit-labeled summaries once new units reach `currentUnits`.
+    @ObservedObject private var unitState = UnitState.shared
     @State private var showClearRides = false
     @State private var showClearRoutes = false
     @State private var isExportingAllRides = false
     @State private var exportAllZipURL: URL?
     @State private var showExportAllShareSheet = false
     @StateObject private var connectivity = ConnectivityManager.shared
+    @AppStorage(PhoneSettingsKeys.gradeColors) private var phoneGradeColors = true
+    @AppStorage(RouteImportCoordinator.autoSendDefaultsKey) private var autoSendRoutesToWatch = false
 
     private var navigationAlertsSummary: String {
         let alerts = userSettings.settings.navigationAlerts
@@ -48,7 +39,18 @@ struct SettingsView: View {
         var parts: [String] = [mode.label]
         if alerts.splitAlerts.enabled { parts.append("Splits") }
         if alerts.waypointAlerts.enabled { parts.append("Waypoints") }
-        return parts.joined(separator: " \u{2022} ")
+        return bulletJoined(parts)
+    }
+
+    /// Joins summary parts with bullets. Each part's spaces and hyphens are
+    /// made non-breaking so a long summary only wraps at the bullets.
+    private func bulletJoined(_ parts: [String]) -> String {
+        parts
+            .map {
+                $0.replacingOccurrences(of: " ", with: "\u{00A0}")
+                    .replacingOccurrences(of: "-", with: "\u{2011}")
+            }
+            .joined(separator: " \u{2022} ")
     }
 
     private var integrationsSummary: String {
@@ -64,9 +66,17 @@ struct SettingsView: View {
         var parts: [String] = []
         if map.mapDetail != .off { parts.append(map.mapDetail.label) }
         parts.append(map.routeAheadColor.label)
-        parts.append("\(zoomLabel(map.defaultZoom)) zoom")
+        parts.append("\(ZoomSteps.label(map.effectiveDefaultZoom)) zoom")
         if !map.showTurnOverlay { parts.append("Overlay off") }
-        return parts.joined(separator: " \u{2022} ")
+        return bulletJoined(parts)
+    }
+
+    private var phoneSummary: String {
+        var parts = ["Live Activity"]
+        if userSettings.settings.phoneAlerts.showTurnNotifications { parts.append("Turn Notifications") }
+        if phoneGradeColors { parts.append("Grade Colors") }
+        if autoSendRoutesToWatch { parts.append("Auto-Send") }
+        return bulletJoined(parts)
     }
 
     private var isImperial: Bool { currentUnits.distance == .miles }
@@ -74,12 +84,10 @@ struct SettingsView: View {
     private var rideSettingsSummary: String {
         let ride = userSettings.settings.ridePreferences
         var parts: [String] = []
-        parts.append(
-            ride.autoPause.enabled ? "Auto-Pause On" : "Auto-Pause Off"
-        )
+        parts.append(ride.autoPause.mode.label)
         parts.append("GPS \(ride.gpsAccuracyFloor.label)")
         parts.append(ride.mapRotation.label)
-        return parts.joined(separator: " \u{2022} ")
+        return bulletJoined(parts)
     }
 
     var body: some View {
@@ -168,6 +176,23 @@ struct SettingsView: View {
                     } icon: {
                         Image(systemName: "battery.100.bolt")
                             .foregroundStyle(.green)
+                    }
+                }
+
+                // MARK: - Phone
+                NavigationLink {
+                    PhoneSettingsView(userSettings: userSettings)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Phone")
+                            Text(phoneSummary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "iphone")
+                            .foregroundStyle(.orange)
                     }
                 }
             }
@@ -299,6 +324,25 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             }
 
+            #if DEBUG
+            Section {
+                NavigationLink {
+                    DiagnosticsView(rideStore: rideStore)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Diagnostics")
+                            Text("Trace files from this phone and the watch")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "stethoscope")
+                            .foregroundStyle(.gray)
+                    }
+                }
+            }
+            #endif
         }
         .sheet(isPresented: $showClearRoutes) {
             ClearRoutesSheet(
@@ -378,6 +422,8 @@ private enum UnitSystemChoice: String, CaseIterable, Hashable {
 
 struct RiderProfileView: View {
     @ObservedObject var userSettings: UserSettingsStore
+    /// Redraws unit labels once the app has pushed the new units to `currentUnits`.
+    @ObservedObject private var unitState = UnitState.shared
     @State private var showAddBike = false
     @State private var newBikeName = ""
     @State private var newBikeWeight = ""
@@ -414,25 +460,34 @@ struct RiderProfileView: View {
         )
     }
 
+    /// Stored height to the nearest whole inch.
+    private var modelTotalInches: Int {
+        Int((userSettings.settings.riderHeight / 2.54).rounded())
+    }
+
     private func syncHeightFromModel() {
-        let totalInches = userSettings.settings.riderHeight / 2.54
-        heightFeet = Swift.max(0, Swift.min(8, Int(totalInches) / 12))
-        heightInches = Swift.max(0, Swift.min(11, Int(totalInches.rounded()) % 12))
+        let total = modelTotalInches
+        heightFeet = Swift.max(0, Swift.min(8, total / 12))
+        heightInches = Swift.max(0, Swift.min(11, total % 12))
     }
 
     private func writeImperialHeight() {
-        let totalInches = Double(heightFeet * 12 + heightInches)
-        userSettings.settings.riderHeight = totalInches * 2.54
+        let total = heightFeet * 12 + heightInches
+        // Pickers refreshed from the model already match it. Writing them back
+        // would round a metric height to the nearest inch.
+        guard total != modelTotalInches else { return }
+        userSettings.settings.riderHeight = Double(total) * 2.54
     }
 
-    private var isImperial: Bool { currentUnits.distance == .miles }
+    // Units come from settings rather than `currentUnits`, which the app
+    // updates from its own onChange and can still be stale when this view's
+    // unit onChange runs.
+    private var isImperial: Bool { userSettings.settings.unitPreferences.distance == .miles }
 
     private var heightString: String {
         if isImperial {
-            let totalInches = userSettings.settings.riderHeight / 2.54
-            let feet = Int(totalInches) / 12
-            let inches = Int(totalInches) % 12
-            return "\(feet)'\(inches)\""
+            let total = modelTotalInches
+            return "\(total / 12)'\(total % 12)\""
         } else {
             return "\(Int(round(userSettings.settings.riderHeight))) cm"
         }
@@ -440,7 +495,7 @@ struct RiderProfileView: View {
 
     /// Weight has its own unit axis separate from distance so Custom users
     /// can mix e.g. km rides with lbs rider weight.
-    private var isWeightImperial: Bool { currentUnits.weight == .pounds }
+    private var isWeightImperial: Bool { userSettings.settings.unitPreferences.weight == .pounds }
 
     private var weightUnit: String { isWeightImperial ? "lbs" : "kg" }
     private var heightUnit: String { isImperial ? "in" : "cm" }
@@ -465,6 +520,16 @@ struct RiderProfileView: View {
 
     private func displayToCm(_ value: Double) -> Double {
         isImperial ? value * 2.54 : value
+    }
+
+    private func syncRiderFieldsFromModel() {
+        weightText = kgToDisplay(userSettings.settings.riderWeight)
+        heightText = cmToDisplay(userSettings.settings.riderHeight)
+        syncHeightFromModel()
+        let settings = userSettings.settings
+        if let bike = settings.bikes.first(where: { $0.id == settings.activeBikeID }) {
+            bikeWeightText = kgToDisplay(bike.weight)
+        }
     }
 
     var body: some View {
@@ -521,9 +586,12 @@ struct RiderProfileView: View {
                         .frame(width: 80)
                         .focused($isFieldFocused)
                         .onChange(of: weightText) { _, newValue in
-                            if let val = Double(newValue) {
-                                userSettings.settings.riderWeight = displayToKg(val)
-                            }
+                            // Skip text that just mirrors the stored weight
+                            // (like after a unit switch) so rounding never
+                            // drifts it.
+                            guard newValue != kgToDisplay(userSettings.settings.riderWeight),
+                                  let val = Double(newValue) else { return }
+                            userSettings.settings.riderWeight = displayToKg(val)
                         }
                     Text(weightUnit)
                         .foregroundStyle(.secondary)
@@ -560,9 +628,9 @@ struct RiderProfileView: View {
                             .frame(width: 80)
                             .focused($isFieldFocused)
                             .onChange(of: heightText) { _, newValue in
-                                if let val = Double(newValue) {
-                                    userSettings.settings.riderHeight = displayToCm(val)
-                                }
+                                guard newValue != cmToDisplay(userSettings.settings.riderHeight),
+                                      let val = Double(newValue) else { return }
+                                userSettings.settings.riderHeight = displayToCm(val)
                             }
                         Text(heightUnit)
                             .foregroundStyle(.secondary)
@@ -575,11 +643,11 @@ struct RiderProfileView: View {
                     "\(weightLabel(userSettings.settings.riderWeight)) \u{2022} \(heightString)"
                 )
             }
-            .onAppear {
-                weightText = kgToDisplay(userSettings.settings.riderWeight)
-                heightText = cmToDisplay(userSettings.settings.riderHeight)
-                syncHeightFromModel()
-            }
+            .onAppear(perform: syncRiderFieldsFromModel)
+            // The fields hold display numbers, so a unit switch has to
+            // re-convert them or 161 lbs would just be relabeled 161 kg.
+            .onChange(of: userSettings.settings.unitPreferences.weight) { _, _ in syncRiderFieldsFromModel() }
+            .onChange(of: userSettings.settings.unitPreferences.distance) { _, _ in syncRiderFieldsFromModel() }
 
             // MARK: Bikes
             Section {
@@ -675,9 +743,9 @@ struct RiderProfileView: View {
                             .frame(width: 80)
                             .focused($isFieldFocused)
                             .onChange(of: bikeWeightText) { _, newValue in
-                                if let val = Double(newValue) {
-                                    userSettings.settings.bikes[activeIdx].weight = displayToKg(val)
-                                }
+                                guard newValue != kgToDisplay(userSettings.settings.bikes[activeIdx].weight),
+                                      let val = Double(newValue) else { return }
+                                userSettings.settings.bikes[activeIdx].weight = displayToKg(val)
                             }
                         Text(weightUnit)
                             .foregroundStyle(.secondary)
@@ -743,7 +811,7 @@ struct RiderProfileView: View {
                     newBikeName.isEmpty
                     ? "Bike \(userSettings.settings.bikes.count + 1)"
                     : newBikeName
-                let val = Double(newBikeWeight) ?? (isImperial ? 22 : 10)
+                let val = Double(newBikeWeight) ?? (isWeightImperial ? 22 : 10)
                 let bike = BikePreset(name: name, weight: displayToKg(val))
                 userSettings.settings.bikes.append(bike)
                 if userSettings.settings.bikes.count == 1 {
@@ -918,4 +986,31 @@ extension View {
             )
         }
     }
+}
+
+// Summaries under Route Screens, Alerts and Ride Settings should only break at
+// the bullets, never inside "Auto-Pause On" or "GPS High".
+private func previewSettings(_ size: DynamicTypeSize) -> some View {
+    NavigationStack {
+        SettingsView(
+            metricConfig: MetricConfigStore(),
+            userSettings: UserSettingsStore(),
+            integrationSettings: IntegrationSettingsStore(),
+            rideStore: RideStore(),
+            routeStore: RouteStore()
+        )
+    }
+    .environment(\.dynamicTypeSize, size)
+}
+
+#Preview("Settings, XL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewSettings(.xLarge)
+}
+
+#Preview("Settings, XXL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewSettings(.xxLarge)
+}
+
+#Preview("Settings, XXXL text", traits: .fixedLayout(width: 375, height: 667)) {
+    previewSettings(.xxxLarge)
 }

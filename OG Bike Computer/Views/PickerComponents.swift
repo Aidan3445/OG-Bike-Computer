@@ -112,6 +112,44 @@ func elevationOptions(min: Double, max: Double, isImperial: Bool) -> [(label: St
     return options
 }
 
+/// Ranges for the distance pickers, shared with the unit-switch snapping so
+/// both build the same option lists.
+enum UnitPickerRange {
+    static let primaryApproach: ClosedRange<Double> = 30.48...402.336   // 100 ft / 30 m to 0.25 mi / 500 m
+    static let secondaryApproach: ClosedRange<Double> = 800...3218.69   // 0.5 mi / 800 m to 2 mi / 3 km
+    static let offRouteThreshold: ClosedRange<Double> = 30...300        // ~100 ft / 30 m to ~1000 ft / 300 m
+}
+
+/// Picker-backed settings can only show their option list, so when the units
+/// change each one moves to the closest option in the new units. That keeps
+/// what Settings shows and what the watch uses the same. Typed-in values are
+/// left alone; their fields re-convert them exactly. Units are passed in
+/// because `currentUnits` may not be updated yet.
+func snapPickerSettings(_ settings: inout UserSettings, from old: UnitPreferences, to new: UnitPreferences) {
+    if old.distance != new.distance {
+        let imperial = new.distance == .miles
+        func snap(_ value: inout Double, to options: [(label: String, meters: Double)]) {
+            guard !options.isEmpty else { return }
+            value = options[closestIndex(for: value, in: options)].meters
+        }
+        func rangeOptions(_ range: ClosedRange<Double>) -> [(label: String, meters: Double)] {
+            distanceOptions(min: range.lowerBound, max: range.upperBound, isImperial: imperial)
+        }
+        snap(&settings.navigationAlerts.turnAlerts.primaryApproachDistance, to: rangeOptions(UnitPickerRange.primaryApproach))
+        snap(&settings.navigationAlerts.turnAlerts.secondaryApproachDistance, to: rangeOptions(UnitPickerRange.secondaryApproach))
+        snap(&settings.navigationAlerts.navigationEvents.offRouteThreshold, to: rangeOptions(UnitPickerRange.offRouteThreshold))
+        snap(&settings.navigationAlerts.splitAlerts.splitDistance, to: SplitDistancePicker.options(imperial: imperial))
+        snap(&settings.ridePreferences.elevationScreen.aheadLookahead, to: LookaheadDistancePicker.options(imperial: imperial))
+    }
+    if old.speed != new.speed {
+        let options = PauseSpeedPicker.options(imperial: new.speed == .mph)
+        if !options.isEmpty {
+            let current = settings.ridePreferences.autoPause.speedThreshold
+            settings.ridePreferences.autoPause.speedThreshold = options[closestSpeedIndex(for: current, in: options)].mps
+        }
+    }
+}
+
 /// Finds the closest option index for a stored meter value
 func closestIndex(for value: Double, in options: [(label: String, meters: Double)]) -> Int {
     guard !options.isEmpty else { return 0 }
@@ -307,7 +345,10 @@ struct SplitDistancePicker: View {
     @Binding var meters: Double
 
     private var options: [(label: String, meters: Double)] {
-        let isImperial = currentUnits.distance == .miles
+        Self.options(imperial: currentUnits.distance == .miles)
+    }
+
+    static func options(imperial isImperial: Bool) -> [(label: String, meters: Double)] {
         if isImperial {
             return [
                 ("0.25 mi", 0.25 * 1609.34),
@@ -350,7 +391,10 @@ struct PauseSpeedPicker: View {
     @Binding var mps: Double
 
     private var options: [(label: String, mps: Double)] {
-        let isImperial = currentUnits.speed == .mph
+        Self.options(imperial: currentUnits.speed == .mph)
+    }
+
+    static func options(imperial isImperial: Bool) -> [(label: String, mps: Double)] {
         if isImperial {
             // 1-5 mph in 0.5 steps
             return stride(from: 1.0, through: 5.0, by: 0.5).map { mph in

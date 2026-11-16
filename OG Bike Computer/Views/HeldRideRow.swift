@@ -30,14 +30,14 @@ struct HeldRideRow: View {
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow {
-                    Label(formatDistance(ride.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationGain) : "—", systemImage: "arrow.up.right")
-                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationLoss) : "—", systemImage: "arrow.down.right")
+                    Label(formatDistance(ride.distance, grouped: true), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationGain, grouped: true) : "—", systemImage: "arrow.up.right")
+                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationLoss, grouped: true) : "—", systemImage: "arrow.down.right")
                 }
                 GridRow {
                     Label(formatTime(ride.movingTime), systemImage: "clock")
                     Label(formatSpeed(ride.avgSpeed), systemImage: "speedometer")
-                    Label(String(format: "%.0f cal", ride.calories), systemImage: "flame")
+                    Label(formatCalories(ride.calories, grouped: true), systemImage: "flame")
                 }
             }
             .labelStyle(StatLabelStyle())
@@ -47,3 +47,11 @@ struct HeldRideRow: View {
         .padding(.vertical, 2)
     }
 }
+
+#if DEBUG
+#Preview("Big numbers") {
+    List {
+        HeldRideRow(ride: .previewLong(onHold: true))
+    }
+}
+#endif

@@ -64,8 +64,10 @@ enum MapStatType: String, Codable, CaseIterable, Identifiable, Hashable {
 // MARK: - Route Ahead Color
 
 enum RouteColor: String, Codable, CaseIterable, Hashable {
-    case pink, red, orange, yellow, mint, cyan, blue, purple, white, brown
+    case pink, red, orange, yellow, mint, cyan, blue, indigo, purple, white, brown, rainbow
 
+    /// Solid color for this choice. Rainbow has no single color, so renderers
+    /// check for it and draw a gradient instead; red is only a stand-in.
     var color: Color {
         switch self {
         case .pink: return .pink
@@ -75,13 +77,141 @@ enum RouteColor: String, Codable, CaseIterable, Hashable {
         case .mint: return .mint
         case .cyan: return .cyan
         case .blue: return .blue
+        case .indigo: return .indigo
         case .purple: return .purple
         case .white: return .white
         case .brown: return .brown
+        case .rainbow: return .red
         }
     }
 
     var label: String { rawValue.capitalized }
+}
+
+// MARK: - Zoom Steps
+
+/// Zoom distances that read as round numbers in the rider's units. The ride
+/// zoom levels and the default zoom slider pick from these instead of dividing
+/// the range evenly, so every stop gets a clean label. Feet and miles use the
+/// same conversions as the zoom labels so whole values format cleanly.
+enum ZoomSteps {
+    private static func feet(_ ft: Double) -> Double { ft / 3.28084 }
+    private static func miles(_ mi: Double) -> Double { mi * 1609.34 }
+
+    private static var isImperial: Bool { currentUnits.distance == .miles }
+
+    static var closestOptions: [Double] {
+        isImperial ? [300, 500, 750, 1000, 1250].map(feet) : [100, 150, 200, 300, 400]
+    }
+
+    static var farthestOptions: [Double] {
+        isImperial ? [0.5, 0.75, 1, 1.5, 2].map(miles) : [800, 1200, 1600, 2400, 3200]
+    }
+
+    /// Round distances from the smallest closest option to the largest
+    /// farthest option. The ends of the user's range are always added on top.
+    static var candidates: [Double] {
+        isImperial
+            ? [300, 400, 500, 650, 750, 1000, 1200, 1500, 1750, 2000].map(feet) + [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(miles)
+            : [100, 150, 200, 250, 300, 400, 500, 600, 800, 1000, 1200, 1500, 2000, 2500, 3000]
+    }
+
+    /// Zoom distance label. Miles and kilometers get one decimal, or two for
+    /// quarter values like 0.25 and 0.75; feet and meters are whole numbers.
+    static func label(_ meters: Double) -> String {
+        if isImperial {
+            let feet = meters * 3.28084
+            if feet >= 2639.5 { // 0.5 miles, with room for conversion rounding
+                let miles = meters / 1609.34
+                if miles == Double(Int(miles)) {
+                    return "\(Int(miles)) mi"
+                }
+                if 75 == Int(miles * 100) % 100 || 25 == Int(miles * 100) % 100 {
+                    return String(format: "%.2f mi", miles)
+                }
+                return String(format: "%.1f mi", miles)
+            }
+            return "\(Int(round(feet))) ft"
+        }
+        if meters >= 1000 {
+            let km = meters / 1000
+            if km == Double(Int(km)) {
+                return "\(Int(km)) km"
+            }
+            if 75 == Int(km * 100) % 100 || 25 == Int(km * 100) % 100 {
+                return String(format: "%.2f km", km)
+            }
+            return String(format: "%.1f km", km)
+        }
+        return "\(Int(meters))m"
+    }
+
+    static func snap(_ value: Double, to options: [Double]) -> Double {
+        options.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
+    }
+
+    /// How far any in-between zoom must sit from the closest and farthest
+    /// zoom: 10% of the range, rounded up to 50 ft (or 25 m). That keeps a
+    /// real jump between an end and the level next to it.
+    static func minimumGap(closest: Double, farthest: Double) -> Double {
+        let unit = isImperial ? feet(50) : 25
+        return ((farthest - closest) * 0.1 / unit).rounded(.up) * unit
+    }
+
+    /// Default zoom slider stops: the two ends plus up to 8 round distances
+    /// between them, picked evenly through the list (so evenly by position in
+    /// the list, not by distance).
+    static func defaultZoomStops(closest: Double, farthest: Double, count: Int = 10) -> [Double] {
+        guard farthest > closest else { return [closest] }
+        let gap = minimumGap(closest: closest, farthest: farthest)
+        let inside = candidates.filter { $0 >= closest + gap - 0.5 && $0 <= farthest - gap + 0.5 }
+        return [closest] + spread(inside, count: count - 2) + [farthest]
+    }
+
+    /// The four ride zoom levels. The ends and the default are fixed, and the
+    /// rest are round distances placed where an even zoom ratio would put
+    /// them, each at least the minimum gap from its neighbors.
+    static func zoomLevels(closest: Double, farthest: Double, defaultZoom: Double) -> [Double] {
+        guard farthest > closest else { return [closest] }
+        let gap = minimumGap(closest: closest, farthest: farthest)
+        let def = min(max(defaultZoom, closest), farthest)
+        let defaultIsEnd = def - closest < 1 || farthest - def < 1
+
+        func nearest(to ideal: Double, between lo: Double, and hi: Double, avoiding taken: [Double]) -> Double? {
+            candidates
+                .filter { $0 >= lo + gap - 0.5 && $0 <= hi - gap + 0.5 }
+                .filter { c in taken.allSatisfy { abs($0 - c) >= gap - 0.5 } }
+                .min(by: { abs(log($0 / ideal)) < abs(log($1 / ideal)) })
+        }
+
+        if defaultIsEnd {
+            // Two levels between the ends, at even thirds of the zoom ratio.
+            let ratio = farthest / closest
+            let lowIdeal = closest * pow(ratio, 1.0 / 3.0)
+            let highIdeal = closest * pow(ratio, 2.0 / 3.0)
+            let low = nearest(to: lowIdeal, between: closest, and: farthest, avoiding: []) ?? lowIdeal
+            let high = nearest(to: highIdeal, between: closest, and: farthest, avoiding: [low]) ?? highIdeal
+            return [closest, low, high, farthest].sorted()
+        }
+
+        // One more level in whichever side of the default is the bigger
+        // zoom jump, falling back to the other side if nothing fits.
+        let sides = [(closest, def), (def, farthest)].sorted { $0.1 / $0.0 > $1.1 / $1.0 }
+        let extra = sides.lazy
+            .compactMap { lo, hi in nearest(to: sqrt(lo * hi), between: lo, and: hi, avoiding: []) }
+            .first ?? sqrt(sides[0].0 * sides[0].1)
+        return [closest, def, extra, farthest].sorted()
+    }
+
+    /// `count` items spread evenly through `list` by position, keeping all of
+    /// them when there aren't more than `count`.
+    private static func spread(_ list: [Double], count: Int) -> [Double] {
+        guard list.count > count, count > 0 else { return count > 0 ? list : [] }
+        if count == 1 { return [list[list.count / 2]] }
+        return (0..<count).map { i in
+            list[Int((Double(i) * Double(list.count - 1) / Double(count - 1)).rounded())]
+        }
+    }
 }
 
 // MARK: - Map Detail Level
@@ -207,8 +337,9 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
     var zoomMin: Double
     /// Farthest zoom level in meters (most zoomed out)
     var zoomMax: Double
-    /// Starting zoom level in meters
-    var defaultZoom: Double
+    /// Starting zoom level in meters. Nil means the middle slider stop, so a
+    /// fresh setup lands in the middle in either unit system.
+    var defaultZoom: Double?
     /// Color of the route ahead line
     var routeAheadColor: RouteColor
     /// Show map overlay on metric screens when turns approach
@@ -229,26 +360,44 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         showRepeatAlertButton: true,
         zoomMin: 200,
         zoomMax: 1600,
-        defaultZoom: 400,
-        routeAheadColor: .white,
+        defaultZoom: nil,
+        routeAheadColor: .rainbow,
         showTurnOverlay: true,
         mapDetail: .off,
         waypointDisplay: .both
     )
 
-    /// Compute 4 zoom levels geometrically spaced between min and max
-    var computedZoomLevels: [Double] {
-        guard zoomMax > zoomMin else { return [zoomMin] }
-        let ratio = pow(zoomMax / zoomMin, 1.0 / 3.0)
-        return (0..<4).map { zoomMin * pow(ratio, Double($0)) }
+    /// Closest zoom snapped to the option Settings shows, so a value saved in
+    /// the other unit system (or an old default) still lands on a round number.
+    var effectiveZoomMin: Double { ZoomSteps.snap(zoomMin, to: ZoomSteps.closestOptions) }
+    /// Farthest zoom, snapped the same way.
+    var effectiveZoomMax: Double { ZoomSteps.snap(zoomMax, to: ZoomSteps.farthestOptions) }
+
+    /// The default zoom slider's stops for the current range.
+    var defaultZoomStops: [Double] {
+        ZoomSteps.defaultZoomStops(closest: effectiveZoomMin, farthest: effectiveZoomMax)
+    }
+    /// Default zoom snapped to the nearest slider stop, so it stays valid when
+    /// the range or units change.
+    var effectiveDefaultZoom: Double {
+        let stops = defaultZoomStops
+        guard let defaultZoom else { return stops[stops.count / 2] }
+        return ZoomSteps.snap(defaultZoom, to: stops)
     }
 
-    /// Index into computedZoomLevels closest to defaultZoom
+    /// The four ride zoom levels: closest, farthest, default, and round
+    /// distances filling the rest.
+    var computedZoomLevels: [Double] {
+        ZoomSteps.zoomLevels(closest: effectiveZoomMin, farthest: effectiveZoomMax, defaultZoom: effectiveDefaultZoom)
+    }
+
+    /// Index into computedZoomLevels closest to the default zoom
     var defaultZoomIndex: Int {
         let levels = computedZoomLevels
+        let target = effectiveDefaultZoom
         guard !levels.isEmpty else { return 0 }
         return levels.enumerated()
-            .min(by: { abs($0.element - defaultZoom) < abs($1.element - defaultZoom) })?
+            .min(by: { abs($0.element - target) < abs($1.element - target) })?
             .offset ?? 0
     }
 
@@ -261,8 +410,8 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         showRepeatAlertButton: Bool = true,
         zoomMin: Double = 200,
         zoomMax: Double = 1600,
-        defaultZoom: Double = 400,
-        routeAheadColor: RouteColor = .white,
+        defaultZoom: Double? = nil,
+        routeAheadColor: RouteColor = .rainbow,
         showTurnOverlay: Bool = true,
         mapDetail: MapDetail = .off,
         waypointDisplay: WaypointDisplay = .both
@@ -292,8 +441,8 @@ struct MapScreenConfig: Codable, Equatable, Hashable {
         showRepeatAlertButton = try c.decodeIfPresent(Bool.self, forKey: .showRepeatAlertButton) ?? true
         zoomMin = try c.decodeIfPresent(Double.self, forKey: .zoomMin) ?? 200
         zoomMax = try c.decodeIfPresent(Double.self, forKey: .zoomMax) ?? 1600
-        defaultZoom = try c.decodeIfPresent(Double.self, forKey: .defaultZoom) ?? 400
-        routeAheadColor = try c.decodeIfPresent(RouteColor.self, forKey: .routeAheadColor) ?? .white
+        defaultZoom = try c.decodeIfPresent(Double.self, forKey: .defaultZoom)
+        routeAheadColor = try c.decodeIfPresent(RouteColor.self, forKey: .routeAheadColor) ?? .rainbow
         showTurnOverlay = try c.decodeIfPresent(Bool.self, forKey: .showTurnOverlay) ?? true
         mapDetail = try c.decodeIfPresent(MapDetail.self, forKey: .mapDetail) ?? .off
         waypointDisplay = try c.decodeIfPresent(WaypointDisplay.self, forKey: .waypointDisplay) ?? .both

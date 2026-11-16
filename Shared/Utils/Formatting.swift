@@ -11,14 +11,14 @@ import SwiftUI
 /// Global unit preferences — set from UserSettingsStore on app launch and on changes.
 var currentUnits: UnitPreferences = .default
 
-func formatDistance(_ meters: Double, _ units: Bool = true) -> String {
+/// `grouped` adds thousands separators ("1,234.5"). The watch leaves it off
+/// so its one-line metrics stay narrow.
+func formatDistance(_ meters: Double, _ units: Bool = true, grouped: Bool = false) -> String {
     switch currentUnits.distance {
     case .miles:
-        let miles = meters / 1609.34
-        return String(format: "%.1f%@", miles, units ? " mi" : "")
+        return formatNumber(meters / 1609.34, digits: 1, grouped: grouped) + (units ? " mi" : "")
     case .kilometers:
-        let km = meters / 1000
-        return String(format: "%.1f%@", km, units ? " km" : "")
+        return formatNumber(meters / 1000, digits: 1, grouped: grouped) + (units ? " km" : "")
     }
 }
 
@@ -54,14 +54,23 @@ func formatTurnDistance(_ meters: Double) -> String {
     }
 }
 
-func formatElevation(_ meters: Double) -> String {
+func formatElevation(_ meters: Double, grouped: Bool = false) -> String {
     switch currentUnits.elevation {
     case .feet:
-        let feet = meters * 3.28084
-        return String(format: "%.0f ft", feet)
+        return formatNumber(meters * 3.28084, digits: 0, grouped: grouped) + " ft"
     case .meters:
-        return String(format: "%.0f m", meters)
+        return formatNumber(meters, digits: 0, grouped: grouped) + " m"
     }
+}
+
+func formatCalories(_ kcal: Double, grouped: Bool = false) -> String {
+    formatNumber(kcal, digits: 0, grouped: grouped) + " cal"
+}
+
+private func formatNumber(_ value: Double, digits: Int, grouped: Bool) -> String {
+    grouped
+        ? value.formatted(.number.precision(.fractionLength(digits)))
+        : String(format: "%.\(digits)f", value)
 }
 
 func formatSpeed(_ metersPerSecond: Double, _ units: Bool = true) -> String {
@@ -100,6 +109,13 @@ func formatTime(_ interval: TimeInterval) -> String {
         return String(format: "%d:%02d:%02d", hours, minutes, seconds)
     }
     return String(format: "%d:%02d", minutes, seconds)
+}
+
+/// Rounded to whole minutes: "12 min", "1h 05m".
+func formatETA(_ interval: TimeInterval) -> String {
+    let minutes = max(1, Int((interval / 60).rounded()))
+    if minutes < 60 { return "\(minutes) min" }
+    return String(format: "%dh %02dm", minutes / 60, minutes % 60)
 }
 
 func formattedStorageSize(_ bytes: Int64) -> String {

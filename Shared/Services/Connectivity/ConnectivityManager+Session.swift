@@ -29,26 +29,33 @@ extension ConnectivityManager: WCSessionDelegate {
             #endif
         }
 
+        #if os(iOS)
+        if DiagnosticsLog.isEnabled {
+            DiagnosticsLog.pruneWatchRideFolders(keep: 30)
+        }
+        #endif
+
         if activationState == .activated, session.hasContentPending {
             print("WCSession has content pending delivery")
         }
 
         #if os(watchOS)
         if activationState == .activated {
-            retryPendingTransfers()
+            retryPendingTransfers(reason: "activation")
             cleanupOldRides()
         }
         #endif
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
+        DiagnosticsLog.event("Link", "reachable=\(session.isReachable)")
         DispatchQueue.main.async {
             self.isReachable = session.isReachable
         }
 
         #if os(watchOS)
         if session.isReachable {
-            retryPendingTransfers()
+            retryPendingTransfers(reason: "reachability")
             cleanupOldRides()
         }
         #endif
@@ -81,8 +88,13 @@ extension ConnectivityManager: WCSessionDelegate {
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         #if os(iOS)
-        if file.metadata?["type"] as? String == "rideTrack" {
+        switch file.metadata?["type"] as? String {
+        case "rideTrack":
             handleRideTransfer(file)
+        case "diagnostics":
+            receiveDiagnosticsFile(file)
+        default:
+            break
         }
         #elseif os(watchOS)
         receiveRouteFile(file)
@@ -93,7 +105,11 @@ extension ConnectivityManager: WCSessionDelegate {
         #if os(iOS)
         cleanUpStagedRoute(fileTransfer, error: error)
         #elseif os(watchOS)
-        finishRideTransfer(fileTransfer, error: error)
+        if fileTransfer.file.metadata?["type"] as? String == "diagnostics" {
+            finishDiagnosticsTransfer(fileTransfer, error: error)
+        } else {
+            finishRideTransfer(fileTransfer, error: error)
+        }
         #endif
     }
 
@@ -133,13 +149,15 @@ extension ConnectivityManager: WCSessionDelegate {
         #if os(watchOS)
         case "rideAck":
             if let rideID = Self.rideID(in: userInfo) {
-                handleTransferAck(rideID: rideID)
+                handleTransferAck(rideID: rideID, via: "userInfo")
             }
         case "clearAllRoutes":
             clearAllRoutesFromPhone()
         case "holdRide":
+            DiagnosticsLog.event("Command", "received holdRide via userInfo")
             DispatchQueue.main.async { self.onHoldRideRequested?() }
         case "discardRide":
+            DiagnosticsLog.event("Command", "received discardRide via userInfo")
             DispatchQueue.main.async { self.onDiscardRideRequested?() }
         case "continueHeldRide":
             if let rideID = Self.rideID(in: userInfo) {
@@ -214,6 +232,13 @@ extension ConnectivityManager: WCSessionDelegate {
             replyHandler(["received": true])
             return
         }
+        if let nack = AlertNack.fromDict(message) {
+            DispatchQueue.main.async {
+                self.onAlertNackReceived?(nack.id)
+            }
+            replyHandler(["received": true])
+            return
+        }
         #endif
 
         guard let type = message["type"] as? String else {
@@ -229,9 +254,13 @@ extension ConnectivityManager: WCSessionDelegate {
         #if os(watchOS)
         case "rideAck":
             if let rideID = Self.rideID(in: message) {
-                handleTransferAck(rideID: rideID)
+                handleTransferAck(rideID: rideID, via: "message")
             }
             replyHandler(["received": true])
+        case "requestDiagnostics":
+            sendAllDiagnostics { count in
+                replyHandler(["count": count])
+            }
         case "clearAllRoutes":
             clearAllRoutesFromPhone()
             replyHandler(["cleared": true])
@@ -246,11 +275,28 @@ extension ConnectivityManager: WCSessionDelegate {
             DispatchQueue.main.async { self.onToggleVoiceRequested?() }
             replyHandler(["toggled": true])
         case "discardRide":
+            DiagnosticsLog.event("Command", "received discardRide via message")
             DispatchQueue.main.async { self.onDiscardRideRequested?() }
             replyHandler(["discarded": true])
         case "holdRide":
+            DiagnosticsLog.event("Command", "received holdRide via message")
             DispatchQueue.main.async { self.onHoldRideRequested?() }
             replyHandler(["held": true])
+        case "pauseRide", "resumeRide", "endRide":
+            DiagnosticsLog.event("Command", "received \(type) via message")
+            // Replies after the change so the phone's next telemetry
+            // already shows it.
+            DispatchQueue.main.async {
+                switch type {
+                case "pauseRide": self.onPauseRideRequested?()
+                case "resumeRide": self.onResumeRideRequested?()
+                default: self.onEndRideRequested?()
+                }
+                replyHandler(["received": true])
+            }
+        case "mirrorAttached":
+            DispatchQueue.main.async { self.onPhoneMirrorAttached?() }
+            replyHandler(["received": true])
         case "sampleHaptic":
             let intensity = (message["intensity"] as? String) ?? "medium"
             DispatchQueue.main.async { self.onSampleHapticRequested?(intensity) }
@@ -307,6 +353,15 @@ extension ConnectivityManager: WCSessionDelegate {
                 return
             }
             DispatchQueue.main.async { self.dropContinuedHeldRide(rideID: rideID) }
+            replyHandler(["received": true])
+        case "telemetry":
+            let payload = message.compactMapValues { $0 as? String }
+            DispatchQueue.main.async { self.onEarlyTelemetry?(payload) }
+            replyHandler(["received": true])
+        case "earlyRideEnded":
+            if let sessionID = message["sessionID"] as? String {
+                DispatchQueue.main.async { self.onEarlyRideEnded?(sessionID) }
+            }
             replyHandler(["received": true])
         #endif
 

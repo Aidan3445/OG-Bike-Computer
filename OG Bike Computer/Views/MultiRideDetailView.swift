@@ -3,27 +3,34 @@
 //  OG Bike Computer
 //
 
-import SwiftUI
-import MapKit
 import CoreLocation
+import MapKit
+import SwiftUI
 
 struct MultiRideDetailView: View {
-    let rides: [RideSummary]   // ordered as the user selected
+    let rides: [RideSummary]  // oldest first
     let rideStore: RideStore
     @ObservedObject private var unitState = UnitState.shared
     @Environment(\.dismiss) private var dismiss
 
-    enum PanelState { case collapsed, compact, expanded }
-
-    static let segmentColors: [Color] = [.blue, .yellow, .indigo, .orange, .green, .red]
+    /// Kept clear of the chart metric colors (green elevation, blue speed,
+    /// red heart rate, orange power), which the scrub line takes on, so
+    /// scrubbing and the ride split lines stay readable.
+    static let segmentColors: [Color] = [.purple, .yellow, .pink, .teal, .brown, .indigo]
     /// Connector gap below which we skip the grey link and just extend the
     /// previous ride's color over to the next start.
     private static let closeConnectorMeters: Double = 75
 
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var panelState: PanelState = .collapsed
+    @State private var isPanelOpen = false
+    @State private var expandedPanelPages: Set<Int> = []
+    @State private var segmentListHeight: CGFloat = 0
+    /// Stretch the chart is zoomed to, highlighted on the map.
+    @State private var chartZoom: ClosedRange<Double>?
     @State private var panelPage = 0
     @State private var showShareSheet = false
+    @State private var showPhoneSettings = false
+    @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
     @State private var gpxExportURL: URL?
     @State private var isExportingGPX = false
     @State private var hasStravaAuth = false
@@ -55,6 +62,10 @@ struct MultiRideDetailView: View {
     struct RideRender: Identifiable {
         let id: UUID
         let coords: [CLLocationCoordinate2D]
+        /// Distance along this ride at each coordinate, matching the chart's.
+        let cumulativeDistances: [Double]
+        /// Where this ride starts on the combined chart.
+        let startDistance: Double
         let color: Color
         let stat: SegmentStat
     }
@@ -69,7 +80,7 @@ struct MultiRideDetailView: View {
 
     struct SegmentStat {
         let name: String
-        let distance: Double           // meters
+        let distance: Double  // meters
         let movingTime: TimeInterval
         let elapsedTime: TimeInterval
         let elevationGain: Double
@@ -81,46 +92,62 @@ struct MultiRideDetailView: View {
         let _ = unitState.preferences
         ZStack(alignment: .bottom) {
             if isOnScreen {
-            Map(position: $mapPosition) {
-                ForEach(renders) { r in
-                    MapPolyline(coordinates: r.coords)
-                        .stroke(r.color, lineWidth: 4)
-                }
-                ForEach(connectors) { c in
-                    if c.dashed {
-                        MapPolyline(coordinates: [c.from, c.to])
-                            .stroke(c.color, style: StrokeStyle(lineWidth: 3, dash: [6, 4]))
-                    } else {
-                        MapPolyline(coordinates: [c.from, c.to])
-                            .stroke(c.color, lineWidth: 4)
-                    }
-                }
+                MapReader { mapProxy in
+                    Map(
+                        position: $mapPosition,
+                        bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)
+                    ) {
+                        ForEach(renderPieces) { piece in
+                            MapPolyline(coordinates: piece.coords)
+                                .stroke(piece.color, style: .roundedLine(4))
+                        }
+                        ForEach(connectors) { c in
+                            if c.dashed {
+                                MapPolyline(coordinates: [c.from, c.to])
+                                    .stroke(
+                                        c.color, style: StrokeStyle(lineWidth: 3, dash: [6, 4]))
+                            } else {
+                                MapPolyline(coordinates: [c.from, c.to])
+                                    .stroke(c.color, style: .roundedLine(4))
+                            }
+                        }
 
-                if let first = renders.first, let coord = first.coords.first {
-                    Annotation("Start", coordinate: coord) {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                        if let chartZoom {
+                            ChartZoomMapHighlight(segments: zoomSegments(chartZoom))
+                        }
+
+                        if let first = renders.first, let coord = first.coords.first {
+                            Annotation("Start", coordinate: coord) {
+                                Circle()
+                                    .fill(.green)
+                                    .frame(width: 14, height: 14)
+                                    .overlay(Circle().stroke(.white, lineWidth: 2))
+                            }
+                        }
+                        if let last = renders.last, let coord = last.coords.last {
+                            Annotation("End", coordinate: coord) {
+                                Circle()
+                                    .fill(.red)
+                                    .frame(width: 14, height: 14)
+                                    .overlay(Circle().stroke(.white, lineWidth: 2))
+                            }
+                        }
                     }
-                }
-                if let last = renders.last, let coord = last.coords.last {
-                    Annotation("End", coordinate: coord) {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                    .mapStyle(mapStyle.mapStyle)
+                    .mapControls {
+                        MapCompass()
+                        MapScaleView()
                     }
-                }
-            }
-            .mapStyle(.standard(elevation: .realistic))
-            .mapControls {
-                MapCompass()
-                MapScaleView()
-            }
-            .onMapCameraChange(frequency: .onEnd) { context in
-                MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
-            }
+                    .onMapCameraChange(frequency: .onEnd) { context in
+                        MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+                    }
+                    .overlay {
+                        MapScrubDot(
+                            scrub: scrubState,
+                            proxy: mapProxy,
+                            coordinateFor: coordinate(atCombinedDistance:))
+                    }
+                }  // end: MapReader
             } else {
                 Color(.systemBackground)
             }
@@ -130,6 +157,7 @@ struct MultiRideDetailView: View {
                 statsPanel()
             }
         }
+        .layoutProbe("MultiRideDetail")
         .navigationTitle("\(rides.count) Rides")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -150,11 +178,13 @@ struct MultiRideDetailView: View {
                         }
                         .disabled(isUploadingToStrava)
                     }
+
+                    MapMenuSection(showPhoneSettings: $showPhoneSettings, showsMarkerToggles: false)
                 } label: {
                     if isExportingGPX || isUploadingToStrava {
                         ProgressView()
                     } else {
-                        Image(systemName: "square.and.arrow.up")
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
@@ -164,18 +194,25 @@ struct MultiRideDetailView: View {
                 ShareSheet(activityItems: [url])
             }
         }
-        .alert("Upload Error", isPresented: .init(
-            get: { uploadError != nil },
-            set: { if !$0 { uploadError = nil } }
-        )) {
+        .phoneSettingsSheet(isPresented: $showPhoneSettings)
+        .alert(
+            "Upload Error",
+            isPresented: .init(
+                get: { uploadError != nil },
+                set: { if !$0 { uploadError = nil } }
+            )
+        ) {
             Button("OK") { uploadError = nil }
         } message: {
             Text(uploadError ?? "")
         }
-        .alert("Uploaded to Strava", isPresented: .init(
-            get: { uploadedWebURL != nil },
-            set: { if !$0 { uploadedWebURL = nil } }
-        )) {
+        .alert(
+            "Uploaded to Strava",
+            isPresented: .init(
+                get: { uploadedWebURL != nil },
+                set: { if !$0 { uploadedWebURL = nil } }
+            )
+        ) {
             if let urlString = uploadedWebURL, let url = URL(string: urlString) {
                 Link("View on Strava", destination: url)
             }
@@ -202,113 +239,26 @@ struct MultiRideDetailView: View {
 
     // MARK: - Stats panel (same 3-state pattern as RideDetailView)
 
-    @ViewBuilder
     private func statsPanel() -> some View {
-        VStack(spacing: 6) {
-            if panelState != .collapsed {
-                panelDragHandle()
-
-                TabView(selection: $panelPage) {
-                    combinedStatsPage().tag(0)
-                    segmentStatsPage().tag(1)
-                    chartsPage().tag(2)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .frame(height: panelState == .expanded ? 280 : 200)
-
-                panelPageDots()
-            } else {
-                collapsedPanelButton()
-            }
+        MapStatsPanel(
+            isOpen: $isPanelOpen,
+            page: $panelPage,
+            expandedPages: $expandedPanelPages,
+            pageCount: 3,
+            expandablePages: hasExtendedStats ? [0, 1] : [1]
+        ) {
+            combinedStatsPage().statsPanelPage(0)
+            segmentStatsPage().statsPanelPage(1)
+            chartsPage().statsPanelPage(2)
         }
-        .padding(.horizontal, panelState != .collapsed ? 16 : 0)
-        .padding(.bottom, 8)
-        .frame(
-            maxWidth: panelState != .collapsed ? .infinity : nil,
-            alignment: panelState != .collapsed ? .center : .trailing
-        )
-        .frame(
-            width: panelState != .collapsed ? nil : 48,
-            height: panelState != .collapsed ? nil : 48
-        )
-        .background(
-            RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                .fill(.ultraThinMaterial)
-                .shadow(radius: 12, y: 4)
-        )
-        .padding(.horizontal, panelState != .collapsed ? 12 : 0)
-        .padding(.bottom, panelState != .collapsed ? 12 : 24)
-        .padding(.trailing, panelState != .collapsed ? 0 : 16)
-        .frame(maxWidth: .infinity, alignment: panelState != .collapsed ? .center : .trailing)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if panelState == .collapsed {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    panelState = .compact
-                }
-            }
-        }
-    }
-
-    private func panelDragHandle() -> some View {
-        Capsule()
-            .fill(.secondary)
-            .frame(width: 36, height: 4)
-            .frame(maxWidth: .infinity)
-            .frame(height: 30)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    panelState = .collapsed
-                }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 10)
-                    .onEnded { value in
-                        guard abs(value.translation.height) > 10 else { return }
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            if value.translation.height > 0 {
-                                switch panelState {
-                                case .expanded: panelState = .compact
-                                case .compact:  panelState = .collapsed
-                                case .collapsed: break
-                                }
-                            } else {
-                                switch panelState {
-                                case .collapsed: panelState = .compact
-                                case .compact:   panelState = .expanded
-                                case .expanded:  break
-                                }
-                            }
-                        }
-                    }
-            )
-    }
-
-    private func panelPageDots() -> some View {
-        HStack(spacing: 6) {
-            ForEach(0..<3, id: \.self) { i in
-                Circle()
-                    .fill(panelPage == i ? Color.primary : Color.secondary.opacity(0.4))
-                    .frame(width: 6, height: 6)
-            }
-        }
-    }
-
-    private func collapsedPanelButton() -> some View {
-        Image(systemName: "chart.bar.xaxis")
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(.primary)
-            .padding(.top, 8)
     }
 
     // MARK: - Pages
 
-    @ViewBuilder
     private func combinedStatsPage() -> some View {
         VStack(spacing: 8) {
             let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-            let stats = combinedStats(compact: panelState == .compact)
+            let stats = combinedStats(compact: !expandedPanelPages.contains(0))
             let rows = stats.chunked(into: 3)
 
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
@@ -319,104 +269,102 @@ struct MultiRideDetailView: View {
                     }
                 }
             }
-
-            if hasExtendedStats {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        panelState = panelState == .expanded ? .compact : .expanded
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(panelState == .expanded ? "Less" : "More")
-                            .font(.caption2.weight(.medium))
-                        Image(systemName: panelState == .expanded ? "chevron.up" : "chevron.down")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer(minLength: 0)
         }
     }
 
-    @ViewBuilder
+    /// Summary up top. Expanding adds every ride with its distance and time.
     private func segmentStatsPage() -> some View {
         let segs = renders.map(\.stat)
-        VStack(spacing: 8) {
+        return VStack(spacing: 8) {
             let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
             LazyVGrid(columns: columns, spacing: 10) {
                 MultiStatItem(label: "Segments", value: "\(segs.count)")
-                MultiStatItem(label: "Avg Length", value: segs.isEmpty ? "—" : formatDistance(segs.map(\.distance).reduce(0, +) / Double(segs.count)))
-                MultiStatItem(label: "Avg Time", value: segs.isEmpty ? "—" : formatTime(segs.map(\.movingTime).reduce(0, +) / Double(segs.count)))
+                MultiStatItem(
+                    label: "Avg Length",
+                    value: segs.isEmpty
+                        ? "—"
+                        : formatDistance(segs.map(\.distance).reduce(0, +) / Double(segs.count)))
+                MultiStatItem(
+                    label: "Avg Time",
+                    value: segs.isEmpty
+                        ? "—" : formatTime(segs.map(\.movingTime).reduce(0, +) / Double(segs.count))
+                )
             }
             Divider()
             LazyVGrid(columns: columns, spacing: 10) {
-                MultiStatItem(label: "Avg Elev Gain", value: segs.isEmpty ? "—" : formatElevation(segs.map(\.elevationGain).reduce(0, +) / Double(segs.count)))
-                MultiStatItem(label: "Longest", value: segs.map(\.distance).max().map { formatDistance($0) } ?? "—")
-                MultiStatItem(label: "Shortest", value: segs.map(\.distance).min().map { formatDistance($0) } ?? "—")
+                MultiStatItem(
+                    label: "Avg Elev Gain",
+                    value: segs.isEmpty
+                        ? "—"
+                        : formatElevation(
+                            segs.map(\.elevationGain).reduce(0, +) / Double(segs.count)))
+                MultiStatItem(
+                    label: "Longest",
+                    value: segs.map(\.distance).max().map { formatDistance($0) } ?? "—")
+                MultiStatItem(
+                    label: "Shortest",
+                    value: segs.map(\.distance).min().map { formatDistance($0) } ?? "—")
             }
 
-            if panelState == .expanded {
+            if expandedPanelPages.contains(1) {
                 Divider()
-                ScrollView {
-                    VStack(spacing: 6) {
-                        ForEach(Array(segs.enumerated()), id: \.offset) { idx, s in
-                            HStack(spacing: 8) {
-                                Circle().fill(s.color).frame(width: 10, height: 10)
-                                Text("\(idx + 1).")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                Text(s.name)
-                                    .font(.caption)
-                                    .lineLimit(1)
-                                Spacer()
-                                Text(formatDistance(s.distance))
-                                    .font(.caption.monospacedDigit())
-                                Text(formatTime(s.movingTime))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            } else {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        panelState = .expanded
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("More")
-                            .font(.caption2.weight(.medium))
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+                segmentList(segs)
             }
-            Spacer(minLength: 0)
         }
+    }
+
+    private static let segmentListMaxHeight: CGFloat = 150
+
+    /// Every ride with its distance and time. Past the cap only the list
+    /// scrolls, with room on the right so the scroll bar clears the text.
+    private func segmentList(_ segs: [SegmentStat]) -> some View {
+        let scrolls = segmentListHeight > Self.segmentListMaxHeight
+        return ScrollView {
+            VStack(spacing: 6) {
+                ForEach(Array(segs.enumerated()), id: \.offset) { idx, s in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle().fill(s.color).frame(width: 10, height: 10)
+                        Text("\(idx + 1).")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text(s.name)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Text(formatDistance(s.distance))
+                            .font(.caption.monospacedDigit())
+                        Text(formatTime(s.movingTime))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.trailing, scrolls ? 12 : 0)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { segmentListHeight = $0 }
+        }
+        .frame(height: min(segmentListHeight, Self.segmentListMaxHeight))
+        .scrollIndicators(scrolls ? .visible : .hidden)
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     @ViewBuilder
     private func chartsPage() -> some View {
-        VStack(spacing: 4) {
-            if !combinedChart.isEmpty {
-                RideChartsView(
-                    dataPoints: combinedChart,
-                    hasHeartRate: chartHasHR,
-                    hasPower: chartHasPower,
-                    scrub: scrubState
-                )
-            } else {
-                Text("No chart data")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(height: 140)
-            }
-            Spacer(minLength: 0)
+        if !combinedChart.isEmpty {
+            RideChartsView(
+                dataPoints: combinedChart,
+                hasHeartRate: chartHasHR,
+                hasPower: chartHasPower,
+                scrub: scrubState,
+                splits: renders.dropFirst().map {
+                    ChartSplit(distance: $0.startDistance, color: $0.color)
+                },
+                zoom: $chartZoom
+            )
+        } else {
+            Text("No chart data")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(height: 140)
         }
     }
 
@@ -424,9 +372,9 @@ struct MultiRideDetailView: View {
 
     private var hasExtendedStats: Bool {
         rides.contains { r in
-            r.maxSpeed != nil || r.avgPower != nil || r.maxPower != nil ||
-            r.avgHeartRate != nil || r.maxHeartRate != nil ||
-            r.highestElevation != nil || r.lowestElevation != nil || r.calories > 0
+            r.maxSpeed != nil || r.avgPower != nil || r.maxPower != nil || r.avgHeartRate != nil
+                || r.maxHeartRate != nil || r.highestElevation != nil || r.lowestElevation != nil
+                || r.calories > 0
         }
     }
 
@@ -498,8 +446,63 @@ struct MultiRideDetailView: View {
     // MARK: - Cache build
 
     /// Background load — each ride's track publishes as soon as it decodes,
-    /// so lines appear progressively instead of blocking the push animation
-    /// on decoding every selected ride.
+    /// so lines appear progressively
+
+    /// Each ride's line, cut around the chart zoom so its highlight is drawn
+    /// in place of that stretch instead of on top of it.
+    private var renderPieces: [MapLinePiece] {
+        renders.flatMap { render -> [MapLinePiece] in
+            let whole = [MapLinePiece(id: render.id.uuidString, coords: render.coords, color: render.color)]
+            guard let zoom = chartZoom, render.cumulativeDistances.count == render.coords.count else { return whole }
+            let lo = zoom.lowerBound - render.startDistance
+            let hi = zoom.upperBound - render.startDistance
+            guard hi > lo else { return whole }
+            return trackPieces(
+                outside: lo...hi, from: 0, to: render.coords.count - 1, count: render.coords.count,
+                distance: { render.cumulativeDistances[$0] }, coordinate: { render.coords[$0] }
+            ).enumerated().map { MapLinePiece(id: "\(render.id)-\($0.offset)", coords: $0.element, color: render.color) }
+        }
+    }
+
+    /// The zoomed stretch as one run of real track points per ride it covers.
+    private func zoomSegments(_ range: ClosedRange<Double>) -> [[CLLocationCoordinate2D]] {
+        renders.compactMap { render in
+            let length = render.cumulativeDistances.last ?? 0
+            let lo = max(range.lowerBound - render.startDistance, 0)
+            let hi = min(range.upperBound - render.startDistance, length)
+            guard hi > lo, render.cumulativeDistances.count == render.coords.count else { return nil }
+            return trackCoordinates(
+                in: lo...hi, count: render.coords.count,
+                distance: { render.cumulativeDistances[$0] },
+                coordinate: { render.coords[$0] })
+        }
+    }
+
+    /// Track coordinate for a distance on the combined chart.
+    private func coordinate(atCombinedDistance distance: Double) -> CLLocationCoordinate2D? {
+        guard let render = renders.last(where: { $0.startDistance <= distance }) ?? renders.first
+        else { return nil }
+        let cum = render.cumulativeDistances
+        guard cum.count >= 2, cum.count == render.coords.count else { return render.coords.first }
+        let target = distance - render.startDistance
+        guard target > 0 else { return render.coords.first }
+        guard target < cum[cum.count - 1] else { return render.coords.last }
+
+        var lo = 0
+        var hi = cum.count - 1
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2
+            if cum[mid] < target { lo = mid } else { hi = mid }
+        }
+        let span = cum[hi] - cum[lo]
+        let t = span > 0 ? (target - cum[lo]) / span : 0
+        let a = render.coords[lo]
+        let b = render.coords[hi]
+        return CLLocationCoordinate2D(
+            latitude: a.latitude + (b.latitude - a.latitude) * t,
+            longitude: a.longitude + (b.longitude - a.longitude) * t)
+    }
+
     private func loadRides() async {
         let hadCachedCamera = MapCameraCache.shared.camera(for: cameraCacheKey) != nil
         var distOffset: Double = 0
@@ -508,14 +511,29 @@ struct MultiRideDetailView: View {
             let color = Self.segmentColors[idx % Self.segmentColors.count]
             let url = rideStore.trackURL(for: ride)
 
-            let loaded = await Task.detached(priority: .userInitiated) { () -> ([CLLocationCoordinate2D], (points: [ChartDataPoint], hasHR: Bool, hasPower: Bool))? in
+            let loaded = await Task.detached(priority: .userInitiated) {
+                () -> (
+                    [CLLocationCoordinate2D], [Double],
+                    (points: [ChartDataPoint], hasHR: Bool, hasPower: Bool)
+                )? in
                 guard let data = try? Data(contentsOf: url) else { return nil }
                 let pts = TrackEncoder.decodeV5Full(data)
                 guard pts.count >= 2 else { return nil }
                 let coords = pts.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
-                return (coords, buildRideChartData(points: pts))
+                var cumulative = [Double](repeating: 0, count: coords.count)
+                for i in 1..<coords.count {
+                    cumulative[i] =
+                        cumulative[i - 1]
+                        + CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
+                        .distance(
+                            from: CLLocation(
+                                latitude: coords[i - 1].latitude, longitude: coords[i - 1].longitude
+                            ))
+                }
+                // Fewer chunks per ride, since a selection can hold dozens of rides.
+                return (coords, cumulative, buildRideChartData(points: pts, segmentCount: 600))
             }.value
-            guard let (coords, chart) = loaded else { continue }
+            guard let (coords, cumulative, chart) = loaded else { continue }
 
             let stat = SegmentStat(
                 name: ride.name,
@@ -529,38 +547,49 @@ struct MultiRideDetailView: View {
 
             // Connector from previous render's end to this start
             if let prev = renders.last,
-               let prevEnd = prev.coords.last,
-               let thisStart = coords.first {
+                let prevEnd = prev.coords.last,
+                let thisStart = coords.first
+            {
                 let gap = CLLocation(latitude: prevEnd.latitude, longitude: prevEnd.longitude)
-                    .distance(from: CLLocation(latitude: thisStart.latitude, longitude: thisStart.longitude))
+                    .distance(
+                        from: CLLocation(
+                            latitude: thisStart.latitude, longitude: thisStart.longitude))
                 if gap < Self.closeConnectorMeters {
                     // Extend the previous ride's color directly over to the next start.
-                    connectors.append(Connector(from: prevEnd, to: thisStart, color: prev.color, dashed: false))
+                    connectors.append(
+                        Connector(from: prevEnd, to: thisStart, color: prev.color, dashed: false))
                 } else {
-                    connectors.append(Connector(from: prevEnd, to: thisStart, color: .gray, dashed: true))
+                    connectors.append(
+                        Connector(from: prevEnd, to: thisStart, color: .gray, dashed: true))
                 }
             }
 
-            renders.append(RideRender(id: ride.id, coords: coords, color: color, stat: stat))
+            renders.append(
+                RideRender(
+                    id: ride.id, coords: coords, cumulativeDistances: cumulative,
+                    startDistance: distOffset, color: color, stat: stat))
 
             // Combined chart — append with running offset
             if chart.hasHR { chartHasHR = true }
             if chart.hasPower { chartHasPower = true }
             for pt in chart.points {
-                combinedChart.append(ChartDataPoint(
-                    distance: pt.distance + distOffset,
-                    elevation: pt.elevation,
-                    speed: pt.speed,
-                    heartRate: pt.heartRate,
-                    power: pt.power))
+                combinedChart.append(
+                    ChartDataPoint(
+                        distance: pt.distance + distOffset,
+                        elevation: pt.elevation,
+                        speed: pt.speed,
+                        heartRate: pt.heartRate,
+                        power: pt.power,
+                        grade: pt.grade))
             }
-            if let last = chart.points.last { distOffset += last.distance }
+            distOffset += cumulative.last ?? 0
         }
 
         // Fit camera to the union of all coordinates — unless the user
         // already has a remembered camera for this selection.
         if !hadCachedCamera,
-           let region = fittingRegion(for: renders.flatMap(\.coords)) {
+            let region = fittingRegion(for: renders.flatMap(\.coords))
+        {
             mapPosition = .region(region)
         }
     }
@@ -604,11 +633,15 @@ struct MultiRideDetailView: View {
 
     private func fittingRegion(for coords: [CLLocationCoordinate2D]) -> MKCoordinateRegion? {
         guard !coords.isEmpty else { return nil }
-        var minLat = coords[0].latitude, maxLat = coords[0].latitude
-        var minLon = coords[0].longitude, maxLon = coords[0].longitude
+        var minLat = coords[0].latitude
+        var maxLat = coords[0].latitude
+        var minLon = coords[0].longitude
+        var maxLon = coords[0].longitude
         for c in coords {
-            minLat = min(minLat, c.latitude); maxLat = max(maxLat, c.latitude)
-            minLon = min(minLon, c.longitude); maxLon = max(maxLon, c.longitude)
+            minLat = min(minLat, c.latitude)
+            maxLat = max(maxLat, c.latitude)
+            minLon = min(minLon, c.longitude)
+            maxLon = max(maxLon, c.longitude)
         }
         let center = CLLocationCoordinate2D(
             latitude: (minLat + maxLat) / 2,
@@ -627,7 +660,27 @@ private struct MultiStatItem: View {
     var body: some View {
         VStack(spacing: 2) {
             Text(value).font(.subheadline.weight(.semibold))
+                .lineLimit(1).minimumScaleFactor(0.7)
             Text(label).font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
     }
+}
+
+#Preview("Stat cells, long values", traits: .sizeThatFitsLayout) {
+    let stats: [(label: String, value: String)] = [
+        ("Distance", "1,842.6 mi"), ("Moving Time", "104:45:12"), ("Avg Speed", "17.9 mph"),
+        ("Avg Elev Gain", "3,480 ft"), ("Longest", "181.4 mi"), ("Shortest", "12.3 mi"),
+    ]
+    VStack(spacing: 16) {
+        ForEach([DynamicTypeSize.large, .xLarge, .xxLarge], id: \.self) { size in
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
+                ForEach(stats, id: \.label) { MultiStatItem(label: $0.label, value: $0.value) }
+            }
+            .environment(\.dynamicTypeSize, size)
+            Divider()
+        }
+    }
+    .padding()
+    .frame(width: 375)
 }

@@ -18,6 +18,8 @@ struct ContentView: View {
     #endif
 
     @State private var showDiscardAlert = false
+    @State private var routeListShowingDetail = false
+    @State private var homePage = 0
 
     var body: some View {
         Group {
@@ -38,17 +40,31 @@ struct ContentView: View {
             } else {
                 // Vertical paging so the Digital Crown switches between Routes and
                 // History. Horizontal page swiping would fight with the List
-                // swipe-to-delete gesture on individual route rows.
-                TabView {
+                // swipe-to-delete gesture on individual route rows. History is
+                // only reachable from the route list itself, not from a pushed screen.
+                // Both pages always stay in the TabView. Adding or removing one
+                // while a screen is pushed breaks that screen's back button, so
+                // History bounces back to Routes instead.
+                TabView(selection: $homePage) {
                     #if DEBUG
-                    RouteList(store: store, rideStore: rideStore, workout: workout, simulator: simulator)
+                    RouteList(store: store, rideStore: rideStore, workout: workout, simulator: simulator,
+                              isShowingDetail: $routeListShowingDetail)
+                        .tag(0)
                     #else
-                    RouteList(store: store, rideStore: rideStore, workout: workout)
+                    RouteList(store: store, rideStore: rideStore, workout: workout,
+                              isShowingDetail: $routeListShowingDetail)
+                        .tag(0)
                     #endif
 
                     WatchRideHistoryView(rideStore: rideStore, connectivity: connectivity)
+                        .tag(1)
                 }
                 .tabViewStyle(.verticalPage)
+                .onChange(of: homePage) { _, page in
+                    if page != 0, routeListShowingDetail {
+                        withAnimation { homePage = 0 }
+                    }
+                }
             }
         }
         .onAppear {
@@ -153,6 +169,8 @@ struct ContentView: View {
     }
 
     private func handleStop() {
+        // Ignore a stop that arrives after the ride already ended or while the prompt is up.
+        guard workout.isActive, workout.completedRideSummary == nil, !showDiscardAlert else { return }
         if workout.movingTime < 60 {
             showDiscardAlert = true
         } else {

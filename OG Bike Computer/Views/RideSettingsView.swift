@@ -22,7 +22,6 @@ struct RideSettingsView: View {
             tabOrderSection
             autoPauseSection
             checkpointSection
-            phoneAlertsSection
 
             if userSettings.settings.ridePreferences != .default {
                 Section {
@@ -74,21 +73,36 @@ struct RideSettingsView: View {
         }
     }
 
-    // MARK: - Auto-Pause
+    // MARK: - Stops
 
     @ViewBuilder
     private var autoPauseSection: some View {
-        Section {
-            Toggle("Auto-Pause", isOn: prefs.autoPause.enabled)
+        let mode = userSettings.settings.ridePreferences.autoPause.mode
 
-            if userSettings.settings.ridePreferences.autoPause.enabled {
+        Section {
+            Picker("Stops", selection: prefs.autoPause.mode) {
+                ForEach(StopMode.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if mode == .autoPause {
                 PauseSpeedPicker(mps: prefs.autoPause.speedThreshold)
                 ResumeProbeIntervalPicker(seconds: prefs.autoPause.resumeProbeInterval)
             }
         } header: {
-            Label("Auto-Pause", systemImage: "pause.circle")
+            Label("Stops", systemImage: "pause.circle")
         } footer: {
-            Text("Automatically pause the ride when speed drops below the threshold. While paused, the watch briefly wakes GPS at the resume check interval to detect movement. Shorter intervals resume faster but use more battery.")
+            switch mode {
+            case .autoPause:
+                Text("Pauses the ride when speed drops below the pause speed. While paused, the watch briefly wakes GPS at the resume check interval to detect movement. Shorter intervals resume faster but use more battery.")
+            case .detectStops:
+                Text("Keeps recording through stops, but standing still or walking around adds no moving time or distance, and stairs add no climbing. Uses the watch's step counter to tell walking from slow riding.")
+            case .recordAll:
+                Text("Counts everything you record. Moving time matches elapsed time, and walking and stairs add to distance and climbing. Only clear GPS and barometer errors are filtered.")
+            }
         }
     }
 
@@ -108,28 +122,32 @@ struct RideSettingsView: View {
             Text("Periodically saves ride data to disk. If the app crashes, data up to the last checkpoint is recovered on next launch as a held ride you can continue or save.")
         }
     }
+}
 
-    // MARK: - Live Activity
+// MARK: - Preview
 
-    @ViewBuilder
-    private var phoneAlertsSection: some View {
-        Section {
-            NavigationLink {
-                PhoneAlertSettingsView(userSettings: userSettings)
-            } label: {
-                HStack {
-                    Text("Live Activity")
-                    Spacer()
-                    Text(userSettings.settings.phoneAlerts.showTurnNotifications
-                         ? "Notifications on"
-                         : "Stats only")
-                        .foregroundStyle(.secondary)
-                }
-            }
-        } header: {
-            Label("Live Activity", systemImage: "iphone")
-        } footer: {
-            Text("Customize the ride Live Activity stats and optional turn notifications on your iPhone.")
-        }
+private func previewStore(_ mode: StopMode) -> UserSettingsStore {
+    let store = UserSettingsStore()
+    store.settings.ridePreferences.autoPause.mode = mode
+    return store
+}
+
+#Preview("Stops: Auto-Pause") {
+    NavigationStack {
+        RideSettingsView(userSettings: previewStore(.autoPause), metricConfig: MetricConfigStore())
     }
+}
+
+#Preview("Stops: Record All, large text") {
+    NavigationStack {
+        RideSettingsView(userSettings: previewStore(.recordAll), metricConfig: MetricConfigStore())
+    }
+    .dynamicTypeSize(.xxxLarge)
+}
+
+#Preview("Stops: Detect Stops, iPhone SE width") {
+    NavigationStack {
+        RideSettingsView(userSettings: previewStore(.detectStops), metricConfig: MetricConfigStore())
+    }
+    .frame(width: 320)
 }

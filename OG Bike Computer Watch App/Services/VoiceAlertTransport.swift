@@ -92,13 +92,13 @@ final class VoiceAlertTransport {
     /// rare genuine-phone-failure case by an extra second.
     private static let immediateFallbackSeconds: TimeInterval = 2.5
 
-    /// Once the phone confirms *receipt* (sendMessage replyHandler), the
-    /// deadline restarts with this window. Receipt means the phone is alive
-    /// and its own 1.5s didStart safety timeout is armed — the remaining
-    /// unknowns are TTS spin-up (slow on Bluetooth routes) plus the ack trip
-    /// back over the HK mirror channel, which together can blow past the
-    /// original 2.5s and false-fire a phone+watch double-speak.
-    private static let postReceiptFallbackSeconds: TimeInterval = 3.0
+    /// Once the phone confirms *receipt* (sendMessage replyHandler), the phone
+    /// owns the alert. It either acks didStart or nacks if it drops the alert
+    /// unspoken, so this is only a backstop for a phone that goes quiet. It
+    /// has to be long: the alert can sit behind another utterance on the
+    /// phone, and the ack trip over the HK mirror channel can be slow. A
+    /// short window here made both devices speak the same alert.
+    private static let postReceiptFallbackSeconds: TimeInterval = 10.0
 
     private init() {}
 
@@ -131,6 +131,11 @@ final class VoiceAlertTransport {
                 self?.handleFinish(id: id)
             }
         }
+        ConnectivityManager.shared.onAlertNackReceived = { [weak self] id in
+            DispatchQueue.main.async {
+                self?.handleNack(id: id)
+            }
+        }
     }
 
     /// Call when a ride ends or is held. Cancels any pending fallbacks so
@@ -140,6 +145,7 @@ final class VoiceAlertTransport {
         cancelAllInFlight(reason: "ride ending")
         ConnectivityManager.shared.onAlertAckReceived = nil
         ConnectivityManager.shared.onAlertFinishReceived = nil
+        ConnectivityManager.shared.onAlertNackReceived = nil
     }
 
     /// Force the phone path off for the remainder of this ride. Called by
@@ -358,6 +364,17 @@ final class VoiceAlertTransport {
         logger.notice("[Transport] FINISH id=\(id.uuidString.prefix(8)) — line done (\(String(format: "%.0f", latency * 1000))ms)")
         recordOutcome(context.payload, outcome: "phoneSpokeFinished", latency: latency)
         context.completion(.phoneSpoke(latency: latency))
+    }
+
+    /// Phone dropped the alert without speaking it. An immediate alert falls
+    /// back to the watch now. A `.soon` line is never spoken on the watch, so
+    /// it just releases the queue.
+    private func handleNack(id: UUID) {
+        if inFlight[id] != nil {
+            handleFallback(id: id, reason: "phoneDropped")
+        } else {
+            handleFinish(id: id)
+        }
     }
 
     private func handleFinishTimeout(id: UUID) {

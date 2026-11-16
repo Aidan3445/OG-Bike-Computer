@@ -78,7 +78,7 @@ extension ConnectivityManager {
               WCSession.default.isReachable else { return }
         WCSession.default.sendMessage(
             ["type": "sampleHaptic", "intensity": intensity],
-            replyHandler: nil,
+            replyHandler: { _ in },
             errorHandler: nil
         )
     }

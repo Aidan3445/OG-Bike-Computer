@@ -77,6 +77,10 @@ class NavigationTracker: ObservableObject {
     private static let startProximityThreshold: Double = 402   // 1/4 mile in metres
     private static let startBiasDistance: Double = 8047        // 5 miles in metres
     private static let startBiasDuration: Double = 60          // seconds
+    private static let wrongWayMinSpeed: Double = 2            // m/s, course is noise below this
+    private static let wrongWayHeading: Double = 135           // degrees off the current leg
+    private static let rightWayHeading: Double = 45            // degrees off the other leg
+    private static let wrongWayMaxLegGap: Double = 60          // metres between the two legs
     private var rideStartTime: Date?
     private var startedNearRouteStart = false
 
@@ -198,15 +202,29 @@ class NavigationTracker: ObservableObject {
         startedNearRouteStart = false
     }
 
+    private func logRouteState(_ change: String, location: CLLocation, nearest: Double,
+                               index: Int, riderDistance: Double, extra: String = "") {
+        DiagnosticsLog.event("Route", "\(change) nearest=\(Int(nearest))m threshold=\(Int(offRouteThreshold))m rejoin=\(Int(rejoinThreshold))m samples=\(offRouteSampleCount)/\(offRouteGraceSamples) segment=\(index) rider=\(Int(riderDistance))m hAcc=\(Int(location.horizontalAccuracy))m speed=\(String(format: "%.1f", location.speed))m/s \(extra)")
+    }
+
     func update(location: CLLocation, riderDistance: Double = 0) -> TurnAlert? {
         guard let route = route, route.points.count >= 2 else { return nil }
 
-        let (nearestIndex, nearestDistance) = findNearest(
+        var (nearestIndex, nearestDistance) = findNearest(
             location: location,
             in: route
         )
 
+        if nearestDistance > rejoinThreshold,
+           let segment = nearestSegmentAround(location: location, route: route),
+           segment.distance < nearestDistance {
+            nearestIndex = segment.index
+            nearestDistance = segment.distance
+        }
+
         nearestRouteDistance = nearestDistance
+
+        let samplesBefore = offRouteSampleCount
 
         // Grace period: require consecutive off-route samples before triggering
         if nearestDistance > offRouteThreshold {
@@ -229,18 +247,26 @@ class NavigationTracker: ObservableObject {
         if isOffRoute && !wasOffRoute {
             offRouteLocation = location
             missedTurn = findMissedTurn(at: location, in: route)
+            logRouteState("off route", location: location, nearest: nearestDistance,
+                          index: nearestIndex, riderDistance: riderDistance,
+                          extra: "missed=\(missedTurn.map { "\($0.index)" } ?? "none")")
         } else if !isOffRoute && wasOffRoute {
             missedTurn = nil
             offRouteLocation = nil
+            logRouteState("back on route", location: location, nearest: nearestDistance,
+                          index: nearestIndex, riderDistance: riderDistance)
+        } else if !isOffRoute && samplesBefore > 0 && offRouteSampleCount == 0 {
+            logRouteState("off route grace reset", location: location, nearest: nearestDistance,
+                          index: nearestIndex, riderDistance: riderDistance,
+                          extra: "after=\(samplesBefore)")
         }
         wasOffRoute = isOffRoute
 
         // Always compute bearing to route for drifting/off-route alerts
         if nearestDistance > 10 {
-            let nearestPoint = route.points[nearestIndex]
             bearingToRoute = RouteProcessor.bearing(
                 from: location.coordinate,
-                to: nearestPoint.coordinate)
+                to: closestCoordinate(to: location, near: nearestIndex, in: route))
         }
 
         // Drifting detection: between normal and off-route (with grace period)
@@ -255,6 +281,10 @@ class NavigationTracker: ObservableObject {
         // Compute rejoin candidates when off-route
         if isOffRoute {
             rejoinCandidates = computeRejoinCandidates(location: location, route: route)
+            // distanceAlongRoute stays frozen for turn and halfway logic, but
+            // remaining follows the rider: back to the route, then the rest of it.
+            let matchedAlong = interpolateDistance(location: location, nearestIndex: nearestIndex, route: route)
+            distanceRemaining = nearestDistance + max(0, route.totalDistance - matchedAlong)
             return nil
         } else {
             if !rejoinCandidates.isEmpty { rejoinCandidates = [] }
@@ -333,11 +363,12 @@ class NavigationTracker: ObservableObject {
     /// Perpendicular distance from a point to the segment a→b, in meters.
     /// `withinBounds` is true if the projection falls inside the segment
     /// (i.e. the perpendicular foot lies between a and b, not past either end).
+    /// `t` is how far along a→b the closest point sits, from 0 to 1.
     private static func perpendicularDistance(
         point: CLLocationCoordinate2D,
         a: CLLocationCoordinate2D,
         b: CLLocationCoordinate2D
-    ) -> (distance: Double, withinBounds: Bool) {
+    ) -> (distance: Double, withinBounds: Bool, t: Double) {
         let R = 6_371_000.0
         let toRad = Double.pi / 180
         let cosLat = cos(a.latitude * toRad)
@@ -347,7 +378,7 @@ class NavigationTracker: ObservableObject {
         let py = (point.latitude - a.latitude) * toRad * R
         let segLen2 = bx * bx + by * by
         if segLen2 < 1e-6 {
-            return (sqrt(px * px + py * py), true)
+            return (sqrt(px * px + py * py), true, 0)
         }
         let t = (px * bx + py * by) / segLen2
         let tClamped = max(0, min(1, t))
@@ -355,7 +386,29 @@ class NavigationTracker: ObservableObject {
         let cy = tClamped * by
         let dx = px - cx
         let dy = py - cy
-        return (sqrt(dx * dx + dy * dy), t >= 0 && t <= 1)
+        return (sqrt(dx * dx + dy * dy), t >= 0 && t <= 1, tClamped)
+    }
+
+    private static func interpolate(
+        _ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D, _ t: Double
+    ) -> CLLocationCoordinate2D {
+        CLLocationCoordinate2D(
+            latitude: a.latitude + (b.latitude - a.latitude) * t,
+            longitude: a.longitude + (b.longitude - a.longitude) * t)
+    }
+
+    /// Closest spot on the segments either side of route point `index`.
+    private func closestCoordinate(to location: CLLocation, near index: Int, in route: ProcessedRoute) -> CLLocationCoordinate2D {
+        let points = route.points
+        var best = (distance: Double.infinity, coordinate: points[index].coordinate)
+        for i in [index - 1, index] where i >= 0 && i < points.count - 1 {
+            let r = NavigationTracker.perpendicularDistance(
+                point: location.coordinate, a: points[i].coordinate, b: points[i + 1].coordinate)
+            if r.distance < best.distance {
+                best = (r.distance, NavigationTracker.interpolate(points[i].coordinate, points[i + 1].coordinate, r.t))
+            }
+        }
+        return best.coordinate
     }
 
     /// Given a nearest point-index and a fallback point-to-point distance,
@@ -383,6 +436,43 @@ class NavigationTracker: ObservableObject {
                 a: route.points[index].coordinate,
                 b: route.points[index + 1].coordinate)
             if r.withinBounds && r.distance < best { best = r.distance }
+        }
+        return best
+    }
+
+    private let segmentSearchWindow: Double = 2000
+
+    /// Closest segment within ±2 km along the route of the current match.
+    /// `findNearest` works from route points, so on a long straight with far
+    /// apart points a closer point on another leg can win and read as off
+    /// route. The window keeps a parallel leg later in the route from hiding
+    /// a real off route.
+    private func nearestSegmentAround(
+        location: CLLocation,
+        route: ProcessedRoute
+    ) -> (index: Int, distance: Double)? {
+        let points = route.points
+        guard points.count >= 2 else { return nil }
+        let current = points[max(0, min(currentSegmentIndex, points.count - 1))].distanceFromStart
+        let lowerBound = current - segmentSearchWindow
+        let upperBound = current + segmentSearchWindow
+
+        var lo = 0, hi = points.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if points[mid].distanceFromStart < lowerBound { lo = mid + 1 } else { hi = mid }
+        }
+
+        // Start one back so the segment that straddles the window's edge counts.
+        var i = max(0, lo - 1)
+        var best: (index: Int, distance: Double)?
+        while i < points.count - 1, points[i].distanceFromStart <= upperBound {
+            let d = NavigationTracker.perpendicularDistance(
+                point: location.coordinate,
+                a: points[i].coordinate,
+                b: points[i + 1].coordinate).distance
+            if d < (best?.distance ?? .infinity) { best = (i, d) }
+            i += 1
         }
         return best
     }
@@ -508,6 +598,7 @@ class NavigationTracker: ObservableObject {
 
         scored.sort { $0.score < $1.score }
         let winner = scored[0]
+        let sections = scored.map { (index: $0.index, gpsDist: $0.gpsDist, routeDist: $0.routeDist) }
 
         // Pre-join: accept immediately
         if !hasJoinedRoute {
@@ -516,6 +607,13 @@ class NavigationTracker: ObservableObject {
             }
             jumpCandidate = nil
             return (winner.index, refine(winner.index, winner.gpsDist))
+        }
+
+        if let flip = wrongWayCorrection(location: location, sections: sections, currentRouteDist: currentRouteDist, in: route) {
+            jumpCandidate = nil
+            print("[Nav] Wrong way on index \(currentSegmentIndex), "
+                + "snapped to opposite leg at index \(flip.index) (dist=\(Int(flip.routeDist))m)")
+            return (flip.index, refine(flip.index, flip.gpsDist))
         }
 
         // Phase 4: Section jump confirmation
@@ -561,6 +659,35 @@ class NavigationTracker: ObservableObject {
         return (winner.index, refine(winner.index, winner.gpsDist))
     }
 
+    // On out and back routes the rider can get matched to the leg going the
+    // other way. If they're riding against the leg they're on and another
+    // leg right here points their way, move to it without waiting for the
+    // usual backward jump confirmation.
+    private func wrongWayCorrection(
+        location: CLLocation,
+        sections: [(index: Int, gpsDist: Double, routeDist: Double)],
+        currentRouteDist: Double,
+        in route: ProcessedRoute
+    ) -> (index: Int, gpsDist: Double, routeDist: Double)? {
+        let course = location.course
+        guard course >= 0, location.speed >= NavigationTracker.wrongWayMinSpeed else { return nil }
+
+        let onCurrent = sections
+            .filter { abs($0.routeDist - currentRouteDist) < clusterGap }
+            .min(by: { $0.gpsDist < $1.gpsDist })
+        guard let current = onCurrent,
+              abs(headingDelta(course, route.points[current.index].bearingToNext)) > NavigationTracker.wrongWayHeading
+        else { return nil }
+
+        return sections
+            .filter {
+                abs($0.routeDist - currentRouteDist) >= clusterGap
+                    && $0.gpsDist <= NavigationTracker.wrongWayMaxLegGap
+                    && abs(headingDelta(course, route.points[$0.index].bearingToNext)) < NavigationTracker.rightWayHeading
+            }
+            .min(by: { $0.gpsDist < $1.gpsDist })
+    }
+
     // Compute clustered rejoin candidates when off-route
     private func computeRejoinCandidates(location: CLLocation, route: ProcessedRoute) -> [RejoinCandidate] {
         let maxRejoinScanDistance: Double = 500
@@ -573,19 +700,20 @@ class NavigationTracker: ObservableObject {
             let coord: CLLocationCoordinate2D
         }
 
+        // Project onto segments, not just route points, so a long straight
+        // with far apart points still offers a rejoin spot right beside you.
         var nearby: [NearbyPoint] = []
-        for i in 0..<route.points.count {
-            let point = route.points[i]
-            let pointLoc = CLLocation(
-                latitude: point.coordinate.latitude,
-                longitude: point.coordinate.longitude)
-            let dist = location.distance(from: pointLoc)
-            if dist < maxRejoinScanDistance {
+        let points = route.points
+        for i in 0..<(points.count - 1) {
+            let a = points[i], b = points[i + 1]
+            let r = NavigationTracker.perpendicularDistance(
+                point: location.coordinate, a: a.coordinate, b: b.coordinate)
+            if r.distance < maxRejoinScanDistance {
                 nearby.append(NearbyPoint(
                     index: i,
-                    gpsDist: dist,
-                    routeDist: point.distanceFromStart,
-                    coord: point.coordinate))
+                    gpsDist: r.distance,
+                    routeDist: a.distanceFromStart + (b.distanceFromStart - a.distanceFromStart) * r.t,
+                    coord: NavigationTracker.interpolate(a.coordinate, b.coordinate, r.t)))
             }
         }
 
@@ -633,15 +761,16 @@ class NavigationTracker: ObservableObject {
         return delta
     }
 
+    /// Straight cues are skipped. Leaving the route there is just "off route".
     private func findMissedTurn(at location: CLLocation, in route: ProcessedRoute) -> TurnPoint? {
-        if let turn = lastPassedTurn {
+        if let turn = lastPassedTurn, turn.direction != .straight {
             let turnLoc = CLLocation(latitude: turn.coordinate.latitude, longitude: turn.coordinate.longitude)
             if location.distance(from: turnLoc) < missedTurnProximity {
                 return turn
             }
         }
 
-        if let turn = nextTurn {
+        if let turn = nextTurn, turn.direction != .straight {
             let turnLoc = CLLocation(latitude: turn.coordinate.latitude, longitude: turn.coordinate.longitude)
             if location.distance(from: turnLoc) < missedTurnProximity {
                 return turn

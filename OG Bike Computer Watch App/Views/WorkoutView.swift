@@ -11,17 +11,18 @@ struct WorkoutView<ExtraTab: View>: View {
     @ObservedObject var workout: WorkoutManager
     @ObservedObject var metricConfig: MetricConfigStore
     @ObservedObject private var unitState = UnitState.shared
+    @ObservedObject private var voice = VoiceNavigator.shared
     var onStop: () -> Void
     var extraTab: ExtraTab?
 
-    @State private var voiceEnabled = true
     @State private var page = 2
     @State private var tab = 1
-    @State private var endCountdown: Double = 0
+    @State private var endCountdownStart: Date?
     @State private var endTimer: Timer?
-    @State private var holdCountdown: Double = 0
+    @State private var holdCountdownStart: Date?
     @State private var holdTimer: Timer?
     @State private var showNavOverlay = false
+    @State private var mapZoomIndex = -1
     @State private var navOverlayTask: Task<Void, Never>?
     @State private var showHoldExplainer = false
     @State private var holdExplainerDontShow = false
@@ -57,7 +58,7 @@ struct WorkoutView<ExtraTab: View>: View {
                     let tag = index + 1
                     switch key.kind {
                     case .routeMap:
-                        RouteMapView(workout: workout)
+                        RouteMapView(workout: workout, zoomIndex: $mapZoomIndex)
                             .tag(tag)
                     case .elevation:
                         ElevationProfileView(workout: workout)
@@ -77,14 +78,8 @@ struct WorkoutView<ExtraTab: View>: View {
             .tabViewStyle(.verticalPage)
             .scrollIndicators(.visible)
             .overlay(alignment: .topLeading) {
-                if workout.isAutoPaused {
-                    Text("AUTO-PAUSED")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.yellow)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(.yellow.opacity(0.2))
-                        .clipShape(Capsule())
+                if workout.isAutoPaused || workout.isPaused {
+                    PausedPill(isAutoPaused: workout.isAutoPaused)
                         .padding(.top, 20)
                         .padding(.leading, 12)
                         .ignoresSafeArea(edges: .top)
@@ -96,7 +91,7 @@ struct WorkoutView<ExtraTab: View>: View {
                 if showNavOverlay && tab > 1 && workout.ridePreferences.mapScreen.showTurnOverlay {
                     ZStack {
                         Color.black.opacity(0.85)
-                        RouteMapView(workout: workout, isOverlay: true)
+                        RouteMapView(workout: workout, isOverlay: true, zoomIndex: $mapZoomIndex)
                     }
                     .transition(.opacity)
                     .allowsHitTesting(true)
@@ -170,6 +165,8 @@ struct WorkoutView<ExtraTab: View>: View {
             navOverlayTask?.cancel()
             navOverlayTask = nil
             showNavOverlay = false
+            cancelEndCountdown()
+            cancelHoldCountdown()
         }
         .sheet(isPresented: $showHoldExplainer) {
             holdExplainerSheet
@@ -239,7 +236,7 @@ struct WorkoutView<ExtraTab: View>: View {
             HStack(spacing: 10) {
                 if workout.isPaused || workout.isAutoPaused {
                     Button {
-                        cancelEndCountdown()
+                        cancelCountdowns()
                         workout.resume()
                         withAnimation { page = 2 }
                     } label: {
@@ -251,7 +248,7 @@ struct WorkoutView<ExtraTab: View>: View {
                     .buttonStyle(.plain)
                 } else {
                     Button {
-                        cancelEndCountdown()
+                        cancelCountdowns()
                         workout.pause()
                     } label: {
                         Image(systemName: "pause.fill")
@@ -264,19 +261,9 @@ struct WorkoutView<ExtraTab: View>: View {
                 }
 
                 ZStack {
-                    if holdCountdown > 0 {
-                        Button { cancelHoldCountdown() } label: {
-                            ZStack {
-                                Circle()
-                                    .trim(from: 0, to: holdCountdown / 3.0)
-                                    .stroke(.orange, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                                    .rotationEffect(.degrees(-90))
-                                    .frame(width: 48, height: 48)
-                                Text(String(Int(ceil(3.0 - holdCountdown))))
-                                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.orange)
-                            }
+                    if let start = holdCountdownStart {
+                        Button { cancelCountdowns() } label: {
+                            CountdownRing(start: start, duration: holdEndCountdownDuration, color: .orange)
                         }
                         .buttonStyle(.plain)
                     } else {
@@ -291,19 +278,9 @@ struct WorkoutView<ExtraTab: View>: View {
                 }
 
                 ZStack {
-                    if endCountdown > 0 {
-                        Button { cancelEndCountdown() } label: {
-                            ZStack {
-                                Circle()
-                                    .trim(from: 0, to: endCountdown / 3.0)
-                                    .stroke(.red, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                                    .rotationEffect(.degrees(-90))
-                                    .frame(width: 48, height: 48)
-                                Text(String(Int(ceil(3.0 - endCountdown))))
-                                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.red)
-                            }
+                    if let start = endCountdownStart {
+                        Button { cancelCountdowns() } label: {
+                            CountdownRing(start: start, duration: holdEndCountdownDuration, color: .red)
                         }
                         .buttonStyle(.plain)
                     } else {
@@ -320,13 +297,12 @@ struct WorkoutView<ExtraTab: View>: View {
 
             Divider()
 
-            Toggle(isOn: $voiceEnabled) {
-                Label("Voice", systemImage: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+            Toggle(isOn: $voice.isEnabled) {
+                Label("Voice", systemImage: voice.isEnabled ? "speaker.wave.2.fill" : "speaker.slash")
                     .font(.caption)
             }
-            .onChange(of: voiceEnabled) { _, newValue in
-                VoiceNavigator.shared.isEnabled = newValue
-            }
+            // Controls swallow the tap, so cancel alongside them.
+            .simultaneousGesture(TapGesture().onEnded { cancelCountdowns() })
 
             if workout.navigation.processedRoute?.hasWaypoints == true {
                 Divider()
@@ -355,29 +331,40 @@ struct WorkoutView<ExtraTab: View>: View {
                         }
                     }
                 }
+                .simultaneousGesture(TapGesture().onEnded { cancelCountdowns() })
             }
 
         }
         .ignoresSafeArea(edges: .top)
         .contentShape(Rectangle())
-        .onTapGesture {
-            if endCountdown > 0 { cancelEndCountdown() }
-            if holdCountdown > 0 { cancelHoldCountdown() }
+        .onTapGesture { cancelCountdowns() }
+        .onChange(of: page) { _, _ in cancelCountdowns() }
+    }
+
+    /// Any tap on the controls page cancels whichever countdown is running.
+    private func cancelCountdowns() {
+        cancelEndCountdown()
+        cancelHoldCountdown()
+    }
+
+    /// One timer that fires when the countdown ends, in the common run loop
+    /// mode so scrolling doesn't hold it back. The ring reads the wall clock
+    /// on its own, so a busy main thread can't slow the count down.
+    private func countdownTimer(_ fire: @escaping () -> Void) -> Timer {
+        let timer = Timer(timeInterval: holdEndCountdownDuration, repeats: false) { _ in
+            guard workout.isActive, workout.completedRideSummary == nil else { return }
+            fire()
         }
-        .onChange(of: page) { _, _ in
-            cancelEndCountdown()
-            cancelHoldCountdown()
-        }
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
     }
 
     private func startEndCountdown() {
-        endCountdown = 0.001 // trigger visible state
-        endTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-            endCountdown += 0.05
-            if endCountdown >= 3.0 {
-                cancelEndCountdown()
-                onStop()
-            }
+        cancelCountdowns()
+        endCountdownStart = Date()
+        endTimer = countdownTimer {
+            cancelEndCountdown()
+            onStop()
         }
     }
 
@@ -392,22 +379,19 @@ struct WorkoutView<ExtraTab: View>: View {
     private func cancelEndCountdown() {
         endTimer?.invalidate()
         endTimer = nil
-        endCountdown = 0
+        endCountdownStart = nil
     }
 
     private func startHoldCountdown() {
-        cancelEndCountdown()
-        holdCountdown = 0.001
-        holdTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-            holdCountdown += 0.05
-            if holdCountdown >= 3.0 {
-                cancelHoldCountdown()
-                if UserDefaults.standard.bool(forKey: "holdExplainerShown") {
-                    workout.attemptHold()
-                } else {
-                    holdExplainerDontShow = false
-                    showHoldExplainer = true
-                }
+        cancelCountdowns()
+        holdCountdownStart = Date()
+        holdTimer = countdownTimer {
+            cancelHoldCountdown()
+            if UserDefaults.standard.bool(forKey: "holdExplainerShown") {
+                workout.attemptHold()
+            } else {
+                holdExplainerDontShow = false
+                showHoldExplainer = true
             }
         }
     }
@@ -415,8 +399,39 @@ struct WorkoutView<ExtraTab: View>: View {
     private func cancelHoldCountdown() {
         holdTimer?.invalidate()
         holdTimer = nil
-        holdCountdown = 0
+        holdCountdownStart = nil
     }
+}
+
+private let holdEndCountdownDuration: TimeInterval = 3
+
+/// Ring and digit for the hold and end countdowns. Only this view redraws
+/// while counting, and it reads the time on each frame, so it never runs slow.
+private struct CountdownRing: View {
+    let start: Date
+    let duration: TimeInterval
+    let color: Color
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let elapsed = min(max(context.date.timeIntervalSince(start), 0), duration)
+            ZStack {
+                Circle()
+                    .trim(from: 0, to: elapsed / duration)
+                    .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 48, height: 48)
+                Text(String(max(1, Int(ceil(duration - elapsed)))))
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(color)
+            }
+        }
+    }
+}
+
+#Preview("Countdown ring") {
+    CountdownRing(start: Date(), duration: 3, color: .red)
 }
 
 // MARK: - Dynamic Metrics Page
@@ -465,10 +480,14 @@ struct DynamicMetricsPage: View {
                     Text("in \(formatTurnDistance(workout.navigation.distanceToNextTurn))")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                     Spacer()
                     Text(formatDistance(workout.navigation.distanceRemaining) + " to end")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
             }
         }
@@ -478,3 +497,71 @@ struct DynamicMetricsPage: View {
         .safeAreaPadding(.top)
     }
 }
+
+private struct PausedPill: View {
+    let isAutoPaused: Bool
+
+    var body: some View {
+        Text(isAutoPaused ? "AUTO-PAUSED" : "PAUSED")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.yellow)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(.yellow.opacity(0.2))
+            .clipShape(Capsule())
+    }
+}
+
+// MARK: - Previews
+
+#if DEBUG
+extension WorkoutManager {
+    /// Long auto-paused ride for layout previews, either off route after a
+    /// missed turn or approaching the next one.
+    static func preview(offRoute: Bool) -> WorkoutManager {
+        let w = WorkoutManager()
+        w.isActive = true
+        w.elapsedTime = 40_357
+        w.movingTime = 38_712
+        w.totalDistance = 181_000
+        w.speed = 9.8
+        w.heartRate = 152
+        w.autoPauseState = .paused
+        let turn = TurnPoint(
+            index: 0, angle: 30, direction: offRoute ? .slightLeft : .slightRight,
+            distanceFromStart: 0, coordinate: .init(latitude: 0, longitude: 0))
+        w.navigation.isOffRoute = offRoute
+        w.navigation.nearestRouteDistance = 1_840
+        w.navigation.missedTurn = offRoute ? turn : nil
+        w.navigation.nextTurn = offRoute ? nil : turn
+        w.navigation.distanceToNextTurn = 480
+        w.navigation.distanceRemaining = 154_300
+        return w
+    }
+}
+
+private let previewMetricPage = MetricPage(name: "Ride", slots: [
+    MetricSlot(type: .movingTime), MetricSlot(type: .elapsedTime),
+    MetricSlot(type: .averageSpeed), MetricSlot(type: .distance),
+    MetricSlot(type: .speed), MetricSlot(type: .heartRate),
+])
+
+#Preview("Metrics, 41 mm", traits: .fixedLayout(width: 176, height: 215)) {
+    DynamicMetricsPage(workout: .preview(offRoute: false), metricPage: previewMetricPage, showOffRouteBanner: true)
+}
+
+#Preview("Metrics off route, 41 mm", traits: .fixedLayout(width: 176, height: 215)) {
+    DynamicMetricsPage(workout: .preview(offRoute: true), metricPage: previewMetricPage, showOffRouteBanner: true)
+}
+
+#Preview("Paused pills", traits: .sizeThatFitsLayout) {
+    VStack(spacing: 8) {
+        PausedPill(isAutoPaused: true)
+        PausedPill(isAutoPaused: false)
+    }
+    .padding()
+    .frame(width: 176, alignment: .leading)
+}
+#endif

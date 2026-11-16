@@ -22,7 +22,15 @@ class RideSessionManager: ObservableObject {
 
     @Published var isRideActive = false {
         didSet {
-            if oldValue && !isRideActive {
+            if !oldValue && isRideActive {
+                suppressAwaitingOnNextEnd = false
+            } else if oldValue && !isRideActive {
+                endedEarlyRideStart = mirroredSession == nil && earlySessionID != nil
+                    ? PhoneTelemetryStore.shared.rideStartTime
+                    : nil
+                if let id = earlySessionID { endedEarlySessionID = id }
+                earlySessionID = nil
+                earlyWatchdog?.cancel()
                 if suppressAwaitingOnNextEnd {
                     suppressAwaitingOnNextEnd = false
                 } else {
@@ -44,12 +52,34 @@ class RideSessionManager: ObservableObject {
     /// watch confirms by clearing the session.
     private var suppressActiveRevival = false
 
+    /// The watch's ID for the current ride's early telemetry, which shows
+    /// the ride before HealthKit hands over the mirrored session.
+    private var earlySessionID: String?
+    /// Telemetry still in flight for this ride is ignored once it ends.
+    private var endedEarlySessionID: String?
+    /// Ends an early-only ride if its telemetry stops.
+    private var earlyWatchdog: DispatchWorkItem?
+    /// Start of the last ride that ended before HealthKit handed it over.
+    private var endedEarlyRideStart: Date?
+
+    /// Whether ride commands have a way to reach the watch.
+    private var hasWatchLink: Bool {
+        mirroredSession != nil || (isRideActive && earlySessionID != nil)
+    }
+
     /// The mirrored workout session from the watch.
     /// Set by AppDelegate when mirroring starts; cleared when session ends.
     var mirroredSession: HKWorkoutSession? {
         didSet {
             let active = mirroredSession != nil
             DispatchQueue.main.async {
+                if active, let id = self.earlySessionID {
+                    // HealthKit has the ride now. Copies still in flight
+                    // over WatchConnectivity are ignored.
+                    self.earlyWatchdog?.cancel()
+                    self.endedEarlySessionID = id
+                    self.earlySessionID = nil
+                }
                 if active && self.suppressActiveRevival {
                     // User has already optimistically ended/held/discarded —
                     // don't bounce the UI back to active just because the
@@ -79,20 +109,44 @@ class RideSessionManager: ObservableObject {
     // MARK: - Ride Control
 
     func pauseRide() {
-        guard let session = mirroredSession,
-              session.state == .running else { return }
+        guard let session = mirroredSession else {
+            sendEarlyCommand("pauseRide")
+            return
+        }
+        guard session.state == .running else { return }
         session.pause()
     }
 
     func resumeRide() {
-        guard let session = mirroredSession,
-              session.state == .paused else { return }
-        session.resume()
+        guard let session = mirroredSession else {
+            sendEarlyCommand("resumeRide")
+            return
+        }
+        if session.state == .paused {
+            session.resume()
+            return
+        }
+        // While auto-paused the watch briefly runs the session to check for
+        // movement, so there's no paused state to flip. Ask the watch directly.
+        let payload = ["type": "resumeRide", "ts": String(Date().timeIntervalSince1970)]
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        session.sendToRemoteWorkoutSession(data: data) { _, _ in }
     }
 
     func endRide() {
-        guard let session = mirroredSession else { return }
+        guard let session = mirroredSession else {
+            ConnectivityManager.shared.sendRideCommand(["type": "endRide"])
+            return
+        }
         session.end()
+    }
+
+    /// Pause or resume before HealthKit has handed over the session. The
+    /// watch's reply stands in for the session state change.
+    private func sendEarlyCommand(_ type: String) {
+        ConnectivityManager.shared.sendRideCommand(["type": type]) { [weak self] in
+            DispatchQueue.main.async { self?.clearPending() }
+        }
     }
 
     func holdRide() {
@@ -106,13 +160,22 @@ class RideSessionManager: ObservableObject {
         ConnectivityManager.shared.sendRideCommand(["type": "discardRide"])
     }
 
+    /// The watch is discarding the ride itself. Its message can land before
+    /// or after the mirrored session ends, so this covers both.
+    func watchWillDiscard() {
+        if isRideActive {
+            suppressAwaitingOnNextEnd = true
+        }
+        ConnectivityManager.shared.clearAwaitingIncomingRide()
+    }
+
     // MARK: - Optimistic Updates
 
     /// Flips `isPaused = true` and shows a pending spinner immediately, then
     /// issues the real pause command. Spinner clears when the watch confirms
     /// via `handleSessionStateChange` or when the pending timeout fires.
     func optimisticPause() {
-        guard mirroredSession != nil else { return }
+        guard hasWatchLink else { return }
         beginPending(.pause)
         DispatchQueue.main.async {
             self.isPaused = true
@@ -124,7 +187,7 @@ class RideSessionManager: ObservableObject {
     /// Flips `isPaused = false` and shows a pending spinner immediately, then
     /// issues the real resume command.
     func optimisticResume() {
-        guard mirroredSession != nil else { return }
+        guard hasWatchLink else { return }
         beginPending(.resume)
         DispatchQueue.main.async {
             self.isPaused = false
@@ -162,7 +225,7 @@ class RideSessionManager: ObservableObject {
         markStatus: @escaping (LiveActivityManager) async -> Void,
         send: @escaping () -> Void
     ) {
-        guard mirroredSession != nil else { return }
+        guard hasWatchLink else { return }
         beginPending(command)
         DispatchQueue.main.async {
             self.isRideActive = false
@@ -197,6 +260,58 @@ class RideSessionManager: ObservableObject {
         beginTerminalCommand(.discard, markStatus: { await $0.markDiscarded() }) { [weak self] in
             self?.sendDiscardRide()
         }
+    }
+
+    // MARK: - Early Ride
+
+    /// Telemetry that came straight from the watch. Shows the ride until
+    /// HealthKit hands over the mirrored session. Returns false when the
+    /// stats should be ignored: the ride ended, or HealthKit is already
+    /// delivering them.
+    func receiveEarlyTelemetry(sessionID: String) -> Bool {
+        guard mirroredSession == nil, sessionID != endedEarlySessionID, !suppressActiveRevival else { return false }
+        if earlySessionID != sessionID {
+            earlySessionID = sessionID
+            DiagnosticsLog.event("Mirroring", "early ride shown sessionID=\(sessionID)")
+        }
+        if !isRideActive {
+            isRideActive = true
+            writeStateToAppGroup()
+        }
+        armEarlyWatchdog()
+        return true
+    }
+
+    /// HealthKit can still hand over a ride that ended during the wait.
+    /// Matching its start to that ride keeps it from coming back.
+    func isLateHandover(of session: HKWorkoutSession) -> Bool {
+        guard let ended = endedEarlyRideStart, let start = session.startDate else { return false }
+        return abs(start.timeIntervalSince(ended)) < 10
+    }
+
+    /// The watch ended a ride before HealthKit handed it over.
+    func earlyRideEnded(sessionID: String) {
+        guard sessionID == earlySessionID, mirroredSession == nil, isRideActive else { return }
+        DiagnosticsLog.event("Mirroring", "early ride ended by watch sessionID=\(sessionID)")
+        endEarlyRide()
+    }
+
+    private func armEarlyWatchdog() {
+        earlyWatchdog?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            guard let self, self.mirroredSession == nil, self.isRideActive else { return }
+            DiagnosticsLog.event("Mirroring", "early telemetry went quiet, ending ride")
+            self.endEarlyRide()
+        }
+        earlyWatchdog = task
+        // Three missed ticks at the slowest telemetry rate.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: task)
+    }
+
+    private func endEarlyRide() {
+        isRideActive = false
+        isPaused = false
+        writeStateToAppGroup()
     }
 
     // MARK: - Pending Command Tracking
@@ -245,7 +360,11 @@ class RideSessionManager: ObservableObject {
             switch state {
             case .running:
                 self.isRideActive = true
-                self.isPaused = false
+                // The watch also runs the session while auto-paused to check
+                // for movement. Telemetry says when the ride really resumed.
+                if !PhoneTelemetryStore.shared.isAutoPaused {
+                    self.isPaused = false
+                }
             case .paused:
                 self.isRideActive = true
                 self.isPaused = true
@@ -258,6 +377,15 @@ class RideSessionManager: ObservableObject {
             }
             self.writeStateToAppGroup()
         }
+    }
+
+    /// Follows the watch's own paused flag from telemetry. Session state alone
+    /// reads as running during auto-pause movement checks, which flipped the
+    /// phone and the Live Activity toggle to "Riding" mid auto-pause.
+    func syncPaused(fromWatch watchPaused: Bool) {
+        guard isRideActive, pendingCommand == nil, isPaused != watchPaused else { return }
+        isPaused = watchPaused
+        writeStateToAppGroup()
     }
 
     // MARK: - App Group Shared State

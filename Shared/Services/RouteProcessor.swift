@@ -12,6 +12,10 @@ struct RouteProcessor {
     static let turnAngleThreshold: Double = 30
     static let minBearingDistance: Double = 5
     static let minTurnSpacing: Double = 50
+    static let waypointMatchRadius: Double = 200
+    static let waypointOrderTolerance: Double = 50
+    static let waypointOutOfOrderPenalty: Double = 300
+    static let waypointShapeMismatchPenalty: Double = 150
 
     static func process(_ route: Route) -> ProcessedRoute {
         let coords = route.points.map {
@@ -29,6 +33,8 @@ struct RouteProcessor {
                 cueEdits: route.cueEdits,
                 minLat: 0, maxLat: 0, minLon: 0, maxLon: 0)
         }
+
+        let clock = StageClock()
 
         // Step 1: Compute distances, cumulative distance, and bearings
         var cumulativeDistance: Double = 0
@@ -65,6 +71,8 @@ struct RouteProcessor {
                 distanceFromStart: cumulativeDistance,
                 bearingToNext: bearing))
         }
+
+        clock.mark("distances")
 
         // Step 2: Detect calculated turns
         var turnPoints: [TurnPoint] = []
@@ -117,22 +125,26 @@ struct RouteProcessor {
             filtered.append(turnPoints[j])
         }
         let calculatedTurns = filtered
+        clock.mark("turns")
 
         // Step 3: Map waypoints to route points (only turn-cue waypoints, not POIs)
+        let grid = route.waypoints?.isEmpty == false ? PointGrid(processedPoints) : nil
         let waypointTurns: [TurnPoint]
         if let waypoints = route.waypoints?.turnCues, !waypoints.isEmpty {
-            waypointTurns = mapWaypoints(waypoints, to: processedPoints)
+            waypointTurns = mapWaypoints(waypoints, to: processedPoints, grid: grid)
         } else {
             waypointTurns = []
         }
+        clock.mark("cues")
 
         // Step 3b: Map POIs to route points
         let pois: [RoutePOI]
         if let routePOIs = route.waypoints?.pois, !routePOIs.isEmpty {
-            pois = mapPOIs(routePOIs, to: processedPoints)
+            pois = mapPOIs(routePOIs, to: processedPoints, grid: grid)
         } else {
             pois = []
         }
+        clock.mark("pois")
 
         // Step 4: Bounding box
         let lats = coords.map { $0.latitude }
@@ -143,6 +155,8 @@ struct RouteProcessor {
         let simplified = route.simplifiedElevation
             ?? RouteElevationSimplifier.simplify(route)
             ?? []
+        clock.mark("elevation")
+        DiagnosticsLog.event("RouteLoad", "processed points=\(coords.count) cues=\(waypointTurns.count) pois=\(pois.count) | \(clock.summary)")
 
         return ProcessedRoute(
             name: route.name,
@@ -159,15 +173,17 @@ struct RouteProcessor {
     }
 
     /// Map POI waypoints to the nearest route points and capture their off-route distance.
-    private static func mapPOIs(_ pois: [Waypoint], to processedPoints: [ProcessedPoint]) -> [RoutePOI] {
+    private static func mapPOIs(_ pois: [Waypoint], to processedPoints: [ProcessedPoint], grid: PointGrid?) -> [RoutePOI] {
         return pois.map { poi in
             let poiLoc = CLLocation(latitude: poi.lat, longitude: poi.lon)
+            let near = FlatDistance(around: poi.coordinate)
+            let candidates = grid?.nearest(to: poi.coordinate, using: near) ?? Array(processedPoints.indices)
+            let approx = candidates.map { near.meters(to: processedPoints[$0].coordinate) }
+            let cutoff = near.cutoff(for: approx.min() ?? 0)
             var bestIndex = 0
             var bestDist = Double.greatestFiniteMagnitude
-            for i in 0..<processedPoints.count {
-                let pt = processedPoints[i]
-                let ptLoc = CLLocation(latitude: pt.coordinate.latitude, longitude: pt.coordinate.longitude)
-                let dist = poiLoc.distance(from: ptLoc)
+            for (k, i) in candidates.enumerated() where approx[k] <= cutoff {
+                let dist = poiLoc.distance(from: processedPoints[i].location)
                 if dist < bestDist {
                     bestDist = dist
                     bestIndex = i
@@ -184,41 +200,192 @@ struct RouteProcessor {
         }
     }
 
-    /// Map GPX waypoints to the nearest processed route points, creating TurnPoints.
-    private static func mapWaypoints(_ waypoints: [Waypoint], to processedPoints: [ProcessedPoint]) -> [TurnPoint] {
-        return waypoints.compactMap { wpt in
+    /// Map GPX waypoints to route points, creating TurnPoints.
+    ///
+    /// Waypoints carry no distance, and an out and back passes the same corner
+    /// twice, so the nearest point can land a return-leg cue on the way out.
+    /// Every pass within range is a candidate (the closest point of each), and
+    /// a pass scores worse when it comes before the previous cue (cues are
+    /// listed in ride order) or when the route turns the other way there.
+    private static func mapWaypoints(_ waypoints: [Waypoint], to processedPoints: [ProcessedPoint], grid: PointGrid?) -> [TurnPoint] {
+        var turns: [TurnPoint] = []
+        var previousDistance: Double = 0
+
+        for wpt in waypoints {
             let wptLoc = CLLocation(latitude: wpt.lat, longitude: wpt.lon)
+            let near = FlatDistance(around: wpt.coordinate)
+            let cutoff = near.cutoff(for: waypointMatchRadius)
+            let direction = TurnDirection.from(waypointName: wpt.name)
 
-            var bestIndex = 0
-            var bestDist = Double.greatestFiniteMagnitude
+            // Exact distances only for points the cheap check can't rule out,
+            // plus their neighbors for the closest-point-of-the-pass test.
+            var exact: [Int: Double] = [:]
+            func dist(_ i: Int) -> Double {
+                if let d = exact[i] { return d }
+                let d = wptLoc.distance(from: processedPoints[i].location)
+                exact[i] = d
+                return d
+            }
 
-            for i in 0..<processedPoints.count {
-                let pt = processedPoints[i]
-                let ptLoc = CLLocation(latitude: pt.coordinate.latitude, longitude: pt.coordinate.longitude)
-                let dist = wptLoc.distance(from: ptLoc)
-                if dist < bestDist {
-                    bestDist = dist
+            var bestIndex: Int?
+            var bestScore = Double.greatestFiniteMagnitude
+            let candidates = grid?.indices(near: wpt.coordinate, within: cutoff) ?? Array(processedPoints.indices)
+            for i in candidates where near.meters(to: processedPoints[i].coordinate) <= cutoff {
+                let d = dist(i)
+                guard d < waypointMatchRadius else { continue }
+                if i > 0, dist(i - 1) < d { continue }
+                if i < processedPoints.count - 1, dist(i + 1) < d { continue }
+
+                var score = d
+                if processedPoints[i].distanceFromStart < previousDistance - waypointOrderTolerance {
+                    score += waypointOutOfOrderPenalty
+                }
+                if !turnShape(at: i, in: processedPoints, fits: direction) {
+                    score += waypointShapeMismatchPenalty
+                }
+                if score < bestScore {
+                    bestScore = score
                     bestIndex = i
                 }
             }
 
-            // Reject waypoints that are too far from the route
-            guard bestDist < 200 else { return nil }
+            guard let index = bestIndex else { continue }
+            previousDistance = processedPoints[index].distanceFromStart
 
-            let direction = TurnDirection.from(waypointName: wpt.name)
-
-            return TurnPoint(
-                index: bestIndex,
+            turns.append(TurnPoint(
+                index: index,
                 angle: 0,
                 direction: direction,
-                distanceFromStart: processedPoints[bestIndex].distanceFromStart,
-                coordinate: processedPoints[bestIndex].coordinate,
+                distanceFromStart: processedPoints[index].distanceFromStart,
+                coordinate: processedPoints[index].coordinate,
                 description: wpt.description,
                 isWaypoint: true,
                 waypointID: wpt.id
-            )
+            ))
         }
-        .sorted { $0.distanceFromStart < $1.distanceFromStart }
+
+        return turns.sorted { $0.distanceFromStart < $1.distanceFromStart }
+    }
+
+    /// Flat-earth distance for ruling points out before the exact CLLocation
+    /// distance. Within a few kilometers it's well under 1% off, and the cutoff
+    /// pads for that so no point the exact distance would keep gets dropped.
+    private struct FlatDistance {
+        let lat: Double
+        let lon: Double
+        let metersPerDegreeLon: Double
+        static let metersPerDegreeLat = 111_320.0
+
+        init(around c: CLLocationCoordinate2D) {
+            lat = c.latitude
+            lon = c.longitude
+            metersPerDegreeLon = Self.metersPerDegreeLat * cos(c.latitude * .pi / 180)
+        }
+
+        func meters(to c: CLLocationCoordinate2D) -> Double {
+            let dy = (c.latitude - lat) * Self.metersPerDegreeLat
+            var dLon = c.longitude - lon
+            if dLon > 180 { dLon -= 360 } else if dLon < -180 { dLon += 360 }
+            let dx = dLon * metersPerDegreeLon
+            return (dx * dx + dy * dy).squareRoot()
+        }
+
+        func cutoff(for meters: Double) -> Double { meters * 1.05 + 10 }
+    }
+
+    /// Route points bucketed into roughly 250 m cells, so matching a cue only
+    /// looks at the cells around it instead of every point on the route.
+    private struct PointGrid {
+        private struct Cell: Hashable { let row: Int; let col: Int }
+        static let cellMeters = 250.0
+        private let latStep: Double
+        private let lonStep: Double
+        private var cells: [Cell: [Int]] = [:]
+        private let coordinates: [CLLocationCoordinate2D]
+
+        /// Nil for a route crossing the 180th meridian, which falls back to a full scan.
+        init?(_ points: [ProcessedPoint]) {
+            guard let first = points.first else { return nil }
+            var minLon = first.coordinate.longitude, maxLon = minLon
+            var minLat = first.coordinate.latitude, maxLat = minLat
+            for p in points {
+                minLon = min(minLon, p.coordinate.longitude); maxLon = max(maxLon, p.coordinate.longitude)
+                minLat = min(minLat, p.coordinate.latitude); maxLat = max(maxLat, p.coordinate.latitude)
+            }
+            guard maxLon - minLon < 180 else { return nil }
+            coordinates = points.map(\.coordinate)
+            latStep = Self.cellMeters / FlatDistance.metersPerDegreeLat
+            let midLat = (minLat + maxLat) / 2
+            lonStep = Self.cellMeters / (FlatDistance.metersPerDegreeLat * max(cos(midLat * .pi / 180), 0.01))
+            for (i, p) in points.enumerated() {
+                cells[cell(p.coordinate), default: []].append(i)
+            }
+        }
+
+        private func cell(_ c: CLLocationCoordinate2D) -> Cell {
+            Cell(row: Int((c.latitude / latStep).rounded(.down)), col: Int((c.longitude / lonStep).rounded(.down)))
+        }
+
+        /// Every point within `meters` (flat distance) of `c`, in route order.
+        func indices(near c: CLLocationCoordinate2D, within meters: Double) -> [Int] {
+            let center = cell(c)
+            let rows = Int((meters / (latStep * FlatDistance.metersPerDegreeLat)).rounded(.up)) + 1
+            let lonMeters = lonStep * FlatDistance.metersPerDegreeLat * max(cos(c.latitude * .pi / 180), 0.01)
+            let cols = Int((meters / lonMeters).rounded(.up)) + 1
+            var found: [Int] = []
+            for r in (center.row - rows)...(center.row + rows) {
+                for col in (center.col - cols)...(center.col + cols) {
+                    if let bucket = cells[Cell(row: r, col: col)] { found += bucket }
+                }
+            }
+            return found.sorted()
+        }
+
+        /// Points that could be nearest to `c`: widens the search until the
+        /// closest point found is well inside it. Nil when nothing is within
+        /// about 16 km, so the caller scans everything.
+        func nearest(to c: CLLocationCoordinate2D, using near: FlatDistance) -> [Int]? {
+            var radius = Self.cellMeters
+            while radius <= 16_000 {
+                let found = indices(near: c, within: radius)
+                if let closest = found.lazy.map({ near.meters(to: coordinates[$0]) }).min(),
+                   near.cutoff(for: closest) <= radius {
+                    return found
+                }
+                radius *= 2
+            }
+            return nil
+        }
+    }
+
+    /// Whether the route bends the way `direction` says at point `i`. Checked
+    /// over a tight and a wider window, since a cue can sit right on a sparse
+    /// track's corner or a few meters off a dense one. Straight and unknown
+    /// cues always fit.
+    private static func turnShape(at i: Int, in points: [ProcessedPoint], fits direction: TurnDirection) -> Bool {
+        let wantsLeft: Bool
+        switch direction {
+        case .left, .slightLeft, .sharpLeft: wantsLeft = true
+        case .right, .slightRight, .sharpRight: wantsLeft = false
+        case .straight, .uTurn: return true
+        }
+
+        var measured = false
+        for window in [5.0, 25.0] {
+            var before = i
+            while before > 0, points[i].distanceFromStart - points[before].distanceFromStart < window { before -= 1 }
+            var after = i
+            while after < points.count - 1, points[after].distanceFromStart - points[i].distanceFromStart < window { after += 1 }
+            guard before < i, after > i else { continue }
+
+            let angle = angleDelta(
+                from: bearing(from: points[before].coordinate, to: points[i].coordinate),
+                to: bearing(from: points[i].coordinate, to: points[after].coordinate))
+            measured = true
+            if wantsLeft ? angle < -10 : angle > 10 { return true }
+        }
+        // No shape to judge at the very ends of the route.
+        return !measured
     }
 
     nonisolated static func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
@@ -254,4 +421,25 @@ struct RouteProcessor {
 
     nonisolated private static func radians(_ degrees: Double) -> Double { degrees * .pi / 180 }
     nonisolated private static func degrees(_ radians: Double) -> Double { radians * 180 / .pi }
+}
+
+/// Milliseconds per stage, for the RouteLoad trace.
+private final class StageClock {
+    private var last = Date()
+    private var parts: [String] = []
+    private let start = Date()
+
+    func mark(_ stage: String) {
+        let now = Date()
+        parts.append("\(stage)=\(Int(now.timeIntervalSince(last) * 1000))ms")
+        last = now
+    }
+
+    var summary: String {
+        (parts + ["total=\(Int(Date().timeIntervalSince(start) * 1000))ms"]).joined(separator: " ")
+    }
+}
+
+private extension ProcessedPoint {
+    var location: CLLocation { CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude) }
 }

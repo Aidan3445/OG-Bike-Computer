@@ -17,6 +17,7 @@ struct RWGPSCollectionView: View {
     @State private var error: String?
     @State private var downloadingID: String?
     @State private var importedIDs: Set<String> = []
+    @State private var replacePrompt: ReplacePrompt?
 
     var body: some View {
         Group {
@@ -26,10 +27,13 @@ struct RWGPSCollectionView: View {
                 collectionsListView
             }
         }
-        .alert("Error", isPresented: .init(
-            get: { error != nil },
-            set: { if !$0 { error = nil } }
-        )) {
+        .alert(
+            "Error",
+            isPresented: .init(
+                get: { error != nil },
+                set: { if !$0 { error = nil } }
+            )
+        ) {
             Button("OK") { error = nil }
         } message: {
             Text(error ?? "")
@@ -41,11 +45,13 @@ struct RWGPSCollectionView: View {
     private var collectionsListView: some View {
         List {
             ForEach(collections) { collection in
-                NavigationLink(destination: RWGPSCollectionView(
-                    collections: collections,
-                    selectedCollection: collection,
-                    routeStore: routeStore
-                )) {
+                NavigationLink(
+                    destination: RWGPSCollectionView(
+                        collections: collections,
+                        selectedCollection: collection,
+                        routeStore: routeStore
+                    )
+                ) {
                     Text(collection.name)
                 }
             }
@@ -72,15 +78,15 @@ struct RWGPSCollectionView: View {
                     Section {
                         ForEach(routes) { route in
                             Button {
-                                downloadRoute(route)
+                                importTapped(route)
                             } label: {
                                 ServiceRouteRow(
                                     route: route,
                                     isDownloading: downloadingID == route.id,
-                                    isImported: importedIDs.contains(route.id)
+                                    isImported: isImported(route)
                                 )
                             }
-                            .disabled(downloadingID != nil || importedIDs.contains(route.id))
+                            .disabled(downloadingID != nil)
                         }
                     } header: {
                         Text(collection.name)
@@ -90,6 +96,11 @@ struct RWGPSCollectionView: View {
         }
         .navigationTitle(collection.name)
         .navigationBarTitleDisplayMode(.inline)
+        .replaceImportedRouteAlert(
+            $replacePrompt, serviceName: IntegrationServiceID.rideWithGPS.displayName
+        ) { prompt in
+            downloadRoute(prompt.serviceRoute, replacing: prompt.existing)
+        }
         .task {
             await fetchCollectionRoutes(id: collection.id)
         }
@@ -107,14 +118,37 @@ struct RWGPSCollectionView: View {
         isLoading = false
     }
 
-    private func downloadRoute(_ serviceRoute: ServiceRoute) {
+    /// A route already imported from this service asks before downloading
+    /// again, since a second download replaces the saved copy.
+    private func importTapped(_ serviceRoute: ServiceRoute) {
+        if let existing = existingRoute(for: serviceRoute) {
+            replacePrompt = ReplacePrompt(serviceRoute: serviceRoute, existing: existing)
+        } else {
+            downloadRoute(serviceRoute)
+        }
+    }
+
+    private func existingRoute(for serviceRoute: ServiceRoute) -> Route? {
+        let source = RouteSource(service: .rideWithGPS, remoteID: serviceRoute.id)
+        return routeStore.routes.first { $0.source == source }
+    }
+
+    private func isImported(_ serviceRoute: ServiceRoute) -> Bool {
+        importedIDs.contains(serviceRoute.id) || existingRoute(for: serviceRoute) != nil
+    }
+
+    private func downloadRoute(_ serviceRoute: ServiceRoute, replacing existing: Route? = nil) {
         downloadingID = serviceRoute.id
         Task {
             do {
                 let route = try await RWGPSClient().downloadRoute(id: serviceRoute.id)
                 await MainActor.run {
-                    routeStore.save(route)
-                    RouteImportCoordinator.shared.autoSendIfEnabled(route)
+                    if let existing {
+                        routeStore.replace(existing, with: route)
+                    } else {
+                        routeStore.save(route)
+                        RouteImportCoordinator.shared.autoSendIfEnabled(route)
+                    }
                     importedIDs.insert(serviceRoute.id)
                     downloadingID = nil
                 }

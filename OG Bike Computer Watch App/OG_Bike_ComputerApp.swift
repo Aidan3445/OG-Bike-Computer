@@ -28,6 +28,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         // sends a startRide WC message alongside startWatchApp.
         ConnectivityManager.shared.onStartRideRequested = { [weak self] (routeID: UUID?, activity: ActivityType) in
             guard let self = self else { return }
+            self.workout.dismissSummaryIfShowing()
             guard !self.workout.isActive else { return }
             // A held ride is allowed to coexist with a new active ride. The
             // rider only has to resolve the conflict when they later try to
@@ -50,6 +51,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
 
         ConnectivityManager.shared.onDiscardRideRequested = { [weak self] in
             guard let self = self else { return }
+            self.workout.dismissSummaryIfShowing()
             // Discard works in two modes:
             //   1. Active ride → tear down via WorkoutManager.discard()
             //   2. Held ride (workout not active) → delete the held ride from disk + store
@@ -63,6 +65,27 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         ConnectivityManager.shared.onHoldRideRequested = { [weak self] in
             guard let self = self, self.workout.isActive else { return }
             self.workout.attemptHold()
+        }
+
+        ConnectivityManager.shared.onPauseRideRequested = { [weak self] in
+            guard let self, self.workout.isActive, !self.workout.isPaused else { return }
+            self.workout.pause()
+        }
+
+        ConnectivityManager.shared.onResumeRideRequested = { [weak self] in
+            guard let self, self.workout.isActive, self.workout.isPaused else { return }
+            self.workout.resume()
+        }
+
+        // Same as the session ending from the phone. The phone already
+        // turned short rides into a discard.
+        ConnectivityManager.shared.onEndRideRequested = { [weak self] in
+            guard let self, self.workout.isActive, self.workout.completedRideSummary == nil else { return }
+            self.workout.stop(save: true)
+        }
+
+        ConnectivityManager.shared.onPhoneMirrorAttached = { [weak self] in
+            self?.workout.stopEarlyTelemetry()
         }
 
         ConnectivityManager.shared.onSampleHapticRequested = { intensity in
@@ -80,6 +103,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
                 ack("Watch app not ready")
                 return
             }
+            self.workout.dismissSummaryIfShowing()
             if self.workout.isActive {
                 ack("A workout is already in progress on the watch")
                 return
@@ -128,16 +152,15 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         }
     }
 
-    /// Called when iOS triggers `HKHealthStore().startWatchApp(with:)`.
-    /// The system launches/foregrounds the watch app and delivers the configuration here.
-    /// The WC message handler (onStartRideRequested / onContinueHeldRideRequested) is the
-    /// primary start trigger; this is just a foreground signal. If there's a held ride, do
-    /// nothing here — the WC handler is responsible for the continue path.
+    /// Called when the phone launches the app with `HKHealthStore().startWatchApp(with:)`.
+    /// The phone's message is the real command. When a ride is held the phone may be
+    /// resuming it, so leave the start to that message instead of opening a second ride.
     func handle(_ workoutConfiguration: HKWorkoutConfiguration) {
         let activityType = ActivityType(hkType: workoutConfiguration.activityType)
 
         Task { @MainActor in
-            guard !workout.isActive else { return }
+            workout.dismissSummaryIfShowing()
+            guard !workout.isActive, rideStore.heldRide == nil else { return }
             workout.start(activity: activityType)
         }
     }

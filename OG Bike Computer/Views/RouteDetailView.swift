@@ -5,10 +5,10 @@
 //  Created by Aidan Weinberg on 3/2/26.
 //
 
-import SwiftUI
-import MapKit
-import CoreLocation
 import Charts
+import CoreLocation
+import MapKit
+import SwiftUI
 
 struct RouteDetailView: View {
     let route: Route
@@ -27,13 +27,17 @@ struct RouteDetailView: View {
     var recordingPath: [CLLocationCoordinate2D] = []
     @ObservedObject private var unitState = UnitState.shared
 
-    enum PanelState {
-        case collapsed, compact, expanded
-    }
-
     @State private var mapPosition: MapCameraPosition = .automatic
-    @State private var panelState: PanelState = .collapsed
+    @State private var isPanelOpen = false
+    /// Stretch the chart is zoomed to, highlighted on the map.
+    @State private var chartZoom: ClosedRange<Double>?
     @State private var showOverwriteAlert = false
+    @State private var isExportingGPX = false
+    @State private var showPhoneSettings = false
+    @AppStorage(PhoneSettingsKeys.mapStyle) private var mapStyle = PhoneMapStyle.standard
+    @AppStorage(PhoneSettingsKeys.mileMarkers) private var showMileMarkers = true
+    @AppStorage(PhoneSettingsKeys.directionArrows) private var showDirectionArrows = true
+    @State private var gpxExport: GPXExportFile?
 
     // Cached derived data — computed once on appear to avoid O(n) work on every body recompute
     @State private var cachedCoordinates: [CLLocationCoordinate2D] = []
@@ -41,7 +45,7 @@ struct RouteDetailView: View {
     @State private var cachedMileMarkers: [MileMarker] = []
     @State private var currentMarkerInterval: Double = 0
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
-    @State private var cachedElevationData: [ProcessedPoint] = []
+    @State private var cachedElevationData: [RouteElevationPoint] = []
     @State private var didStartLoad = false
     @State private var panelPage = 0
     /// Held in `@State` (not `@StateObject`) so per-frame scrub updates only
@@ -52,6 +56,13 @@ struct RouteDetailView: View {
     // Cue Editor state
     @State private var isEditingCues: Bool = false
     @StateObject private var cueEditorHolder = CueEditorHolder()
+    /// Which cue group shows on top of each overlapping pin stack, keyed by
+    /// stack id. Set on tap so the stack doesn't flash back to its first cue
+    /// while the editor briefly clears the selection between picks.
+    @State private var cueStackFronts: [CueEntryID: CueEntryID] = [:]
+    /// Held in `@State` as a plain class so the per-frame size updates while
+    /// the panel is dragged don't re-render the map.
+    @State private var cueFraming = CueFramingMetrics()
     /// Live map camera heading. Held in `@State` (NOT `@StateObject`)
     /// deliberately: we want only the small counter-rotating annotation
     /// views (HighlightChevron, MileMarkerArrow) to observe the heading via
@@ -84,316 +95,264 @@ struct RouteDetailView: View {
     var body: some View {
         let _ = unitState.preferences
         GeometryReader { proxy in
-        ZStack(alignment: .bottom) {
-            if isOnScreen {
-            MapReader { mapProxy in
-            Map(position: $mapPosition) {
-                // Route polyline
-                MapPolyline(coordinates: cachedCoordinates)
-                    .stroke(.blue, lineWidth: 4)
-
-                // In-progress recording breadcrumb, above the route
-                if recordingPath.count >= 2 {
-                    MapPolyline(coordinates: recordingPath)
-                        .stroke(.purple.opacity(0.65), lineWidth: 4)
-                }
-
-                // Start marker
-                if let first = cachedCoordinates.first {
-                    Annotation("Start", coordinate: first) {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
-                    }
-                }
-
-                // End marker
-                if let last = cachedCoordinates.last {
-                    Annotation("End", coordinate: last) {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
-                    }
-                }
-
-                // Cue Editor map content (highlight overlay, turn pins,
-                // waypoint pins). Extracted so the body's @MapContentBuilder
-                // stays small enough for Swift's type-checker.
-                if isEditingCues, let editor = cueEditorHolder.viewModel {
-                    cueEditorMapContent(editor: editor)
-                }
-
-                // Elevation markers
-                if let peaks = cachedElevationExtremes {
-                    if let highElev = peaks.high.elevation {
-                        Annotation("", coordinate: peaks.high.coordinate) {
-                            VStack(spacing: 2) {
-                                Text(formatElevation(highElev))
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 2)
-                                    .background(.orange)
-                                    .clipShape(Capsule())
-                                    .opacity(0.5)
-                                Image(systemName: "triangle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.orange)
-                                    .opacity(0.5)
+            ZStack(alignment: .bottom) {
+                if isOnScreen {
+                    MapReader { mapProxy in
+                        Map(
+                            position: $mapPosition,
+                            bounds: MapCameraBounds(minimumDistance: MapCameraCache.minimumDistance)
+                        ) {
+                            // Route polyline, cut around a chart zoom so the
+                            // highlight replaces that stretch
+                            ForEach(routeLinePieces) { piece in
+                                MapPolyline(coordinates: piece.coords)
+                                    .stroke(piece.color, style: .roundedLine(4))
                             }
-                        }
-                    }
 
-                    if let lowElev = peaks.low.elevation {
-                        Annotation("", coordinate: peaks.low.coordinate) {
-                            VStack(spacing: 2) {
-                                Image(systemName: "triangle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.cyan)
-                                    .rotationEffect(.degrees(180))
-                                    .opacity(0.5)
-                                Text(formatElevation(lowElev))
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 2)
-                                    .background(.cyan)
-                                    .clipShape(Capsule())
-                                    .opacity(0.5)
+                            // In-progress recording breadcrumb, above the route
+                            if recordingPath.count >= 2 {
+                                MapPolyline(coordinates: recordingPath)
+                                    .stroke(.purple.opacity(0.65), style: .roundedLine(4))
                             }
-                        }
-                    }
-                }
 
-                // Mile markers: label is a static capsule at the marker
-                // position; the direction arrow is a separate annotation
-                // halfway-along-route to the next marker (snapped to a track
-                // point) so only the arrow re-renders on camera rotation.
-                // Filtered to the visible region (with padding) so a 600-mile
-                // route doesn't render all ~1200 markers at once.
-                ForEach(visibleMileMarkers, id: \.offset) { _, marker in
-                    Annotation("", coordinate: marker.coordinate) {
-                        MileMarkerLabel(
-                            mile: marker.mile,
-                            unitLabel: currentUnits.distance.label)
-                    }
-                    if let arrowCoord = marker.arrowCoordinate,
-                       inVisibleRegion(arrowCoord) {
-                        Annotation("", coordinate: arrowCoord) {
-                            MileMarkerArrow(
-                                camera: cameraState,
-                                worldBearing: marker.bearingDegrees)
-                        }
-                    }
-                }
-
-                // Waypoints / POIs — including user edits + user-added POIs
-                // from the latest persisted overlay, so a waypoint dropped via
-                // the Cue Editor shows up here too. Region-filtered and
-                // proximity-clustered so POI-heavy routes don't render every
-                // pin individually when zoomed out. Clusters re-use the
-                // WaypointPin glyph with stacked copies behind it so the
-                // visual stays consistent with single pins.
-                let poiClusters = clusterAnnotations(
-                    displayedPOIs.filter { inVisibleRegion($0.coordinate) },
-                    coordinate: { $0.coordinate })
-                ForEach(poiClusters) { cluster in
-                    if cluster.items.count == 1 {
-                        let poi = cluster.items[0]
-                        Annotation(poi.name, coordinate: poi.coordinate) {
-                            WaypointPin()
-                        }
-                    } else {
-                        Annotation("", coordinate: cluster.center) {
-                            WaypointPinCluster(count: cluster.items.count)
-                                .onTapGesture {
-                                    zoomToCoordinates(cluster.items.map { $0.coordinate })
-                                }
-                        }
-                    }
-                }
-
-                // Current location
-                UserAnnotation()
-            }
-            .mapStyle(.standard(elevation: .realistic))
-            .mapControls {
-                MapUserLocationButton()
-                MapCompass()
-                MapScaleView()
-            }
-            // Two camera handlers: continuous keeps the arrow/chevron
-            // counter-rotation responsive without invalidating the Map body
-            // every frame, while .onEnd handles the heavier work (re-bucketing
-            // the marker interval, snapshotting the visible region, capturing
-            // the camera for tab-switch restore).
-            .onMapCameraChange(frequency: .continuous) { context in
-                cameraState.heading = context.camera.heading
-                // Seed the visible region on first camera frame so the initial
-                // render is already filtered — .onEnd doesn't fire until the
-                // user actually interacts with the map.
-                if visibleRegion == nil {
-                    visibleRegion = context.region
-                    MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
-                }
-            }
-            .onMapCameraChange(frequency: .onEnd) { context in
-                handleCameraChange(context)
-            }
-            // Forward map taps to the editor view-model while a placement
-            // mode is active. SpatialTapGesture exposes the local point so we
-            // can ask MapKit to convert it into a real-world coordinate.
-            .gesture(
-                SpatialTapGesture().onEnded { event in
-                    guard isEditingCues, let editor = cueEditorHolder.viewModel else { return }
-                    guard editor.placementMode != .none else { return }
-                    if let coord = mapProxy.convert(event.location, from: .local) {
-                        editor.handleMapTap(at: coord)
-                    }
-                }
-            )
-            .overlay {
-                MapScrubDot(
-                    scrub: scrubState,
-                    proxy: mapProxy,
-                    coordinateFor: interpolateRouteCoordinate)
-            }
-            }  // end: MapReader
-            } else {
-                // Map is unmounted while the tab is hidden — keep the same
-                // backdrop so re-appearing doesn't flash white.
-                Color(.systemBackground)
-            }
-
-            // Editor panel takes over while in cue-editor mode
-            if isEditingCues, let editor = cueEditorHolder.viewModel {
-                VStack(spacing: 0) {
-                    Spacer()
-                    CueEditorPanel(viewModel: editor, availableHeight: proxy.size.height)
-                }
-            } else {
-            // Stats overlay — collapsed (button) ↔ compact (stats)
-            VStack(spacing: 0) {
-                Spacer()
-
-                VStack(spacing: 6) {
-                    if panelState != .collapsed {
-                        Capsule()
-                            .fill(.secondary)
-                            .frame(width: 36, height: 4)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 30)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                    panelState = .collapsed
+                            // Start marker
+                            if let first = cachedCoordinates.first {
+                                Annotation("Start", coordinate: first) {
+                                    Circle()
+                                        .fill(.green)
+                                        .frame(width: 14, height: 14)
+                                        .overlay(Circle().stroke(.white, lineWidth: 2))
                                 }
                             }
-                            .gesture(
-                                DragGesture(minimumDistance: 10)
-                                    .onEnded { value in
-                                        guard abs(value.translation.height) > 10 else { return }
-                                        let skipsCompact = (panelPage == 1)
-                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                            if value.translation.height > 0 {
-                                                switch panelState {
-                                                case .expanded: panelState = skipsCompact ? .collapsed : .compact
-                                                case .compact: panelState = .collapsed
-                                                case .collapsed: break
-                                                }
-                                            } else {
-                                                switch panelState {
-                                                case .collapsed: panelState = skipsCompact ? .expanded : .compact
-                                                case .compact: panelState = .expanded
-                                                case .expanded: break
-                                                }
-                                            }
+
+                            // End marker
+                            if let last = cachedCoordinates.last {
+                                Annotation("End", coordinate: last) {
+                                    Circle()
+                                        .fill(.red)
+                                        .frame(width: 14, height: 14)
+                                        .overlay(Circle().stroke(.white, lineWidth: 2))
+                                }
+                            }
+
+                            // Cue Editor map content (highlight overlay, turn pins,
+                            // waypoint pins). Extracted so the body's @MapContentBuilder
+                            // stays small enough for Swift's type-checker.
+                            if isEditingCues, let editor = cueEditorHolder.viewModel {
+                                cueEditorMapContent(editor: editor)
+                            }
+
+                            // Elevation markers
+                            if let peaks = cachedElevationExtremes {
+                                if let highElev = peaks.high.elevation {
+                                    Annotation("", coordinate: peaks.high.coordinate) {
+                                        VStack(spacing: 2) {
+                                            Text(formatElevation(highElev))
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 2)
+                                                .background(.orange)
+                                                .clipShape(Capsule())
+                                                .opacity(0.5)
+                                            Image(systemName: "triangle.fill")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.orange)
+                                                .opacity(0.5)
                                         }
                                     }
-                            )
+                                }
 
-                        TabView(selection: $panelPage) {
-                            // Page 0: Stats
-                            VStack {
-                                LazyVGrid(columns: [
-                                    GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
-                                ], spacing: 10) {
-                                    StatItem(label: "Distance", value: formatDistance(route.distance))
-                                    if route.elevationGain > 0 {
-                                        StatItem(label: "Elev Gain", value: formatElevation(route.elevationGain))
-                                    }
-                                    if route.elevationLoss > 0 {
-                                        StatItem(label: "Elev Loss", value: formatElevation(route.elevationLoss))
+                                if let lowElev = peaks.low.elevation {
+                                    Annotation("", coordinate: peaks.low.coordinate) {
+                                        VStack(spacing: 2) {
+                                            Image(systemName: "triangle.fill")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.cyan)
+                                                .rotationEffect(.degrees(180))
+                                                .opacity(0.5)
+                                            Text(formatElevation(lowElev))
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 2)
+                                                .background(.cyan)
+                                                .clipShape(Capsule())
+                                                .opacity(0.5)
+                                        }
                                     }
                                 }
-                                Spacer(minLength: 0)
                             }
-                            .tag(0)
 
-                            // Page 1: Elevation Chart
+                            // Mile markers: label is a static capsule at the marker
+                            // position; the direction arrow is a separate annotation
+                            // halfway-along-route to the next marker (snapped to a track
+                            // point) so only the arrow re-renders on camera rotation.
+                            // Filtered to the visible region (with padding) so a 600-mile
+                            // route doesn't render all ~1200 markers at once.
+                            ForEach(visibleMileMarkers, id: \.offset) { _, marker in
+                                if showMileMarkers {
+                                    Annotation("", coordinate: marker.coordinate) {
+                                        MileMarkerLabel(
+                                            mile: marker.mile,
+                                            unitLabel: currentUnits.distance.label)
+                                    }
+                                }
+                                if showDirectionArrows,
+                                    let arrowCoord = marker.arrowCoordinate,
+                                    inVisibleRegion(arrowCoord)
+                                {
+                                    Annotation("", coordinate: arrowCoord) {
+                                        MileMarkerArrow(
+                                            camera: cameraState,
+                                            worldBearing: marker.bearingDegrees)
+                                    }
+                                }
+                            }
+
+                            if let chartZoom {
+                                ChartZoomMapHighlight(segments: [zoomCoordinates(chartZoom)])
+                            }
+
+                            // Waypoints / POIs — including user edits + user-added POIs
+                            // from the latest persisted overlay, so a waypoint dropped via
+                            // the Cue Editor shows up here too. Region-filtered and
+                            // proximity-clustered so POI-heavy routes don't render every
+                            // pin individually when zoomed out. Clusters re-use the
+                            // WaypointPin glyph with stacked copies behind it so the
+                            // visual stays consistent with single pins.
+                            let poiClusters = clusterAnnotations(
+                                displayedPOIs.filter { inVisibleRegion($0.coordinate) },
+                                coordinate: { $0.coordinate })
+                            ForEach(poiClusters) { cluster in
+                                if cluster.items.count == 1 {
+                                    let poi = cluster.items[0]
+                                    Annotation(poi.name, coordinate: poi.coordinate) {
+                                        WaypointPin()
+                                            .onTapGesture { zoomMapToPOI(poi.coordinate) }
+                                    }
+                                } else {
+                                    Annotation("", coordinate: cluster.center) {
+                                        WaypointPinCluster(count: cluster.items.count)
+                                            .onTapGesture {
+                                                zoomToCoordinates(
+                                                    cluster.items.map { $0.coordinate })
+                                            }
+                                    }
+                                }
+                            }
+
+                            // Current location
+                            UserAnnotation()
+                        }
+                        .mapStyle(mapStyle.mapStyle)
+                        .mapControls {
+                            MapUserLocationButton()
+                            MapCompass()
+                            MapScaleView()
+                        }
+                        // Two camera handlers: continuous keeps the arrow/chevron
+                        // counter-rotation responsive without invalidating the Map body
+                        // every frame, while .onEnd handles the heavier work (re-bucketing
+                        // the marker interval, snapshotting the visible region, capturing
+                        // the camera for tab-switch restore).
+                        .onMapCameraChange(frequency: .continuous) { context in
+                            cameraState.heading = context.camera.heading
+                            // Seed the visible region on first camera frame so the initial
+                            // render is already filtered — .onEnd doesn't fire until the
+                            // user actually interacts with the map.
+                            if visibleRegion == nil {
+                                visibleRegion = context.region
+                                MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+                                updateMarkerInterval(for: context.region)
+                            }
+                            if cueFraming.cameraDistanceScale == nil {
+                                calibrateCameraScale(context, proxy: mapProxy)
+                            }
+                        }
+                        .onMapCameraChange(frequency: .onEnd) { context in
+                            handleCameraChange(context)
+                            calibrateCameraScale(context, proxy: mapProxy)
+                        }
+                        // Forward map taps to the editor view-model while a placement
+                        // mode is active. SpatialTapGesture exposes the local point so we
+                        // can ask MapKit to convert it into a real-world coordinate.
+                        .gesture(
+                            SpatialTapGesture().onEnded { event in
+                                guard isEditingCues, let editor = cueEditorHolder.viewModel else {
+                                    return
+                                }
+                                guard editor.placementMode != .none else { return }
+                                if let coord = mapProxy.convert(event.location, from: .local) {
+                                    editor.handleMapTap(at: coord)
+                                }
+                            }
+                        )
+                        .overlay {
+                            MapScrubDot(
+                                scrub: scrubState,
+                                proxy: mapProxy,
+                                coordinateFor: interpolateRouteCoordinate)
+                        }
+                    }  // end: MapReader
+                } else {
+                    // Map is unmounted while the tab is hidden — keep the same
+                    // backdrop so re-appearing doesn't flash white.
+                    Color(.systemBackground)
+                }
+
+                // Editor panel takes over while in cue-editor mode
+                if isEditingCues, let editor = cueEditorHolder.viewModel {
+                    VStack(spacing: 0) {
+                        Spacer()
+                        CueEditorPanel(viewModel: editor, availableHeight: proxy.size.height)
+                            .onGeometryChange(for: CGFloat.self) {
+                                $0.size.height
+                            } action: {
+                                cueFraming.panelHeight = $0
+                            }
+                    }
+                } else {
+                    VStack(spacing: 0) {
+                        Spacer()
+                        MapStatsPanel(
+                            isOpen: $isPanelOpen,
+                            page: $panelPage,
+                            expandedPages: .constant([]),
+                            pageCount: cachedElevationData.isEmpty ? 1 : 2,
+                            title: route.name
+                        ) {
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.flexible()), GridItem(.flexible()),
+                                    GridItem(.flexible()),
+                                ], spacing: 10
+                            ) {
+                                StatItem(label: "Distance", value: formatDistance(route.distance))
+                                if route.elevationGain > 0 {
+                                    StatItem(label: "Elev Gain", value: formatElevation(route.elevationGain))
+                                }
+                                if route.elevationLoss > 0 {
+                                    StatItem(label: "Elev Loss", value: formatElevation(route.elevationLoss))
+                                }
+                            }
+                            .statsPanelPage(0)
+
                             if !cachedElevationData.isEmpty {
-                                VStack {
-                                    RouteElevationChartView(points: cachedElevationData, scrub: scrubState)
-                                    Spacer(minLength: 0)
-                                }
-                                .tag(1)
+                                RouteElevationChartView(points: cachedElevationData, scrub: scrubState, zoom: $chartZoom)
+                                    .statsPanelPage(1)
                             }
-                        }
-                        .tabViewStyle(.page(indexDisplayMode: .never))
-                        .frame(height: panelState == .expanded ? 170 : (route.elevationGain > 0 ? 70 : 60))
-                        .onChange(of: panelPage) { _, newPage in
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                panelState = newPage == 1 ? .expanded : .compact
-                            }
-                        }
-
-                        // Page dots (only if chart data exists)
-                        if !cachedElevationData.isEmpty {
-                            HStack(spacing: 6) {
-                                ForEach(0..<2, id: \.self) { i in
-                                    Circle()
-                                        .fill(panelPage == i ? Color.primary : Color.secondary.opacity(0.4))
-                                        .frame(width: 6, height: 6)
-                                }
-                            }
-                        }
-                    } else {
-                        Image(systemName: "chart.bar.xaxis")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.top, 8)
-                    }
-                }
-                .padding(.horizontal, panelState != .collapsed ? 16 : 0)
-                .padding(.bottom, panelState != .collapsed ? 8 : 8)
-                .frame(
-                    maxWidth: panelState != .collapsed ? .infinity : nil,
-                    alignment: panelState != .collapsed ? .center : .trailing
-                )
-                .frame(width: panelState != .collapsed ? nil : 48, height: panelState != .collapsed ? nil : 48)
-                .background(
-                    RoundedRectangle(cornerRadius: panelState != .collapsed ? 16 : 24)
-                        .fill(.ultraThinMaterial)
-                        .shadow(radius: 12, y: 4)
-                )
-                .padding(.horizontal, panelState != .collapsed ? 12 : 0)
-                .padding(.bottom, panelState != .collapsed ? 12 : 24)
-                .padding(.trailing, panelState != .collapsed ? 0 : 16)
-                .frame(maxWidth: .infinity, alignment: panelState != .collapsed ? .center : .trailing)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if panelState == .collapsed {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            panelState = panelPage == 1 ? .expanded : .compact
                         }
                     }
-                }
+                }  // end: stats-panel else
             }
-            }  // end: stats-panel else
-        }
+            .onGeometryChange(for: CGSize.self) {
+                $0.size
+            } action: {
+                cueFraming.mapSize = $0
+            }
         }  // end: GeometryReader
+        .layoutProbe("RouteDetail")
         .navigationTitle(isEditingCues ? "Cue Editor" : route.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -405,16 +364,34 @@ struct RouteDetailView: View {
                     .font(.body.weight(.semibold))
                 }
             } else {
-                if let store = routeStore {
-                    ToolbarItem(placement: .topBarTrailing) {
+                // One menu instead of separate buttons leaves the title room.
+                // Send to watch stays out front since its icon shows state.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
                         Button {
-                            _ = cueEditorHolder.ensure(for: liveRoute(store: store), routeStore: store)
-                            withAnimation { isEditingCues = true }
+                            exportGPX()
                         } label: {
-                            Image(systemName: "pencil.and.list.clipboard")
+                            Label("Export GPX", systemImage: "square.and.arrow.up")
+                        }
+                        if let store = routeStore {
+                            Button {
+                                _ = cueEditorHolder.ensure(
+                                    for: liveRoute(store: store), routeStore: store)
+                                withAnimation { isEditingCues = true }
+                            } label: {
+                                Label("Edit Cues", systemImage: "pencil.and.list.clipboard")
+                            }
+                        }
+                        MapMenuSection(showPhoneSettings: $showPhoneSettings)
+                    } label: {
+                        if isExportingGPX {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "ellipsis.circle")
                                 .font(.title3)
                         }
                     }
+                    .disabled(isExportingGPX)
                 }
                 if canSendToWatch {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -431,30 +408,41 @@ struct RouteDetailView: View {
                                     ProgressView()
                                 } else if isQueued {
                                     Image(systemName: "clock.arrow.circlepath")
+                                        // The clock draws wider than the circle icons at the same size.
+                                        .font(.title3)
                                 } else {
-                                    Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
+                                    Image(
+                                        systemName: isOnWatch
+                                            ? "checkmark.circle.fill" : "arrow.up.circle")
                                 }
                             }
                             .font(.title2)
-                            .foregroundStyle(buttonColor(
-                                isUploading: isUploading,
-                                isQueued: isQueued,
-                                isUploadBlocked: isUploadBlocked,
-                                isOnWatch: isOnWatch
-                            ))
+                            .foregroundStyle(
+                                buttonColor(
+                                    isUploading: isUploading,
+                                    isQueued: isQueued,
+                                    isUploadBlocked: isUploadBlocked,
+                                    isOnWatch: isOnWatch
+                                ))
                         }
                         .disabled(isUploadBlocked || isQueued)
                     }
                 }
             }
         }
+        .sheet(item: $gpxExport) { file in
+            ShareSheet(activityItems: [file.url])
+        }
+        .phoneSettingsSheet(isPresented: $showPhoneSettings)
         .alert("Route Already on Watch", isPresented: $showOverwriteAlert) {
             Button("Replace", role: .destructive) {
                 onSend()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
+            Text(
+                "\"\(route.name)\" is already on your watch. Sending will replace the existing version."
+            )
         }
         .onAppear {
             isOnScreen = true
@@ -483,18 +471,18 @@ struct RouteDetailView: View {
         }
     }
 
-    /// Pan/zoom the map to a selected waypoint. Mirrors the cue zoom's
-    /// offset so the pin sits about a third of the way down from the top of
-    /// the visible map — above the editor panel. Preserves the current map
-    /// heading since waypoints have no inherent travel direction.
+    /// Pan/zoom the map to a selected waypoint, offset so the pin sits about a
+    /// third of the way down from the top of the visible map, above the
+    /// editor panel. Preserves the current map heading since waypoints have
+    /// no inherent travel direction.
     private func zoomMapToWaypoint(_ id: UUID?) {
         guard let editor = cueEditorHolder.viewModel,
-              let id = id,
-              let wp = editor.waypointEntries.first(where: { $0.id == id }) else {
+            let id = id,
+            let wp = editor.waypointEntries.first(where: { $0.id == id })
+        else {
             return
         }
         let heading = cameraState.heading
-        // Same constants as the cue path so both feel identical.
         let centerOffsetMeters: Double = 70
         let target = shiftedCoordinate(
             from: wp.coordinate,
@@ -512,11 +500,40 @@ struct RouteDetailView: View {
         }
     }
 
+    /// Center on a tapped waypoint and zoom in, keeping the heading. Never
+    /// zooms out if the map is already closer than that.
+    private func zoomMapToPOI(_ coordinate: CLLocationCoordinate2D) {
+        let currentDistance =
+            MapCameraCache.shared.camera(for: cameraCacheKey)?.distance ?? .infinity
+        let camera = MapCamera(
+            centerCoordinate: coordinate,
+            distance: min(currentDistance, 700),
+            heading: cameraState.heading,
+            pitch: 0
+        )
+        withAnimation(.easeInOut(duration: 0.4)) {
+            mapPosition = .camera(camera)
+        }
+    }
+
     /// Look up the latest persisted version of this route — the navigation
     /// destination's `route` value is captured at push-time and won't reflect
     /// edits made after entering the screen.
     private func liveRoute(store: RouteStore) -> Route {
         store.routes.first(where: { $0.id == route.id }) ?? route
+    }
+
+    /// Exports the latest copy so cue edits made on this screen are included.
+    private func exportGPX() {
+        let current = routeStore.map(liveRoute(store:)) ?? route
+        isExportingGPX = true
+        Task.detached(priority: .userInitiated) {
+            let url = RouteStore.exportGPXFile(for: current)
+            await MainActor.run {
+                isExportingGPX = false
+                gpxExport = url.map(GPXExportFile.init)
+            }
+        }
     }
 
     /// Settled-camera handler: snapshot the visible region for annotation
@@ -526,22 +543,22 @@ struct RouteDetailView: View {
     private func handleCameraChange(_ context: MapCameraUpdateContext) {
         visibleRegion = context.region
         MapCameraCache.shared.store(context.camera, for: cameraCacheKey)
+        updateMarkerInterval(for: context.region)
+    }
 
-        let region = context.region
+    /// Re-buckets mile markers for the visible span. Does nothing until the route has loaded.
+    private func updateMarkerInterval(for region: MKCoordinateRegion) {
         let latRad = region.center.latitude * .pi / 180
-        let cosLat = cos(latRad)
-        let widthMeters = region.span.longitudeDelta * 111_320 * cosLat
+        let widthMeters = region.span.longitudeDelta * 111_320 * cos(latRad)
         let heightMeters = region.span.latitudeDelta * 111_320
-        let visibleMeters = max(widthMeters, heightMeters)
-        let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
-        if interval != currentMarkerInterval && !cachedProcessedPoints.isEmpty {
-            currentMarkerInterval = interval
-            let points = cachedProcessedPoints
-            Task.detached(priority: .userInitiated) {
-                let markers = computeMileMarkers(points: points, interval: interval)
-                await MainActor.run {
-                    if currentMarkerInterval == interval { cachedMileMarkers = markers }
-                }
+        let interval = mapZoomMarkerInterval(visibleMeters: max(widthMeters, heightMeters))
+        guard interval != currentMarkerInterval, !cachedProcessedPoints.isEmpty else { return }
+        currentMarkerInterval = interval
+        let points = cachedProcessedPoints
+        Task.detached(priority: .userInitiated) {
+            let markers = computeMileMarkers(points: points, interval: interval)
+            await MainActor.run {
+                if currentMarkerInterval == interval { cachedMileMarkers = markers }
             }
         }
     }
@@ -589,7 +606,8 @@ struct RouteDetailView: View {
     private var isZoomedIn: Bool {
         guard let r = visibleRegion else { return false }
         let latMeters = r.span.latitudeDelta * 111_320
-        let lonMeters = r.span.longitudeDelta * 111_320
+        let lonMeters =
+            r.span.longitudeDelta * 111_320
             * cos(r.center.latitude * .pi / 180)
         return max(latMeters, lonMeters) < 500
     }
@@ -605,28 +623,60 @@ struct RouteDetailView: View {
         coordinate: (Item) -> CLLocationCoordinate2D
     ) -> [AnnotationCluster<Item>] {
         // Zoomed-in or pre-first-frame → render every item as its own pin.
-        guard let r = visibleRegion, !isZoomedIn else {
+        guard !isZoomedIn else {
             return items.map {
                 AnnotationCluster(id: $0.id, center: coordinate($0), items: [$0])
             }
         }
-        // 3% of the visible span ≈ 20 pt on a phone-sized map at most zooms,
-        // roughly a pin's diameter, which is the threshold below which two
-        // pins would visually overlap.
-        let latThreshold = r.span.latitudeDelta * 0.03
-        let lonThreshold = r.span.longitudeDelta * 0.03
+        // 5% of the map's short side ≈ 20 pt on a phone, roughly a pin's
+        // diameter, which is the threshold below which two pins would
+        // visually overlap.
+        return groupByProximity(items, coordinate: coordinate, shortSideFraction: 0.05)
+    }
+
+    /// Zoomed-in turn pins that would still sit on top of each other, grouped
+    /// so each group renders as one tappable stack. Looser than the cluster
+    /// threshold (≈ 30 pt) since a pin's tap frame is wider than its dot.
+    private func stackOverlappingPins<Item: Identifiable>(
+        _ items: [Item],
+        coordinate: (Item) -> CLLocationCoordinate2D
+    ) -> [AnnotationCluster<Item>] {
+        groupByProximity(items, coordinate: coordinate, shortSideFraction: 0.08)
+    }
+
+    /// The threshold is a straight-line distance in meters, taken as a fraction
+    /// of the visible region's shorter side, so it's the same in every
+    /// direction no matter the map's shape or rotation.
+    private func groupByProximity<Item: Identifiable>(
+        _ items: [Item],
+        coordinate: (Item) -> CLLocationCoordinate2D,
+        shortSideFraction: Double
+    ) -> [AnnotationCluster<Item>] {
+        guard let r = visibleRegion else {
+            return items.map {
+                AnnotationCluster(id: $0.id, center: coordinate($0), items: [$0])
+            }
+        }
+        let cosLat = cos(r.center.latitude * .pi / 180)
+        let shortSide = min(
+            r.span.latitudeDelta * 111_320, r.span.longitudeDelta * 111_320 * cosLat)
+        let threshold = shortSide * shortSideFraction
+        let meters = { (a: CLLocationCoordinate2D, b: CLLocationCoordinate2D) -> Double in
+            let dLat = (a.latitude - b.latitude) * 111_320
+            let dLon = (a.longitude - b.longitude) * 111_320 * cosLat
+            return sqrt(dLat * dLat + dLon * dLon)
+        }
 
         var clusters: [AnnotationCluster<Item>] = []
         for item in items {
             let c = coordinate(item)
-            if let idx = clusters.firstIndex(where: { existing in
-                abs(existing.center.latitude - c.latitude) <= latThreshold
-                    && abs(existing.center.longitude - c.longitude) <= lonThreshold
-            }) {
+            if let idx = clusters.firstIndex(where: { meters($0.center, c) <= threshold }) {
                 var merged = clusters[idx].items
                 merged.append(item)
-                let avgLat = merged.reduce(0.0) { $0 + coordinate($1).latitude } / Double(merged.count)
-                let avgLon = merged.reduce(0.0) { $0 + coordinate($1).longitude } / Double(merged.count)
+                let avgLat =
+                    merged.reduce(0.0) { $0 + coordinate($1).latitude } / Double(merged.count)
+                let avgLon =
+                    merged.reduce(0.0) { $0 + coordinate($1).longitude } / Double(merged.count)
                 clusters[idx] = AnnotationCluster(
                     id: clusters[idx].id,
                     center: CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon),
@@ -638,90 +688,45 @@ struct RouteDetailView: View {
         return clusters
     }
 
-    /// At zoomed-in levels, build a map from each turn entry's id to a
-    /// "display coordinate" that fans out colocated turns along their own
-    /// approach to the intersection. Loops and double-backs put two or more
-    /// turns at the same physical coordinate; if we render them all at the
-    /// exact same point the pins stack into one tap target. Solution: keep
-    /// the first turn in each colocated group at its real coordinate, and
-    /// walk every subsequent turn back along the route by `pinSpacingMeters`
-    /// per index — so the i-th turn appears `i * spacing` meters before its
-    /// own pass through the intersection.
-    ///
-    /// Returns an empty dictionary when zoomed out (clustering handles
-    /// overlaps there) or when the route cache is not yet built.
-    private func computeColocatedTurnOffsets(_ entries: [CueEntry]) -> [CueEntryID: CLLocationCoordinate2D] {
-        guard isZoomedIn, !cachedProcessedPoints.isEmpty else { return [:] }
-        // Two turns within this much of each other are treated as "the same
-        // intersection" — tight enough that they'd visually overlap, loose
-        // enough to catch GPS jitter between repeated passes.
-        let colocationMeters: Double = 10
-        // How far apart the offset pins sit along the route. Visible at
-        // street zoom without overshooting beyond the intersection.
-        let pinSpacingMeters: Double = 18
-
-        // Group by route-distance order so the "first pass" gets the
-        // real-coordinate slot and later passes fan back.
-        let sorted = entries.sorted { $0.turn.distanceFromStart < $1.turn.distanceFromStart }
-
-        var offsets: [CueEntryID: CLLocationCoordinate2D] = [:]
-        var i = 0
-        while i < sorted.count {
-            let anchor = sorted[i].turn.coordinate
-            var j = i + 1
-            while j < sorted.count,
-                  approxMeters(anchor, sorted[j].turn.coordinate) <= colocationMeters {
-                j += 1
-            }
-            if j - i > 1 {
-                for k in 1..<(j - i) {
-                    let entry = sorted[i + k]
-                    if let coord = walkBackAlongRoute(
-                        fromIndex: entry.turn.index,
-                        meters: Double(k) * pinSpacingMeters
-                    ) {
-                        offsets[entry.id] = coord
-                    }
-                }
-            }
-            i = j
+    /// The cue group holding the editor's selection. A list tap can select a
+    /// non-anchor member, so this resolves it to the group the pin draws.
+    private func selectedCueGroupID(_ editor: CueEditorViewModel) -> CueEntryID? {
+        editor.selection.flatMap { sel in
+            editor.groupedEntries.first {
+                $0.id == sel || $0.members.contains(where: { $0.id == sel })
+            }?.id
         }
-        return offsets
     }
 
-    /// Approximate flat-earth distance between two coordinates. Plenty for
-    /// the few-meters comparisons used to detect colocated turns.
-    private func approxMeters(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
-        let dLat = (a.latitude - b.latitude) * 111_320
-        let dLon = (a.longitude - b.longitude) * 111_320
-            * cos(a.latitude * .pi / 180)
-        return sqrt(dLat * dLat + dLon * dLon)
+    /// The group drawn on top of a stack: the selected one if it's in the
+    /// stack, else the last one tapped, else the first along the route.
+    private func cueStackFront(
+        _ stack: AnnotationCluster<CueEntryGroup>,
+        editor: CueEditorViewModel
+    ) -> CueEntryID {
+        let ids = stack.items.map(\.id)
+        if let sel = selectedCueGroupID(editor), ids.contains(sel) { return sel }
+        if let last = cueStackFronts[stack.id], ids.contains(last) { return last }
+        return stack.id
     }
 
-    /// Walk backward through the processed-route points from `fromIndex`
-    /// until we've covered `meters` of along-route distance, then linearly
-    /// interpolate between the bracketing points for a precise coordinate.
-    /// Clamps to the start of the route if `meters` exceeds available
-    /// distance.
-    private func walkBackAlongRoute(fromIndex: Int, meters: Double) -> CLLocationCoordinate2D? {
-        let pts = cachedProcessedPoints
-        guard !pts.isEmpty else { return nil }
-        let start = min(max(fromIndex, 0), pts.count - 1)
-        let target = pts[start].distanceFromStart - meters
-        if target <= pts[0].distanceFromStart { return pts[0].coordinate }
-        var i = start
-        while i > 0 && pts[i].distanceFromStart > target {
-            i -= 1
+    /// First tap on a stack selects its front cue. Tapping the selected front
+    /// again moves to the next cue, wrapping back around to the first.
+    private func handleCueStackTap(
+        _ stack: AnnotationCluster<CueEntryGroup>,
+        tapped: CueEntryID,
+        editor: CueEditorViewModel
+    ) {
+        let ids = stack.items.map(\.id)
+        let front = cueStackFront(stack, editor: editor)
+        var target = tapped
+        if tapped == front, selectedCueGroupID(editor) == front,
+            let i = ids.firstIndex(of: front)
+        {
+            target = ids[(i + 1) % ids.count]
         }
-        let a = pts[i]
-        let b = i + 1 < pts.count ? pts[i + 1] : a
-        let segLen = b.distanceFromStart - a.distanceFromStart
-        let ratio = segLen > 0 ? (target - a.distanceFromStart) / segLen : 0
-        let lat = a.coordinate.latitude
-            + (b.coordinate.latitude - a.coordinate.latitude) * ratio
-        let lon = a.coordinate.longitude
-            + (b.coordinate.longitude - a.coordinate.longitude) * ratio
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        cueStackFronts[stack.id] = target
+        editor.select(target)
     }
 
     /// Tap target for a multi-item cluster — animates the camera to a region
@@ -731,7 +736,8 @@ struct RouteDetailView: View {
         let lats = coords.map(\.latitude)
         let lons = coords.map(\.longitude)
         guard let minLat = lats.min(), let maxLat = lats.max(),
-              let minLon = lons.min(), let maxLon = lons.max() else { return }
+            let minLon = lons.min(), let maxLon = lons.max()
+        else { return }
         let center = CLLocationCoordinate2D(
             latitude: (minLat + maxLat) / 2,
             longitude: (minLon + maxLon) / 2)
@@ -753,14 +759,15 @@ struct RouteDetailView: View {
         // highlights the first-pass anchor — keeps the visual consistent
         // with the displayed pin and badge.
         if let selID = editor.selection,
-           let selGroup = editor.groupedEntries.first(where: {
-               $0.id == selID || $0.members.contains(where: { $0.id == selID })
-           }) {
+            let selGroup = editor.groupedEntries.first(where: {
+                $0.id == selID || $0.members.contains(where: { $0.id == selID })
+            })
+        {
             let selEntry = selGroup.anchor
             let highlight = editor.highlightCoordinates(for: selEntry)
             if highlight.count >= 2 {
                 MapPolyline(coordinates: highlight)
-                    .stroke(.white.opacity(0.55), lineWidth: 9)
+                    .stroke(.white.opacity(0.55), style: .roundedLine(9))
                 let startBearing = RouteProcessor.bearing(from: highlight[0], to: highlight[1])
                 let endBearing = RouteProcessor.bearing(
                     from: highlight[highlight.count - 2],
@@ -777,35 +784,45 @@ struct RouteDetailView: View {
 
         // Iterate cue *groups* instead of raw entries — a loop hitting the
         // same intersection twice (same direction, same name) collapses to
-        // one group and one map pin with a "×N" badge. Across groups,
-        // zoomed-out levels still cluster into stacked icons; zoomed-in
-        // levels fan out cross-direction colocations via
-        // `computeColocatedTurnOffsets`.
-        let selectedGroupID: CueEntryID? = editor.selection.flatMap { sel in
-            editor.groupedEntries.first {
-                $0.id == sel || $0.members.contains(where: { $0.id == sel })
-            }?.id
-        }
+        // one group and one map pin with a "×N" badge. Zoomed out, nearby
+        // groups cluster into one icon that zooms in on tap. Zoomed in, pins
+        // that still overlap become one stack that cycles on tap, with the
+        // selected group included so it can sit on top of its stack.
+        let selectedGroupID = selectedCueGroupID(editor)
+        let stacking = isZoomedIn
         let visibleGroups = editor.groupedEntries.filter {
-            $0.id != selectedGroupID && inVisibleRegion($0.anchor.turn.coordinate)
+            (stacking || $0.id != selectedGroupID) && inVisibleRegion($0.anchor.turn.coordinate)
         }
-        // The offset helper still consumes [CueEntry]; group.anchor.id ==
-        // group.id, so the resulting offset map is also keyed by group id.
-        let turnOffsets = computeColocatedTurnOffsets(visibleGroups.map { $0.anchor })
-        let turnClusters = clusterAnnotations(
-            visibleGroups,
-            coordinate: { $0.anchor.turn.coordinate })
+        let turnClusters =
+            stacking
+            ? stackOverlappingPins(visibleGroups, coordinate: { $0.anchor.turn.coordinate })
+            : clusterAnnotations(visibleGroups, coordinate: { $0.anchor.turn.coordinate })
+        let selectedIsStacked = turnClusters.contains { cluster in
+            cluster.items.count > 1 && cluster.items.contains { $0.id == selectedGroupID }
+        }
         ForEach(turnClusters) { cluster in
             if cluster.items.count == 1 {
                 let group = cluster.items[0]
-                let displayCoord = turnOffsets[group.id] ?? group.anchor.turn.coordinate
-                Annotation("", coordinate: displayCoord) {
-                    CueEditorTurnPin(
+                if group.id != selectedGroupID {
+                    Annotation("", coordinate: group.anchor.turn.coordinate) {
+                        CueEditorTurnPin(
+                            editor: editor,
+                            entry: group.anchor,
+                            countBadge: group.isMultiple ? group.members.count : nil
+                        )
+                        .onTapGesture { editor.select(group.id) }
+                    }
+                }
+            } else if stacking {
+                Annotation("", coordinate: cluster.center) {
+                    CueEditorTurnPinStack(
                         editor: editor,
-                        entry: group.anchor,
-                        countBadge: group.isMultiple ? group.members.count : nil
+                        groups: cluster.items,
+                        frontID: cueStackFront(cluster, editor: editor),
+                        onTap: { tapped in
+                            handleCueStackTap(cluster, tapped: tapped, editor: editor)
+                        }
                     )
-                    .onTapGesture { editor.select(group.id) }
                 }
             } else {
                 Annotation("", coordinate: cluster.center) {
@@ -822,12 +839,12 @@ struct RouteDetailView: View {
         }
         // Selected group pin is always rendered as an individual pin (never
         // clustered), even if off-screen — the user explicitly chose it and
-        // may pan back to it. Looked up by group identity so a list tap on a
-        // non-anchor member still highlights the right pin.
-        if let sel = editor.selection,
-           let selGroup = editor.groupedEntries.first(where: {
-               $0.id == sel || $0.members.contains(where: { $0.id == sel })
-           }) {
+        // may pan back to it. A selected group inside a stack is drawn by
+        // the stack instead.
+        if !selectedIsStacked,
+            let selID = selectedGroupID,
+            let selGroup = editor.groupedEntries.first(where: { $0.id == selID })
+        {
             Annotation("", coordinate: selGroup.anchor.turn.coordinate) {
                 CueEditorTurnPin(
                     editor: editor,
@@ -875,7 +892,8 @@ struct RouteDetailView: View {
             }
         }
         if let selWPID = editor.waypointSelection,
-           let selWP = editor.waypointEntries.first(where: { $0.id == selWPID }) {
+            let selWP = editor.waypointEntries.first(where: { $0.id == selWPID })
+        {
             Annotation("", coordinate: selWP.coordinate) {
                 CueEditorWaypointPin(
                     isSelected: true,
@@ -903,7 +921,8 @@ struct RouteDetailView: View {
     /// against the imported waypoints. Mid-ride callers that don't pass
     /// `routeStore` fall back to the navigation-captured route.
     private var displayedPOIs: [DisplayedPOI] {
-        let liveRoute: Route = routeStore.flatMap { $0.routes.first(where: { $0.id == route.id }) } ?? route
+        let liveRoute: Route =
+            routeStore.flatMap { $0.routes.first(where: { $0.id == route.id }) } ?? route
         let edits = liveRoute.cueEdits
         var result: [DisplayedPOI] = []
         for wp in (liveRoute.waypoints ?? []).filter({ $0.kind == .poi }) {
@@ -912,51 +931,103 @@ struct RouteDetailView: View {
             let name = d?.titleOverride ?? wp.name
             let lat = d?.latitudeOverride ?? wp.lat
             let lon = d?.longitudeOverride ?? wp.lon
-            result.append(DisplayedPOI(
-                id: wp.id,
-                name: name,
-                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)
-            ))
+            result.append(
+                DisplayedPOI(
+                    id: wp.id,
+                    name: name,
+                    coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                ))
         }
         for added in edits?.addedPOIs ?? [] {
-            result.append(DisplayedPOI(
-                id: added.id,
-                name: added.name,
-                coordinate: CLLocationCoordinate2D(latitude: added.lat, longitude: added.lon)
-            ))
+            result.append(
+                DisplayedPOI(
+                    id: added.id,
+                    name: added.name,
+                    coordinate: CLLocationCoordinate2D(latitude: added.lat, longitude: added.lon)
+                ))
         }
         return result
     }
 
-    /// Pan/zoom the map to focus on the selected turn, oriented so the rider's
-    /// approach heading points "up", and biased so the turn sits about a third
-    /// of the way down from the top of the visible map — i.e., above the
-    /// editor panel no matter how tall the user has dragged it.
+    /// Pan/zoom the map so the selected turn's whole highlighted section,
+    /// chevrons included, fits in the part of the map above the editor panel,
+    /// oriented so the rider's approach heading points "up".
     private func zoomMapToSelection(_ sel: CueEntryID?) {
         guard let editor = cueEditorHolder.viewModel,
-              let id = sel,
-              let entry = editor.allEntries.first(where: { $0.id == id }) else {
+            let id = sel,
+            let entry = editor.allEntries.first(where: { $0.id == id })
+        else {
             return
         }
         let heading = editor.inboundBearing(for: entry)
-        // Move the camera target backward along the heading so the turn appears
-        // above the camera-center on screen. ~70m at this zoom keeps the pin
-        // comfortably above the panel without crowding the top edge.
-        let centerOffsetMeters: Double = 70
-        let target = shiftedCoordinate(
-            from: entry.turn.coordinate,
-            distanceMeters: centerOffsetMeters,
-            bearingDegrees: heading + 180
-        )
+        let origin = entry.turn.coordinate
+        let h = heading * .pi / 180
+        let cosLat = cos(origin.latitude * .pi / 180)
+
+        // Section bounds in meters along the screen's axes once the camera
+        // turns heading-up: u to the right, v up.
+        var minU = 0.0
+        var maxU = 0.0
+        var minV = 0.0
+        var maxV = 0.0
+        for c in editor.highlightCoordinates(for: entry) {
+            let x = (c.longitude - origin.longitude) * 111_320 * cosLat
+            let y = (c.latitude - origin.latitude) * 111_320
+            let u = x * cos(h) - y * sin(h)
+            let v = x * sin(h) + y * cos(h)
+            minU = min(minU, u)
+            maxU = max(maxU, u)
+            minV = min(minV, v)
+            maxV = max(maxV, v)
+        }
+
+        // Padding keeps the chevrons, pins and map controls off the edges. The
+        // minimum span stops a tight turn from zooming in to a single building.
+        let edgePadding: CGFloat = 48
+        let minSpanMeters = 120.0
+        let mapSize = cueFraming.mapSize
+        let panelHeight = cueFraming.panelHeight
+        let freeWidth = Double(max(mapSize.width - 2 * edgePadding, 100))
+        let freeHeight = Double(max(mapSize.height - panelHeight - 2 * edgePadding, 100))
+        let metersPerPoint = max(
+            max(maxU - minU, minSpanMeters) / freeWidth,
+            max(maxV - minV, minSpanMeters) / freeHeight)
+
+        // The camera centers on the full map, so put the section's middle half
+        // a panel height above that to center it in the uncovered area.
+        let midU = (minU + maxU) / 2
+        let midV = (minV + maxV) / 2 - Double(panelHeight) / 2 * metersPerPoint
+        let x = midU * cos(h) + midV * sin(h)
+        let y = -midU * sin(h) + midV * cos(h)
+        let target = CLLocationCoordinate2D(
+            latitude: origin.latitude + y / 111_320,
+            longitude: origin.longitude + x / (111_320 * cosLat))
+
         let camera = MapCamera(
             centerCoordinate: target,
-            distance: 700,             // ≈ a 250m radius framing
+            distance: metersPerPoint * (cueFraming.cameraDistanceScale ?? 900),
             heading: heading,
             pitch: 0
         )
         withAnimation(.easeInOut(duration: 0.4)) {
             mapPosition = .camera(camera)
         }
+    }
+
+    /// Measure how camera distance relates to on-screen scale by projecting a
+    /// known 100 m onto the live map, so cue framing doesn't have to guess
+    /// MapKit's field of view. Skipped while pitched, where scale varies
+    /// across the screen.
+    private func calibrateCameraScale(_ context: MapCameraUpdateContext, proxy: MapProxy) {
+        guard context.camera.pitch < 5 else { return }
+        let center = context.camera.centerCoordinate
+        let north = shiftedCoordinate(from: center, distanceMeters: 100, bearingDegrees: 0)
+        guard let a = proxy.convert(center, to: .local),
+            let b = proxy.convert(north, to: .local)
+        else { return }
+        let points = hypot(b.x - a.x, b.y - a.y)
+        guard points > 1 else { return }
+        cueFraming.cameraDistanceScale = context.camera.distance / (100 / Double(points))
     }
 
     /// Great-circle shift of a coordinate by a given distance along a bearing.
@@ -971,17 +1042,19 @@ struct RouteDetailView: View {
         let lon1 = coord.longitude * .pi / 180
         let angular = distanceMeters / R
         let lat2 = asin(sin(lat1) * cos(angular) + cos(lat1) * sin(angular) * cos(bearing))
-        let lon2 = lon1 + atan2(
-            sin(bearing) * sin(angular) * cos(lat1),
-            cos(angular) - sin(lat1) * sin(lat2)
-        )
+        let lon2 =
+            lon1
+            + atan2(
+                sin(bearing) * sin(angular) * cos(lat1),
+                cos(angular) - sin(lat1) * sin(lat2)
+            )
         return CLLocationCoordinate2D(
             latitude: lat2 * 180 / .pi,
             longitude: lon2 * 180 / .pi
         )
     }
 
-    private let minElevDiff: Double = 50 // meters — minimum difference to show markers
+    private let minElevDiff: Double = 50  // meters — minimum difference to show markers
 
     /// Two-phase background load: publish the plain route line as soon as
     /// the coordinates are mapped, then the derived data (processed points,
@@ -1007,14 +1080,15 @@ struct RouteDetailView: View {
                 for i in 0..<pts.count {
                     if i > 0 {
                         let prev = CLLocation(latitude: pts[i - 1].lat, longitude: pts[i - 1].lon)
-                        let cur  = CLLocation(latitude: pts[i].lat,     longitude: pts[i].lon)
+                        let cur = CLLocation(latitude: pts[i].lat, longitude: pts[i].lon)
                         cumDist += cur.distance(from: prev)
                     }
-                    processed.append(ProcessedPoint(
-                        coordinate: coords[i],
-                        elevation: pts[i].elevation,
-                        distanceFromStart: cumDist,
-                        bearingToNext: 0))
+                    processed.append(
+                        ProcessedPoint(
+                            coordinate: coords[i],
+                            elevation: pts[i].elevation,
+                            distanceFromStart: cumDist,
+                            bearingToNext: 0))
                 }
                 markers = computeMileMarkers(points: processed)
             }
@@ -1022,10 +1096,11 @@ struct RouteDetailView: View {
             var extremes: (high: TrackPoint, low: TrackPoint)? = nil
             let withElev = pts.filter { $0.elevation != nil }
             if let highest = withElev.max(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-               let lowest  = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
-               let highElev = highest.elevation,
-               let lowElev  = lowest.elevation,
-               highElev - lowElev >= minElevDiff {
+                let lowest = withElev.min(by: { ($0.elevation ?? 0) < ($1.elevation ?? 0) }),
+                let highElev = highest.elevation,
+                let lowElev = lowest.elevation,
+                highElev - lowElev >= minElevDiff
+            {
                 extremes = (highest, lowest)
             }
 
@@ -1037,8 +1112,9 @@ struct RouteDetailView: View {
         }.value
 
         cachedProcessedPoints = built.processedPoints
-        // A camera-driven re-bucket may have already produced markers at the
-        // right interval — don't clobber them with the default-interval set.
+        // The first camera frame may have come before the route loaded, so
+        // size the markers for it now instead of showing the default spacing.
+        if let region = visibleRegion { updateMarkerInterval(for: region) }
         if currentMarkerInterval == 0 { cachedMileMarkers = built.mileMarkers }
         cachedElevationExtremes = built.elevationExtremes
         cachedElevationData = built.elevationData
@@ -1046,6 +1122,26 @@ struct RouteDetailView: View {
 
     /// Binary-search the processed points' cumulative distances, then
     /// interpolate within the bracketing segment.
+    private var routeLinePieces: [MapLinePiece] {
+        let pts = cachedProcessedPoints
+        guard let zoom = chartZoom, pts.count == cachedCoordinates.count, pts.count >= 2 else {
+            return [MapLinePiece(id: "route", coords: cachedCoordinates, color: .blue)]
+        }
+        return trackPieces(
+            outside: zoom, from: 0, to: pts.count - 1, count: pts.count,
+            distance: { pts[$0].distanceFromStart }, coordinate: { pts[$0].coordinate }
+        ).enumerated().map { MapLinePiece(id: "route-\($0.offset)", coords: $0.element, color: .blue) }
+    }
+
+    /// The route's own points across the zoomed stretch.
+    private func zoomCoordinates(_ range: ClosedRange<Double>) -> [CLLocationCoordinate2D] {
+        let pts = cachedProcessedPoints
+        return trackCoordinates(
+            in: range, count: pts.count,
+            distance: { pts[$0].distanceFromStart },
+            coordinate: { pts[$0].coordinate })
+    }
+
     private func interpolateRouteCoordinate(at targetDist: Double) -> CLLocationCoordinate2D? {
         let pts = cachedProcessedPoints
         guard pts.count >= 2 else { return nil }
@@ -1053,7 +1149,8 @@ struct RouteDetailView: View {
             return pts.last?.coordinate
         }
 
-        var lo = 0, hi = pts.count - 1
+        var lo = 0
+        var hi = pts.count - 1
         while lo + 1 < hi {
             let mid = (lo + hi) / 2
             if pts[mid].distanceFromStart < targetDist { lo = mid } else { hi = mid }
@@ -1074,7 +1171,7 @@ private struct RouteDetailCache {
     let processedPoints: [ProcessedPoint]
     let mileMarkers: [MileMarker]
     let elevationExtremes: (high: TrackPoint, low: TrackPoint)?
-    let elevationData: [ProcessedPoint]
+    let elevationData: [RouteElevationPoint]
 }
 
 /// Minimal POI shape for the default route-detail map. We keep our own struct
@@ -1094,10 +1191,46 @@ private struct StatItem: View {
         VStack(spacing: 2) {
             Text(value)
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
     }
 }
 
+/// Sizes the cue editor needs to frame a selected turn. A plain class, not
+/// observable, so writing to it never re-renders anything.
+final class CueFramingMetrics {
+    var mapSize: CGSize = .zero
+    var panelHeight: CGFloat = 0
+    /// Camera distance divided by meters per point at pitch 0, measured from
+    /// the live map. Nil until the map has drawn a frame.
+    var cameraDistanceScale: Double?
+}
+
+#Preview("Stat cells, long values", traits: .sizeThatFitsLayout) {
+    let stats: [(label: String, value: String)] = [
+        ("Distance", "181.4 mi"), ("Elev Gain", "12,480 ft"), ("Elev Loss", "12,395 ft"),
+    ]
+    VStack(spacing: 16) {
+        ForEach([DynamicTypeSize.large, .xLarge, .xxLarge], id: \.self) { size in
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
+                ForEach(stats, id: \.label) { StatItem(label: $0.label, value: $0.value) }
+            }
+            .environment(\.dynamicTypeSize, size)
+            Divider()
+        }
+    }
+    .padding()
+    .frame(width: 375)
+}
+
+/// A GPX file ready for the share sheet.
+struct GPXExportFile: Identifiable {
+    let url: URL
+    var id: URL { url }
+}

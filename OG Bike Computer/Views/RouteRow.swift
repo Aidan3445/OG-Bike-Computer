@@ -25,13 +25,9 @@ struct RouteRow: View {
     var body: some View {
         let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(route.name)
-                    .font(.headline)
-                if let source = route.source {
-                    ServiceBadge(service: source.service)
-                }
-            }
+            Text(route.name)
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
                 if canSendToWatch {
                     Button {
@@ -47,11 +43,14 @@ struct RouteRow: View {
                                 ProgressView()
                             } else if isQueued {
                                 Image(systemName: "clock.arrow.circlepath")
+                                    // The clock draws wider than the circle icons at the same size.
+                                    .font(.title3)
                             } else {
                                 Image(systemName: isOnWatch ? "checkmark.circle.fill" : "arrow.up.circle")
                             }
                         }
                         .font(.title2)
+                        .frame(width: 28, height: 28)
                         .foregroundStyle(buttonColor(
                             isUploading: isUploading,
                             isQueued: isQueued,
@@ -63,12 +62,15 @@ struct RouteRow: View {
                     .disabled(isUploadBlocked || isQueued)
                 }
 
-                Label(formatDistance(route.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                Label(formatDistance(route.distance, grouped: true), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                 if route.elevationGain > 0 {
-                    Label(formatElevation(route.elevationGain), systemImage: "arrow.up.right")
+                    Label(formatElevation(route.elevationGain, grouped: true), systemImage: "arrow.up.right")
                 }
                 if route.elevationLoss > 0 {
-                    Label(formatElevation(route.elevationLoss), systemImage: "arrow.down.right")
+                    Label(formatElevation(route.elevationLoss, grouped: true), systemImage: "arrow.down.right")
+                }
+                if let source = route.source {
+                    ServiceBadge(service: source.service)
                 }
             }
             .labelStyle(StatLabelStyle())
@@ -94,6 +96,7 @@ struct RouteRow: View {
         } message: {
             Text("\"\(route.name)\" is already on your watch. Sending will replace the existing version.")
         }
+        .selectAllOnEdit(when: showRenameSheet)
         .alert("Rename Route", isPresented: $showRenameSheet) {
             TextField("Route name", text: $editedName)
             Button("Save") {
@@ -106,3 +109,34 @@ struct RouteRow: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Big numbers") {
+    // About 2,000 mi with steady climbing, so every stat passes 1,000.
+    let points = (0..<2_000).map { i in
+        TrackPoint(lat: 30 + Double(i) * 0.0145, lon: -100, elevation: Double(i % 40) * 25)
+    }
+    List {
+        RouteRow(route: Route(name: "London to Edinburgh - August 2027", points: points),
+                 isOnWatch: true, isUploading: false, isQueued: false, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+    }
+}
+
+#Preview("Send states") {
+    let points = (0..<200).map { i in
+        TrackPoint(lat: 41.9 + Double(i) * 0.001, lon: -87.7, elevation: 180)
+    }
+    let route = Route(name: "Lakefront Loop", points: points)
+    List {
+        RouteRow(route: route, isOnWatch: false, isUploading: false, isQueued: false, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+        RouteRow(route: route, isOnWatch: false, isUploading: true, isQueued: false, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+        RouteRow(route: route, isOnWatch: false, isUploading: false, isQueued: true, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+        RouteRow(route: route, isOnWatch: true, isUploading: false, isQueued: false, isUploadBlocked: false,
+                 canSendToWatch: true, onSend: {}, onRename: { _ in })
+    }
+}
+#endif

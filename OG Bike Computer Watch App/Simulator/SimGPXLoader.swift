@@ -14,15 +14,41 @@ struct SimGPXLoader {
     struct SimTrack {
         let name: String
         let locations: [CLLocation]
+        /// One per location, nil where the point has no heart rate.
+        let heartRates: [Double?]
     }
 
-   static func loadAll() -> [SimTrack] {
+    /// Bundled GPX files ending in this are nav routes for the sim, not rides.
+    static let routeSuffix = "_route.gpx"
+
+    static func loadAll() -> [SimTrack] {
+        let urls = bundledGPX().filter { !$0.lastPathComponent.hasSuffix(routeSuffix) }
+        print("[Sim] Found \(urls.count) GPX rides")
+        return urls.compactMap { load(url: $0) }
+    }
+
+    /// Scenario routes bundled with the watch, so sims can run against them
+    /// without sending them from the phone.
+    static func loadRoutes() -> [Route] {
+        bundledGPX()
+            .filter { $0.lastPathComponent.hasSuffix(routeSuffix) }
+            .compactMap { load(url: $0) }
+            .map { track in
+                Route(
+                    name: track.name,
+                    points: track.locations.map {
+                        TrackPoint(lat: $0.coordinate.latitude, lon: $0.coordinate.longitude, elevation: $0.altitude)
+                    })
+            }
+            .sorted { $0.name < $1.name }
+    }
+
+    private static func bundledGPX() -> [URL] {
         guard let urls = Bundle.main.urls(forResourcesWithExtension: "gpx", subdirectory: nil) else {
             print("[Sim] No GPX files found in bundle")
             return []
         }
-        print("[Sim] Found \(urls.count) GPX files")
-        return urls.compactMap { load(url: $0) }
+        return urls
     }
 
     static func load(url: URL) -> SimTrack? {
@@ -38,13 +64,14 @@ struct SimGPXLoader {
         }
         let name = parser.trackName ?? url.deletingPathExtension().lastPathComponent
         print("[Sim] Loaded \(name): \(locations.count) points")
-        return SimTrack(name: name, locations: locations)
+        return SimTrack(name: name, locations: locations, heartRates: parser.heartRates)
     }
 }
 
 private class SimGPXParser: NSObject, XMLParserDelegate {
     var trackName: String?
     private(set) var locations: [CLLocation] = []
+    private(set) var heartRates: [Double?] = []
 
     private var currentElement = ""
     private var currentText = ""
@@ -53,6 +80,7 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
     private var currentLon: Double?
     private var currentEle: Double?
     private var currentTime: Date?
+    private var currentHR: Double?
 
     private var inTrkpt = false
     private var inTrkName = false
@@ -88,6 +116,7 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
             currentLon = attributes["lon"].flatMap(Double.init)
             currentEle = nil
             currentTime = nil
+            currentHR = nil
         }
 
         if element == "name" && !inTrkpt && trackName == nil {
@@ -109,6 +138,9 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
             } else if element == "time" {
                 currentTime = dateFormatter.date(from: trimmed)
                     ?? dateFormatterNoFrac.date(from: trimmed)
+            } else if element == "hr" || element.hasSuffix(":hr") {
+                // TrackPointExtension heart rate, under whatever prefix the exporter used.
+                currentHR = Double(trimmed)
             } else if element == "trkpt" || element == "rtept" {
                 if let lat = currentLat, let lon = currentLon {
                     let location = CLLocation(
@@ -120,6 +152,7 @@ private class SimGPXParser: NSObject, XMLParserDelegate {
                         speed: -1,
                         timestamp: currentTime ?? Date())
                     locations.append(location)
+                    heartRates.append(currentHR)
                 }
                 inTrkpt = false
             }

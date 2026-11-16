@@ -15,13 +15,23 @@ struct RouteList: View {
     @ObservedObject var simulator: RideSimulator
     #endif
     @ObservedObject private var unitState = UnitState.shared
+    /// True while a screen is pushed, so ContentView can keep History out of reach.
+    @Binding var isShowingDetail: Bool
 
+    @State private var path: [Destination] = []
     @State private var showHeldRideAlert = false
     @State private var showDiscardConfirmation = false
+    #if DEBUG
+    @State private var showSimulator = false
+    #endif
+
+    private enum Destination: Hashable {
+        case start(Route?)
+    }
 
     var body: some View {
         let _ = unitState.preferences // register dependency so list re-renders on unit change
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if store.routes.isEmpty {
                     ScrollView {
@@ -42,9 +52,7 @@ struct RouteList: View {
                                 heldRideButton(held)
                             }
 
-                            NavigationLink {
-                                StartRideView(route: nil, workout: workout, rideStore: rideStore)
-                            } label: {
+                            NavigationLink(value: Destination.start(nil)) {
                                 Label("Free Ride", systemImage: "record.circle")
                                     .frame(maxWidth: .infinity)
                             }
@@ -58,15 +66,13 @@ struct RouteList: View {
                             heldRideButton(held)
                         }
 
-                        NavigationLink {
-                            StartRideView(route: nil, workout: workout, rideStore: rideStore)
-                        } label: {
+                        NavigationLink(value: Destination.start(nil)) {
                             Label("Free Ride", systemImage: "record.circle")
                                 .foregroundStyle(.orange)
                         }
 
                         ForEach(store.routes) { route in
-                            NavigationLink(value: route) {
+                            NavigationLink(value: Destination.start(route)) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(route.name)
                                         .font(.headline)
@@ -83,8 +89,8 @@ struct RouteList: View {
                         }
 
                         #if DEBUG
-                        NavigationLink {
-                            SimulationView(store: store, workout: workout, simulator: simulator)
+                        Button {
+                            showSimulator = true
                         } label: {
                             Label("Simulate", systemImage: "play.circle")
                         }
@@ -103,11 +109,30 @@ struct RouteList: View {
                     }
                     .id(unitState.preferences)
                     .navigationTitle("Routes")
-                    .navigationDestination(for: Route.self) { route in
-                        StartRideView(route: route, workout: workout, rideStore: rideStore)
-                    }
                 }
             }
+            .navigationDestination(for: Destination.self) { destination in
+                switch destination {
+                case .start(let route):
+                    StartRideView(route: route, workout: workout, rideStore: rideStore)
+                }
+            }
+        }
+        #if DEBUG
+        // A sheet, not a push, so its list isn't fighting the home page's
+        // vertical paging for scroll.
+        .sheet(isPresented: $showSimulator) {
+            NavigationStack {
+                SimulationView(store: store, workout: workout, simulator: simulator)
+            }
+        }
+        #endif
+        .onChange(of: path) { _, newPath in
+            isShowingDetail = !newPath.isEmpty
+        }
+        // The path resets when a ride takes over the screen, so resync on return.
+        .onAppear {
+            isShowingDetail = !path.isEmpty
         }
     }
 

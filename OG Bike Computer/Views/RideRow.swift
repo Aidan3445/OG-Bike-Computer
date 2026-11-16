@@ -19,52 +19,50 @@ struct RideRow: View {
     var body: some View {
         let _ = unitState.preferences
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top) {
-                Image(systemName: ride.activityType.icon)
-                    .foregroundStyle(.secondary)
-                Text(ride.name)
-                    .font(.headline)
-                if let uploads = ride.uploads, !uploads.isEmpty {
-                    // Show one badge per service (deduplicate in case of retransmit duplicates)
-                    let uniqueServices = uploads.uniqueByService()
-                    ForEach(uniqueServices) { upload in
-                        ServiceBadge(service: upload.service)
+            // Everything but the name sits on the date line so the name gets the full width.
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: ride.activityType.icon)
+                    Text(ride.date.formatted(date: .abbreviated, time: .shortened))
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    if ride.wasAutoFinalized == true {
+                        Image(systemName: "exclamationmark.circle")
+                            .help("Auto-saved when a new ride started")
                     }
-                }
-                if ride.wasAutoFinalized == true {
-                    Image(systemName: "exclamationmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .help("Auto-saved when a new ride started")
-                }
-                if isTransferring {
-                    HStack(spacing: 4) {
+                    if isTransferring {
                         ProgressView()
                             .scaleEffect(0.7)
                             .frame(width: 14, height: 14)
                     }
+                    Spacer(minLength: 0)
+                    if let uploads = ride.uploads, !uploads.isEmpty {
+                        // One badge per service, in case a retransmit duplicated a record
+                        HStack(spacing: 4) {
+                            ForEach(uploads.uniqueByService()) { upload in
+                                ServiceBadge(service: upload.service)
+                            }
+                        }
+                    }
                 }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(ride.date, style: .date)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(ride.date, style: .time)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Text(ride.name)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow {
-                    Label(formatDistance(ride.distance), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationGain) : "—", systemImage: "arrow.up.right")
-                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationLoss) : "—", systemImage: "arrow.down.right")
+                    Label(formatDistance(ride.distance, grouped: true), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationGain, grouped: true) : "—", systemImage: "arrow.up.right")
+                    Label(ride.elevationGain > 0 ? formatElevation(ride.elevationLoss, grouped: true) : "—", systemImage: "arrow.down.right")
                 }
                 GridRow {
                     Label(formatTime(ride.movingTime), systemImage: "clock")
                     Label(formatSpeed(ride.avgSpeed), systemImage: "speedometer")
-                    Label(String(format: "%.0f cal", ride.calories), systemImage: "flame")
+                    Label(formatCalories(ride.calories, grouped: true), systemImage: "flame")
                 }
             }
             .labelStyle(StatLabelStyle())
@@ -81,6 +79,7 @@ struct RideRow: View {
             }
             .tint(.orange)
         }
+        .selectAllOnEdit(when: showRenameSheet)
         .alert("Rename Ride", isPresented: $showRenameSheet) {
             TextField("Ride name", text: $editedName)
             Button("Save") {
@@ -93,3 +92,23 @@ struct RideRow: View {
         }
     }
 }
+
+#if DEBUG
+extension RideSummary {
+    /// A ride with every stat past 1,000, to check how separators fit.
+    static func previewLong(name: String = "Day 117 - Oak Harbor to Port Angeles", onHold: Bool = false) -> RideSummary {
+        RideSummary(id: UUID(), name: name, activityType: .cycling, date: Date(),
+                    elapsedTime: 15 * 3600, movingTime: 11 * 3600 + 42 * 60, distance: 1_852_000,
+                    calories: 12_345, elevationGain: 9_524, elevationLoss: 8_731,
+                    avgSpeed: 7.3, pointCount: 0, trackFilename: "preview.track",
+                    isOnHold: onHold)
+    }
+}
+
+#Preview("Big numbers") {
+    List {
+        RideRow(ride: .previewLong(), onRename: { _ in })
+        RideRow(ride: .previewLong(name: "Short name"), onRename: { _ in })
+    }
+}
+#endif

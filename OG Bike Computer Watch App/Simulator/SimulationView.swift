@@ -15,6 +15,7 @@ struct SimulationView: View {
 
     @State private var selectedRoute: Route?
     @State private var simTracks: [SimGPXLoader.SimTrack] = []
+    @State private var simRoutes: [Route] = []
     @State private var selectedTrack: SimGPXLoader.SimTrack?
     @State private var isLoading = false
 
@@ -42,7 +43,7 @@ struct SimulationView: View {
                                 .font(.caption2)
                         }
                     } else {
-                        ForEach(store.routes) { route in
+                        ForEach(store.routes + simRoutes) { route in
                             Button(route.name) { selectedRoute = route }
                                 .font(.caption)
                         }
@@ -83,12 +84,17 @@ struct SimulationView: View {
                     }
                 }
 
-                if selectedRoute != nil && simulator.isLoaded {
+                // The simulator keeps its last track loaded, so check the pick too.
+                if selectedTrack != nil && simulator.isLoaded {
                     Section {
-                        Button("Start Simulation") {
+                        Button(selectedRoute == nil ? "Start Free Ride" : "Start Simulation") {
                             startSimulation()
                         }
                         .tint(.green)
+                    } footer: {
+                        if selectedRoute == nil {
+                            Text("No nav route picked, so this replays as a free ride.")
+                        }
                     }
                 }
             }
@@ -98,11 +104,20 @@ struct SimulationView: View {
             if simTracks.isEmpty {
                 simTracks = SimGPXLoader.loadAll()
             }
+            if simRoutes.isEmpty {
+                simRoutes = SimGPXLoader.loadRoutes()
+            }
         }
     }
 
     private func startSimulation() {
-        guard let route = selectedRoute else { return }
+        guard let route = selectedRoute else {
+            workout.clearRoute()
+            workout.startSimulation(activity: .cycling)
+            simulator.attach(to: workout)
+            simulator.play()
+            return
+        }
         isLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
             workout.loadRoute(route)

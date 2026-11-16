@@ -55,6 +55,274 @@ struct RouteMapData {
     var hasRoute: Bool { processedRoute != nil }
 }
 
+extension Color {
+    /// Completed part of a route. Dark enough that it never matches any hue
+    /// in the rainbow route color.
+    static let riddenRoute = Color(red: 0, green: 0.45, blue: 0.15)
+}
+
+// MARK: - Route line layout
+
+/// How far around the rider the route is drawn thick. Past this it's drawn
+/// thin and dimmer so the stretch immediately ahead stands out on winding
+/// roads. Both breadcrumb renderers share these so switching between them
+/// (like when the screen dims) doesn't move the boundary.
+enum RouteLineLayout {
+    static func nearBehind(_ viewDistance: Double) -> Double { viewDistance }
+    static func nearAhead(_ viewDistance: Double) -> Double { viewDistance * 2.5 }
+    static let nearLineWidth: CGFloat = 6
+    static let farLineWidth: CGFloat = 3
+    /// Solid colors dim the far line with opacity. The rainbow can't, since
+    /// it's drawn in pieces and overlapping round caps would stack into darker
+    /// dots, so it uses darker opaque colors instead.
+    static let farOpacity: Double = 0.5
+}
+
+extension StrokeStyle {
+    /// Rounded caps and joins for route lines. The default miter join spikes
+    /// on sharp corners, and butt caps leave notches where pieces meet.
+    static func roundedLine(_ width: CGFloat) -> StrokeStyle {
+        StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)
+    }
+}
+
+// MARK: - Rainbow route
+
+/// Colors for the rainbow route. Hue is measured in cycles along the line and
+/// wraps red to red, so the fade has no bands or seam. Hue is pinned to the
+/// line rather than animated, so riding faster just moves you through the
+/// colors faster.
+enum RouteRainbow {
+    /// Free-ride trails: each stretch adds hue based on how fast it was
+    /// ridden. Meters per cycle is this divided by speed in m/s, which works
+    /// out to 2.5 mi per rainbow at 20 mph and 5 mi at 10 mph.
+    static let trailCycleConstant: Double = 35_972
+
+    struct Vertex {
+        var point: CGPoint
+        var cycle: Double
+    }
+
+    /// Planned routes: one full rainbow every two default-zoom distances, so a
+    /// 1/4 mi default zoom cycles every 1/2 mi. It follows the default zoom
+    /// rather than the current one so zooming doesn't recolor the route.
+    static func routeWavelength(defaultZoom: Double) -> Double {
+        defaultZoom * 2
+    }
+
+    static func routeCycle(at distance: Double, defaultZoom: Double) -> Double {
+        distance / routeWavelength(defaultZoom: defaultZoom)
+    }
+
+    /// `dimmed` is the far route line's color, darker but still opaque.
+    static func color(cycle: Double, dimmed: Bool = false) -> Color {
+        var hue = cycle.truncatingRemainder(dividingBy: 1)
+        if hue < 0 { hue += 1 }
+        return Color(hue: hue, saturation: 0.85, brightness: dimmed ? 0.5 : 1)
+    }
+
+    struct MapSegment {
+        let id: Int
+        let coordinates: [CLLocationCoordinate2D]
+        let color: Color
+    }
+
+    /// Solid-color polylines for MapKit, one per small step of hue. MapKit
+    /// doesn't lay a gradient along a polyline's length, so the fade is built
+    /// from steps small enough to read as smooth. Step `k` always covers the
+    /// same stretch of route, so it keeps its id, shape and color as the rider
+    /// moves and MapKit only has to add or drop pieces at the ends. Each piece
+    /// is clipped to `range`.
+    static func mapSegments(along points: [ProcessedPoint], steps: [Int], clampedTo range: ClosedRange<Double>,
+                            defaultZoom: Double, stepsPerCycle: Int, dimmed: Bool) -> [MapSegment] {
+        guard points.count >= 2 else { return [] }
+        let step = routeWavelength(defaultZoom: defaultZoom) / Double(stepsPerCycle)
+        return steps.compactMap { k in
+            let a = max(Double(k) * step, range.lowerBound)
+            let b = min(Double(k + 1) * step, range.upperBound)
+            guard b > a else { return nil }
+            var i = index(atOrBefore: a, in: points)
+            var coordinates = [coordinate(at: a, in: points, hint: &i)]
+            var j = i + 1
+            while j < points.count && points[j].distanceFromStart < b {
+                coordinates.append(points[j].coordinate)
+                j += 1
+            }
+            var h = min(max(j - 1, 0), points.count - 2)
+            coordinates.append(coordinate(at: b, in: points, hint: &h))
+            let hue = (Double(k) + 0.5) / Double(stepsPerCycle)
+            return MapSegment(id: k, coordinates: coordinates, color: color(cycle: hue, dimmed: dimmed))
+        }
+    }
+
+    /// Free-ride trail as MapKit polylines, one per small step of hue, thinned
+    /// to about 500 points like the canvas.
+    static func trailMapSegments(_ trail: [CLLocation], stepsPerCycle: Int = 24) -> [MapSegment] {
+        guard trail.count >= 2 else { return [] }
+        let cycles = cycles(for: trail)
+        let every = max(1, trail.count / 500)
+        var indices = Array(Swift.stride(from: 0, to: trail.count, by: every))
+        if indices.last != trail.count - 1 { indices.append(trail.count - 1) }
+        let perCycle = Double(stepsPerCycle)
+        var segments: [MapSegment] = []
+        var coordinates = [trail[indices[0]].coordinate]
+        var step = Int((cycles[indices[0]] * perCycle).rounded(.down))
+        for i in indices.dropFirst() {
+            coordinates.append(trail[i].coordinate)
+            let next = Int((cycles[i] * perCycle).rounded(.down))
+            if next != step || i == trail.count - 1 {
+                segments.append(MapSegment(
+                    id: segments.count, coordinates: coordinates,
+                    color: color(cycle: (Double(step) + 0.5) / perCycle)))
+                coordinates = [trail[i].coordinate]
+                step = next
+            }
+        }
+        return segments
+    }
+
+    /// Index of the last point at or before `distance`, kept to a valid segment start.
+    static func index(atOrBefore distance: Double, in points: [ProcessedPoint]) -> Int {
+        var lo = 0, hi = points.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if points[mid].distanceFromStart <= distance { lo = mid } else { hi = mid - 1 }
+        }
+        return min(lo, points.count - 2)
+    }
+
+    private static func coordinate(at distance: Double, in points: [ProcessedPoint],
+                                   hint i: inout Int) -> CLLocationCoordinate2D {
+        while i < points.count - 2 && points[i + 1].distanceFromStart < distance { i += 1 }
+        let a = points[i], b = points[i + 1]
+        let span = b.distanceFromStart - a.distanceFromStart
+        let t = span > 0 ? min(max((distance - a.distanceFromStart) / span, 0), 1) : 0
+        return CLLocationCoordinate2D(
+            latitude: a.coordinate.latitude + (b.coordinate.latitude - a.coordinate.latitude) * t,
+            longitude: a.coordinate.longitude + (b.coordinate.longitude - a.coordinate.longitude) * t)
+    }
+
+    private static var trailCycles: [Double] = []
+    private static var trailStart: Date?
+
+    /// Hue position of every trail point. The trail only grows during a ride,
+    /// so new points are added onto the cached values instead of redoing the
+    /// whole ride each redraw.
+    static func cycles(for trail: [CLLocation]) -> [Double] {
+        if trail.first?.timestamp != trailStart || trail.count < trailCycles.count {
+            trailCycles = []
+            trailStart = trail.first?.timestamp
+        }
+        guard !trail.isEmpty else { return [] }
+        if trailCycles.isEmpty { trailCycles.append(0) }
+        for i in trailCycles.count..<trail.count {
+            let a = trail[i - 1], b = trail[i]
+            let meters = b.distance(from: a)
+            let dt = b.timestamp.timeIntervalSince(a.timestamp)
+            let speed = b.speed >= 0 ? b.speed : (dt > 0 ? meters / dt : 0)
+            // Cap GPS spikes so one bad fix can't spin through the whole rainbow.
+            trailCycles.append(trailCycles[i - 1] + meters * min(speed, 25) / trailCycleConstant)
+        }
+        return trailCycles
+    }
+
+    /// Strokes a line that fades through the rainbow along its length. The line
+    /// is drawn in short chunks, each with a linear gradient between its end
+    /// colors. A chunk only covers a small slice of hue, so the result reads
+    /// as one continuous fade.
+    static func stroke(_ vertices: [Vertex], in context: GraphicsContext, style: StrokeStyle,
+                       dimmed: Bool = false) {
+        guard vertices.count >= 2 else { return }
+        let step = 1.0 / 24
+
+        func draw(_ path: Path, from a: Vertex, to b: Vertex) {
+            let gradient = Gradient(colors: [color(cycle: a.cycle, dimmed: dimmed),
+                                             color(cycle: b.cycle, dimmed: dimmed)])
+            context.stroke(path, with: .linearGradient(gradient, startPoint: a.point, endPoint: b.point),
+                           style: style)
+        }
+
+        var chunkStart = vertices[0]
+        var chunk = Path()
+        chunk.move(to: chunkStart.point)
+        var chunkOpen = false
+        var last = chunkStart
+
+        for v in vertices.dropFirst() {
+            // Split long straight segments so the hue can't skip across them.
+            let span = v.cycle - last.cycle
+            let pieces = max(1, Int((abs(span) / step).rounded(.up)))
+            for k in 1...pieces {
+                let t = Double(k) / Double(pieces)
+                let p = Vertex(
+                    point: CGPoint(x: last.point.x + (v.point.x - last.point.x) * t,
+                                   y: last.point.y + (v.point.y - last.point.y) * t),
+                    cycle: last.cycle + span * t)
+                chunk.addLine(to: p.point)
+                chunkOpen = true
+                if abs(p.cycle - chunkStart.cycle) >= step {
+                    draw(chunk, from: chunkStart, to: p)
+                    chunkStart = p
+                    chunk = Path()
+                    chunk.move(to: p.point)
+                    chunkOpen = false
+                }
+            }
+            last = v
+        }
+        if chunkOpen {
+            draw(chunk, from: chunkStart, to: last)
+        }
+    }
+}
+
+// MARK: - Free ride framing
+
+/// What a free ride's overview frames: the trail and the rider, never
+/// tighter than `minSpan` metres. A new ride has no trail until it sets off,
+/// so the map and the rider still show while waiting.
+struct FreeRideFrame {
+    let minLat: Double, maxLat: Double, minLon: Double, maxLon: Double
+
+    static let minSpan: Double = 200
+
+    var center: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
+    }
+
+    init?(trail: [CLLocation], current: CLLocation?) {
+        var coords = trail.map(\.coordinate)
+        if let current { coords.append(current.coordinate) }
+        guard let first = coords.first else { return nil }
+        var minLat = first.latitude, maxLat = first.latitude
+        var minLon = first.longitude, maxLon = first.longitude
+        for c in coords.dropFirst() {
+            minLat = min(minLat, c.latitude)
+            maxLat = max(maxLat, c.latitude)
+            minLon = min(minLon, c.longitude)
+            maxLon = max(maxLon, c.longitude)
+        }
+        let metresPerDegree = 111_320.0
+        let minLatSpan = Self.minSpan / metresPerDegree
+        let cosLat = max(cos((minLat + maxLat) / 2 * .pi / 180), 0.01)
+        let minLonSpan = minLatSpan / cosLat
+        if maxLat - minLat < minLatSpan {
+            let mid = (minLat + maxLat) / 2
+            minLat = mid - minLatSpan / 2
+            maxLat = mid + minLatSpan / 2
+        }
+        if maxLon - minLon < minLonSpan {
+            let mid = (minLon + maxLon) / 2
+            minLon = mid - minLonSpan / 2
+            maxLon = mid + minLonSpan / 2
+        }
+        self.minLat = minLat
+        self.maxLat = maxLat
+        self.minLon = minLon
+        self.maxLon = maxLon
+    }
+}
+
 // MARK: - Full route canvas
 
 /// Renders the entire planned route (or recorded free-ride trail) fitted to
@@ -102,7 +370,7 @@ struct RouteMapFullRouteCanvas: View {
                         done.addLine(to: project(points[i].coordinate, transform: transform))
                     }
                     done.addLine(to: project(points[min(segIdx, points.count - 1)].coordinate, transform: transform))
-                    context.stroke(done, with: .color(.green),
+                    context.stroke(done, with: .color(.riddenRoute),
                                    style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 }
 
@@ -181,34 +449,37 @@ struct RouteMapFullRouteCanvas: View {
                     }
                 }
             } else {
-                // Free ride: show entire recorded path
+                // Free ride: the whole recorded trail and the rider
                 let trail = data.recordedLocations
-                guard trail.count >= 2 else { return }
-
-                var minLat = Double.greatestFiniteMagnitude, maxLat = -Double.greatestFiniteMagnitude
-                var minLon = Double.greatestFiniteMagnitude, maxLon = -Double.greatestFiniteMagnitude
-                for loc in trail {
-                    let c = loc.coordinate
-                    if c.latitude < minLat { minLat = c.latitude }
-                    if c.latitude > maxLat { maxLat = c.latitude }
-                    if c.longitude < minLon { minLon = c.longitude }
-                    if c.longitude > maxLon { maxLon = c.longitude }
-                }
+                guard let frame = FreeRideFrame(trail: trail, current: data.currentLocation) else { return }
 
                 let transform = makeTransform(
-                    minLat: minLat, maxLat: maxLat,
-                    minLon: minLon, maxLon: maxLon,
+                    minLat: frame.minLat, maxLat: frame.maxLat,
+                    minLon: frame.minLon, maxLon: frame.maxLon,
                     size: size, insetTop: insetTop, insetBottom: insetBottom, insetSide: insetSide)
                 let stride = max(1, trail.count / 500)
 
-                var path = Path()
-                path.move(to: project(trail[0].coordinate, transform: transform))
-                for i in Swift.stride(from: 1, to: trail.count, by: stride) {
-                    path.addLine(to: project(trail[i].coordinate, transform: transform))
+                let trailStyle = StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
+                // A new ride has no trail until it sets off, just the rider.
+                let hasTrail = trail.count >= 2
+                if hasTrail && routeAheadColor == .rainbow {
+                    var indices = Array(Swift.stride(from: 0, to: trail.count, by: stride))
+                    if indices.last != trail.count - 1 { indices.append(trail.count - 1) }
+                    let cycles = RouteRainbow.cycles(for: trail)
+                    let vertices = indices.map {
+                        RouteRainbow.Vertex(point: project(trail[$0].coordinate, transform: transform),
+                                            cycle: cycles[$0])
+                    }
+                    RouteRainbow.stroke(vertices, in: context, style: trailStyle)
+                } else if hasTrail {
+                    var path = Path()
+                    path.move(to: project(trail[0].coordinate, transform: transform))
+                    for i in Swift.stride(from: 1, to: trail.count, by: stride) {
+                        path.addLine(to: project(trail[i].coordinate, transform: transform))
+                    }
+                    path.addLine(to: project(trail[trail.count - 1].coordinate, transform: transform))
+                    context.stroke(path, with: .color(routeAheadColor.color), style: trailStyle)
                 }
-                path.addLine(to: project(trail[trail.count - 1].coordinate, transform: transform))
-                context.stroke(path, with: .color(routeAheadColor.color),
-                               style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
 
                 if let loc = data.currentLocation {
                     let pos = project(loc.coordinate, transform: transform)
@@ -258,13 +529,13 @@ struct RouteMapBreadcrumbCanvas: View {
     let viewDistance: Double
     var useCompassHeading: Bool = true
     var routeAheadColor: RouteColor = .white
+    /// Sets the rainbow's cycle length. See `RouteRainbow.routeWavelength`.
+    var defaultZoom: Double = 400
     /// When true, runs a TimelineView ticker to re-render at ~10Hz. The phone
     /// preview is static so it disables this.
     var animated: Bool = true
 
     @ObservedObject private var unitState = UnitState.shared
-
-    private let routeLineWidth: CGFloat = 6
 
     var body: some View {
         let _ = unitState.preferences
@@ -364,10 +635,7 @@ struct RouteMapBreadcrumbCanvas: View {
         let riderScreenY = size.height * 0.75
         let metersPerPx = min(size.width, size.height) / viewDistance
 
-        let behind = viewDistance * 1.0
-        let ahead = viewDistance * 2.5
-        let minDist = currentDist - behind
-        let maxDist = currentDist + ahead
+        let window = (currentDist - RouteLineLayout.nearBehind(viewDistance))...(currentDist + RouteLineLayout.nearAhead(viewDistance))
 
         let center = location.coordinate
         let cosLat = cos(center.latitude * .pi / 180)
@@ -383,105 +651,103 @@ struct RouteMapBreadcrumbCanvas: View {
                 y: riderScreenY - ry * metersPerPx)
         }
 
-        // Distant sections first (dimmer)
         let screenW = Double(size.width)
         let screenH = Double(size.height)
-        let margin: Double = 60
-        let visStride = max(1, points.count / 800)
+        let rainbow = routeAheadColor == .rainbow
+        let lastIdx = points.count - 1
 
-        var distantGrayPath = Path()
-        var distantGrayStarted = false
-        var distantGreenPath = Path()
-        var distantGreenStarted = false
+        // The thick window as an index range around the rider. The thin far
+        // sections start and end on these exact points so the two always meet.
+        var firstNear = segIdx
+        while firstNear > 0 && points[firstNear - 1].distanceFromStart >= window.lowerBound { firstNear -= 1 }
+        var lastNear = segIdx
+        while lastNear < lastIdx && points[lastNear + 1].distanceFromStart <= window.upperBound { lastNear += 1 }
 
-        for i in Swift.stride(from: 0, to: points.count, by: visStride) {
-            let point = points[i]
-
-            if point.distanceFromStart >= minDist - 200 && point.distanceFromStart <= maxDist + 200 {
-                if distantGrayStarted { distantGrayStarted = false }
-                if distantGreenStarted { distantGreenStarted = false }
-                continue
-            }
-
-            let pt = toScreen(point.coordinate)
-
-            guard pt.x >= -margin && pt.x <= screenW + margin &&
-                  pt.y >= -margin && pt.y <= screenH + margin else {
-                if distantGrayStarted { distantGrayStarted = false }
-                if distantGreenStarted { distantGreenStarted = false }
-                continue
-            }
-
-            if point.distanceFromStart <= currentDist {
-                if distantGrayStarted { distantGrayStarted = false }
-                if !distantGreenStarted {
-                    distantGreenPath.move(to: pt)
-                    distantGreenStarted = true
-                } else {
-                    distantGreenPath.addLine(to: pt)
-                }
-            } else {
-                if distantGreenStarted { distantGreenStarted = false }
-                if !distantGrayStarted {
-                    distantGrayPath.move(to: pt)
-                    distantGrayStarted = true
-                } else {
-                    distantGrayPath.addLine(to: pt)
-                }
-            }
+        func vertex(_ i: Int) -> RouteRainbow.Vertex {
+            RouteRainbow.Vertex(
+                point: toScreen(points[i].coordinate),
+                cycle: RouteRainbow.routeCycle(at: points[i].distanceFromStart, defaultZoom: defaultZoom))
         }
 
-        context.stroke(distantGreenPath, with: .color(.green.opacity(0.4)),
-                       style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-        context.stroke(distantGrayPath, with: .color(.gray.opacity(0.4)),
-                       style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+        func path(_ vertices: [RouteRainbow.Vertex]) -> Path {
+            var p = Path()
+            guard let first = vertices.first else { return p }
+            p.move(to: first.point)
+            for v in vertices.dropFirst() { p.addLine(to: v.point) }
+            return p
+        }
 
-        // Primary behind/ahead rendering
-        var behindPath = Path()
-        var aheadPath = Path()
-        var startedBehind = false
-        var startedAhead = false
-        var lastSX: Double = .greatestFiniteMagnitude
-        var lastSY: Double = .greatestFiniteMagnitude
-
-        var bridgePoint: CGPoint?
-
-        for point in points {
-            guard point.distanceFromStart >= minDist - 200,
-                  point.distanceFromStart <= maxDist + 200 else { continue }
-
-            let pt = toScreen(point.coordinate)
-
-            if abs(pt.x - lastSX) + abs(pt.y - lastSY) < 2 { continue }
-            lastSX = pt.x
-            lastSY = pt.y
-
-            if point.distanceFromStart <= currentDist {
-                if !startedBehind {
-                    behindPath.move(to: pt)
-                    startedBehind = true
-                } else {
-                    behindPath.addLine(to: pt)
-                }
-                bridgePoint = pt
-            } else {
-                if !startedAhead {
-                    if let bp = bridgePoint {
-                        aheadPath.move(to: bp)
-                        aheadPath.addLine(to: pt)
-                    } else {
-                        aheadPath.move(to: pt)
+        // Splits a far section into the runs that touch the screen, so long
+        // routes don't stroke thousands of offscreen segments.
+        let visibleRect = CGRect(origin: .zero, size: size).insetBy(dx: -60, dy: -60)
+        func visibleRuns(_ indices: [Int]) -> [[RouteRainbow.Vertex]] {
+            var runs: [[RouteRainbow.Vertex]] = []
+            var run: [RouteRainbow.Vertex] = []
+            var prev: RouteRainbow.Vertex?
+            for i in indices {
+                let v = vertex(i)
+                if let p = prev {
+                    let bounds = CGRect(x: min(p.point.x, v.point.x), y: min(p.point.y, v.point.y),
+                                        width: abs(p.point.x - v.point.x), height: abs(p.point.y - v.point.y))
+                        .insetBy(dx: -1, dy: -1)
+                    if bounds.intersects(visibleRect) {
+                        if run.isEmpty { run.append(p) }
+                        run.append(v)
+                    } else if !run.isEmpty {
+                        runs.append(run)
+                        run = []
                     }
-                    startedAhead = true
+                }
+                prev = v
+            }
+            if !run.isEmpty { runs.append(run) }
+            return runs
+        }
+
+        // Thick window points, skipping ones under 2px apart. The window's end
+        // points always stay so the far lines join exactly.
+        func nearVertices(_ range: ClosedRange<Int>) -> [RouteRainbow.Vertex] {
+            var out: [RouteRainbow.Vertex] = []
+            for i in range {
+                let v = vertex(i)
+                if let last = out.last, i != range.upperBound,
+                   abs(v.point.x - last.point.x) + abs(v.point.y - last.point.y) < 2 { continue }
+                out.append(v)
+            }
+            return out
+        }
+
+        let visStride = max(1, points.count / 800)
+        let farStyle = StrokeStyle(lineWidth: RouteLineLayout.farLineWidth, lineCap: .round, lineJoin: .round)
+        let nearStyle = StrokeStyle(lineWidth: RouteLineLayout.nearLineWidth, lineCap: .round, lineJoin: .round)
+
+        // Far sections first, thin, so the thick window draws over their ends.
+        if firstNear > 0 {
+            let indices = Array(Swift.stride(from: 0, to: firstNear, by: visStride)) + [firstNear]
+            for run in visibleRuns(indices) {
+                context.stroke(path(run), with: .color(.riddenRoute.opacity(0.6)), style: farStyle)
+            }
+        }
+        if lastNear < lastIdx {
+            let indices = Array(Swift.stride(from: lastNear, to: lastIdx, by: visStride)) + [lastIdx]
+            for run in visibleRuns(indices) {
+                if rainbow {
+                    RouteRainbow.stroke(run, in: context, style: farStyle, dimmed: true)
                 } else {
-                    aheadPath.addLine(to: pt)
+                    context.stroke(path(run), with: .color(routeAheadColor.color.opacity(RouteLineLayout.farOpacity)),
+                                   style: farStyle)
                 }
             }
         }
 
-        let style = StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round)
-        context.stroke(behindPath, with: .color(.green.opacity(0.4)), style: style)
-        context.stroke(aheadPath, with: .color(routeAheadColor.color), style: style)
+        let split = min(max(segIdx, firstNear), lastNear)
+        context.stroke(path(nearVertices(firstNear...split)), with: .color(.riddenRoute), style: nearStyle)
+        let aheadVertices = nearVertices(split...lastNear)
+        if rainbow {
+            RouteRainbow.stroke(aheadVertices, in: context, style: nearStyle)
+        } else {
+            context.stroke(path(aheadVertices), with: .color(routeAheadColor.color), style: nearStyle)
+        }
 
         // POI pins (breadcrumb view)
         if data.showWaypointsOnRouteMap {
@@ -656,4 +922,22 @@ fileprivate func drawWaypointPin(context: GraphicsContext, at pt: CGPoint, scale
             width: radius * 0.9,
             height: radius * 0.9)),
         with: .color(.white))
+}
+
+#Preview("Free ride, waiting to set off") {
+    RouteMapFullRouteCanvas(
+        data: RouteMapData(currentLocation: CLLocation(latitude: 42.3398, longitude: -71.0892)))
+        .frame(width: 198, height: 242)
+        .background(.black)
+}
+
+#Preview("Free ride, just set off") {
+    let start = CLLocationCoordinate2D(latitude: 42.3398, longitude: -71.0892)
+    let trail = (0..<12).map {
+        CLLocation(latitude: start.latitude + Double($0) * 0.00004, longitude: start.longitude + Double($0) * 0.00003)
+    }
+    return RouteMapFullRouteCanvas(
+        data: RouteMapData(currentLocation: trail.last, recordedLocations: trail))
+        .frame(width: 198, height: 242)
+        .background(.black)
 }

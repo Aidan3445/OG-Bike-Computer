@@ -37,6 +37,9 @@ struct VoiceAlert {
     /// by the time the queue gets around to them.
     let relevanceCheck: (() -> Bool)?
 
+    /// Plays even with voice turned off, for alerts the rider asked for by hand.
+    let ignoresVoiceToggle: Bool
+
     init(
         priority: AlertPriority,
         text: String,
@@ -45,7 +48,8 @@ struct VoiceAlert {
         alertKey: String? = nil,
         mutualCancelKey: String? = nil,
         replacesKey: String? = nil,
-        relevanceCheck: (() -> Bool)? = nil
+        relevanceCheck: (() -> Bool)? = nil,
+        ignoresVoiceToggle: Bool = false
     ) {
         self.id = UUID()
         self.priority = priority
@@ -56,6 +60,12 @@ struct VoiceAlert {
         self.mutualCancelKey = mutualCancelKey
         self.replacesKey = replacesKey
         self.relevanceCheck = relevanceCheck
+        self.ignoresVoiceToggle = ignoresVoiceToggle
+    }
+
+    /// Short tag for `events.log` lines, so one alert can be followed from queue to speech.
+    var logLabel: String {
+        "\(id.uuidString.prefix(8)) \(category ?? "-") key=\(alertKey ?? "-") p=\(priority)"
     }
 }
 
@@ -72,14 +82,16 @@ final class VoiceAlertQueue {
         // Mutual cancel: if a queued alert shares the mutual cancel key, both are removed
         if let cancelKey = alert.mutualCancelKey,
            let idx = storage.firstIndex(where: { $0.alertKey == cancelKey }) {
-            storage.remove(at: idx)
+            let cancelled = storage.remove(at: idx)
+            DiagnosticsLog.event("Voice", "mutual cancel \(alert.logLabel) with queued \(cancelled.logLabel), neither plays, queue=\(storage.count)")
             return false
         }
         // Replacement: remove any queued alert this one supersedes
         if let replacesKey = alert.replacesKey {
-            storage.removeAll { $0.alertKey == replacesKey }
+            remove(reason: "superseded by \(alert.logLabel)") { $0.alertKey == replacesKey }
         }
         storage.append(alert)
+        DiagnosticsLog.event("Voice", "enqueued \(alert.logLabel) queue=\(storage.count)")
         return true
     }
 
@@ -100,16 +112,25 @@ final class VoiceAlertQueue {
 
     /// Cancel all queued alerts of a given priority.
     func cancel(priority: AlertPriority) {
-        storage.removeAll { $0.priority == priority }
+        remove(reason: "cancelled p=\(priority)") { $0.priority == priority }
     }
 
     /// Cancel all queued alerts with a given alertKey.
     func cancel(alertKey: String) {
-        storage.removeAll { $0.alertKey == alertKey }
+        remove(reason: "cancelled key=\(alertKey)") { $0.alertKey == alertKey }
     }
 
     /// Cancel all queued alerts.
     func cancelAll() {
-        storage.removeAll()
+        remove(reason: "cancelled all") { _ in true }
+    }
+
+    private func remove(reason: String, where shouldRemove: (VoiceAlert) -> Bool) {
+        let removed = storage.filter(shouldRemove)
+        guard !removed.isEmpty else { return }
+        storage.removeAll(where: shouldRemove)
+        for alert in removed {
+            DiagnosticsLog.event("Voice", "\(reason): \(alert.logLabel)")
+        }
     }
 }

@@ -8,12 +8,38 @@
 //  lives here.
 //
 //  Because this intent is UI-free (Shortcuts / automation), it does NOT show
-//  RouteImportActionSheet.  That sheet is only displayed for interactive paths
-//  (Share Sheet via onOpenURL, file picker in ContentView).
+//  RouteImportActionSheet. Duplicates follow the action's own option instead.
 //
 
 import AppIntents
 import UniformTypeIdentifiers
+
+/// What the Import GPX Route action does when the file matches a saved route.
+enum DuplicateHandlingEnum: String, AppEnum {
+    case automatic
+    case replace
+    case keepBoth
+    case useExisting
+    case ask
+
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Duplicate Handling")
+    static var caseDisplayRepresentations: [DuplicateHandlingEnum: DisplayRepresentation] = [
+        .automatic: DisplayRepresentation(
+            title: "Automatic", subtitle: "Replace updates, reuse identical, keep renamed copies"),
+        .replace: "Replace",
+        .keepBoth: "Keep Both",
+        .useExisting: "Use Existing",
+        .ask: DisplayRepresentation(title: "Ask", subtitle: "Only when a duplicate is found. Cancel stops the shortcut"),
+    ]
+}
+
+enum ImportGPXError: Error, CustomLocalizedStringResourceConvertible {
+    case noTracks
+
+    var localizedStringResource: LocalizedStringResource {
+        "No routes found in that GPX file."
+    }
+}
 
 struct ImportGPXIntent: AppIntent {
     static var title: LocalizedStringResource = "Import GPX Route"
@@ -36,26 +62,51 @@ struct ImportGPXIntent: AppIntent {
     @Parameter(title: "Activity Type", default: .cycling)
     var activityType: ActivityTypeEnum
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
-        let data = file.data
+    @Parameter(title: "If It's a Duplicate", default: .automatic)
+    var duplicates: DuplicateHandlingEnum
 
-        // Parse + save through the shared pipeline.
-        // routeStore is nil here (intent process), so the pipeline falls back
-        // to writing JSON directly to Documents/routes/.  RouteStore will pick
-        // it up on next loadAll() when the app foregrounds (openAppWhenRun).
-        let routes = await MainActor.run {
+    static var parameterSummary: some ParameterSummary {
+        When(\.$destination, .equalTo, .phoneWatchStartRide) {
+            Summary(
+                "Import \(\.$file) to \(\.$destination) as a \(\.$activityType) ride, if it's a duplicate \(\.$duplicates)"
+            )
+        } otherwise: {
+            Summary("Import \(\.$file) to \(\.$destination), if it's a duplicate \(\.$duplicates)")
+        }
+    }
+
+    func perform() async throws -> some IntentResult & ReturnsValue<RouteEntity> & ProvidesDialog {
+        let data = file.data
+        let candidates = await MainActor.run {
             RouteImportPipeline.shared.importGPX(data: data)
         }
+        guard let first = candidates.first else { throw ImportGPXError.noTracks }
 
-        guard let route = routes.first else {
-            return .result(dialog: "Could not import GPX file — no tracks found.")
+        // Every track in the file follows the same option. The first one is
+        // the route this action hands on.
+        var resolved: [Route] = []
+        var reusedFirst = false
+        for candidate in candidates {
+            guard let duplicate = candidate.duplicate else {
+                resolved.append(candidate.route)
+                continue
+            }
+            let choice = try await choice(for: duplicate, named: candidate.route.name)
+            if candidate.id == first.id { reusedFirst = choice == .useExisting }
+            let route = await MainActor.run {
+                RouteImportPipeline.shared.resolve(candidate, as: choice)
+            }
+            resolved.append(route)
         }
-
-        let entity = await RouteEntity(id: route.id, name: route.name, distance: route.distance)
+        let route = resolved[0]
+        let entity = RouteEntity(id: route.id, name: route.name, distance: route.distance)
+        let imported =
+            reusedFirst
+            ? "\"\(route.name)\" was already imported." : "Route \"\(route.name)\" imported."
 
         switch destination {
         case .phoneOnly:
-            return .result(dialog: "Route \"\(route.name)\" imported.")
+            return .result(value: entity, dialog: "\(imported)")
 
         case .phoneAndWatch:
             let sendIntent = SendRouteToWatchIntent()
@@ -63,7 +114,7 @@ struct ImportGPXIntent: AppIntent {
             sendIntent.destination = .phoneAndWatch
             sendIntent.activityType = activityType
             _ = try await sendIntent.perform()
-            return .result(dialog: "Route \"\(route.name)\" sent to your watch.")
+            return .result(value: entity, dialog: "\(imported) Sent to your watch.")
 
         case .phoneWatchStartRide:
             let sendIntent = SendRouteToWatchIntent()
@@ -71,7 +122,28 @@ struct ImportGPXIntent: AppIntent {
             sendIntent.destination = .phoneWatchStartRide
             sendIntent.activityType = activityType
             _ = try await sendIntent.perform()
-            return .result(dialog: "Route \"\(route.name)\" sent to your watch. Starting ride.")
+            return .result(value: entity, dialog: "\(imported) Sent to your watch. Starting ride.")
+        }
+    }
+
+    private func choice(for duplicate: RouteDuplicate, named name: String) async throws
+        -> RouteDuplicateChoice
+    {
+        switch duplicates {
+        case .automatic: return duplicate.automaticChoice
+        case .replace: return .replace
+        case .keepBoth: return .keepBoth
+        case .useExisting: return .useExisting
+        case .ask:
+            // Cancelling throws, which stops the shortcut before anything is saved.
+            let picked = try await $duplicates.requestDisambiguation(
+                among: [.replace, .keepBoth, .useExisting],
+                dialog: "\(name): \(duplicate.explanation) What should Computa do?")
+            switch picked {
+            case .replace: return .replace
+            case .keepBoth: return .keepBoth
+            default: return .useExisting
+            }
         }
     }
 }

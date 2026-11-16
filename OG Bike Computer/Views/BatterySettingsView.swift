@@ -47,7 +47,7 @@ struct BatterySettingsView: View {
                         title: "Turn Notifications",
                         value: "On",
                         impact: "Low",
-                        instruction: "Toggle off in Live Activity settings."
+                        instruction: "Toggle off in Phone settings."
                     )
                 }
             } header: {
@@ -110,12 +110,12 @@ struct BatterySettingsView: View {
                 }
 
                 NavigationLink {
-                    PhoneAlertSettingsView(userSettings: userSettings)
+                    PhoneSettingsView(userSettings: userSettings)
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Live Activity")
-                            Text("Live Activity stats and optional turn notifications")
+                            Text("Phone")
+                            Text("Live Activity, turn notifications and other phone-only settings")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

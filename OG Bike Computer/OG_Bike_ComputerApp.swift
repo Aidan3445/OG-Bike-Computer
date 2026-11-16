@@ -12,11 +12,10 @@ import HealthKit
 import os
 import AVFAudio
 import UserNotifications
+import WatchConnectivity
 #if canImport(ActivityKit)
 import ActivityKit
 #endif
-
-private let mirrorLogger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "Mirroring")
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     private let locationManager = CLLocationManager()
@@ -66,16 +65,32 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // a NEW valid HKWorkoutSession — the old one is dead.
         // Runs on an anonymous background queue.
         healthStore.workoutSessionMirroringStartHandler = { [weak self] mirroredSession in
-            mirrorLogger.notice("[Mirroring] Received mirrored session, state: \(mirroredSession.state.rawValue)")
+            DiagnosticsLog.event("Mirroring", "received session state=\(mirroredSession.state.rawValue) reachable=\(WCSession.default.isReachable)")
+            if RideSessionManager.shared.isLateHandover(of: mirroredSession) {
+                DiagnosticsLog.event("Mirroring", "ignored late session for a ride that already ended")
+                return
+            }
             // Set new session FIRST — makes the === check in delegates work
             self?.mirroredSession = mirroredSession
             RideSessionManager.shared.mirroredSession = mirroredSession
             mirroredSession.delegate = self
+            ConnectivityManager.shared.sendMirrorAttached()
             // AVSpeechSynthesizer is not thread-safe — reset on main
             DispatchQueue.main.async {
                 PhoneSpeechPlayer.shared.resetSession()
                 self?.startPhoneAlerts()
             }
+        }
+
+        // HealthKit can hold back the next ride's session for about a minute,
+        // so until then the watch sends telemetry directly.
+        ConnectivityManager.shared.onEarlyTelemetry = { payload in
+            guard let sessionID = payload["sessionID"],
+                  RideSessionManager.shared.receiveEarlyTelemetry(sessionID: sessionID) else { return }
+            PhoneTelemetryStore.shared.update(from: payload)
+        }
+        ConnectivityManager.shared.onEarlyRideEnded = { sessionID in
+            RideSessionManager.shared.earlyRideEnded(sessionID: sessionID)
         }
 
         // Observe phone alert preference changes so we can restart/stop
@@ -119,7 +134,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
                         didChangeTo toState: HKWorkoutSessionState,
                         from fromState: HKWorkoutSessionState,
                         date: Date) {
-        mirrorLogger.info("[Mirroring] Session state: \(fromState.rawValue) → \(toState.rawValue)")
+        DiagnosticsLog.event("Mirroring", "session state \(fromState.rawValue) -> \(toState.rawValue)")
 
         // THE KEY FIX: Only clean up for the CURRENT session.
         // When ride 1 ends and ride 2 starts quickly:
@@ -128,7 +143,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
         //   3. Without this guard, it would call stopImmediately() and kill
         //      session B's fresh synthesizer
         guard workoutSession === mirroredSession else {
-            mirrorLogger.info("[Mirroring] Ignoring state change from old session")
+            DiagnosticsLog.event("Mirroring", "ignored state change from old session")
             return
         }
 
@@ -145,15 +160,15 @@ extension AppDelegate: HKWorkoutSessionDelegate {
 
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didFailWithError error: Error) {
-        mirrorLogger.error("[Mirroring] Session error: \(error)")
+        DiagnosticsLog.event("Mirroring", "session error=\(error.localizedDescription)")
     }
 
     func workoutSession(_ workoutSession: HKWorkoutSession,
                         didDisconnectFromRemoteDeviceWithError error: Error?) {
-        mirrorLogger.notice("[Mirroring] Disconnected: \(error?.localizedDescription ?? "clean")")
+        DiagnosticsLog.event("Mirroring", "disconnected error=\(error?.localizedDescription ?? "none")")
         // Don't let old session's disconnect kill new session
         guard workoutSession === mirroredSession else {
-            mirrorLogger.info("[Mirroring] Ignoring disconnect from old session")
+            DiagnosticsLog.event("Mirroring", "ignored disconnect from old session")
             return
         }
         RideSessionManager.shared.mirroredSession = nil
@@ -180,7 +195,7 @@ extension AppDelegate: HKWorkoutSessionDelegate {
             if let tsString = payload["ts"], let ts = Double(tsString) {
                 let age = now - ts
                 if age > 10 {
-                    mirrorLogger.info("[Mirroring] Discarding stale \(type) message (\(String(format: "%.1f", age))s old)")
+                    DiagnosticsLog.event("Mirroring", "stale \(type) dropped age=\(String(format: "%.1f", age))s")
                     continue
                 }
             }
@@ -287,7 +302,7 @@ struct OG_Bike_ComputerApp: App {
     @StateObject private var routeStore = RouteStore()
     @StateObject private var rideStore = RideStore()
     @StateObject private var metricConfig = MetricConfigStore()
-    @StateObject private var userSettings = UserSettingsStore()
+    @StateObject private var userSettings = UserSettingsStore.shared
     @StateObject private var integrationSettings = IntegrationSettingsStore()
 
     @State private var importedFileURL: URL?
@@ -314,6 +329,9 @@ struct OG_Bike_ComputerApp: App {
                     // back to a default `.completed`.
                     #if canImport(ActivityKit)
                     ConnectivityManager.shared.onWatchTerminalIntent = { kind in
+                        if kind == "discarded" {
+                            RideSessionManager.shared.watchWillDiscard()
+                        }
                         Task {
                             switch kind {
                             case "held":
@@ -331,7 +349,8 @@ struct OG_Bike_ComputerApp: App {
                         OAuthManager.shared.setPresentationAnchor(window)
                     }
                 }
-                .onChange(of: userSettings.settings.unitPreferences) { _, newValue in
+                .onChange(of: userSettings.settings.unitPreferences) { oldValue, newValue in
+                    snapPickerSettings(&userSettings.settings, from: oldValue, to: newValue)
                     UnitState.shared.preferences = newValue
                     cachePreferencesForAppDelegate()
                 }

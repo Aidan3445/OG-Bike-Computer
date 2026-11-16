@@ -12,6 +12,7 @@
 
 import AppIntents
 import Foundation
+import WatchConnectivity
 #if canImport(HealthKit)
 import HealthKit
 #endif
@@ -359,6 +360,11 @@ struct ContinueHeldRideIntent: AppIntent {
             logger.info("[ContinueHeldRide] startWatchApp returned")
         }
 
+        // The watch app takes a few seconds to launch and connect. Sending
+        // before then queues the request and reports "not connected", even
+        // though the watch picks it up and continues a moment later.
+        await waitForWatchReachable(timeout: 10)
+
         // Await the watch's actual reply so failures surface to the user instead
         // of optimistically reporting success.
         let result: Result<Void, Error> = await withCheckedContinuation { continuation in
@@ -372,8 +378,12 @@ struct ContinueHeldRideIntent: AppIntent {
         switch result {
         case .success:
             return .result(dialog: "Resuming your held ride.")
-        case .failure(let error):
-            return .result(dialog: "Could not continue held ride: \(error.localizedDescription)")
+        case .failure(ConnectivityError.watchOperationFailed(let reason)):
+            return .result(dialog: "Could not continue held ride: \(reason)")
+        case .failure:
+            // Any other failure means the request went out the background
+            // channel instead, and the watch runs it when it connects.
+            return .result(dialog: "Opening your watch. Your held ride will continue once it connects.")
         }
         #elseif os(watchOS)
         return .result(dialog: "Use the phone app to continue a held ride.")
@@ -383,8 +393,18 @@ struct ContinueHeldRideIntent: AppIntent {
 
 // MARK: - Helpers
 
+#if os(iOS)
+/// Waits until the watch app can take a live message, or the timeout passes.
+private func waitForWatchReachable(timeout: TimeInterval) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !WCSession.default.isReachable, Date() < deadline {
+        try? await Task.sleep(for: .milliseconds(250))
+    }
+}
+#endif
+
 /// Scan the phone-side rides directory for a ride that is on hold.
-private func loadHeldRide() -> RideSummary? {
+func loadHeldRide() -> RideSummary? {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
     let dir  = docs.appendingPathComponent("rides", isDirectory: true)
     guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }

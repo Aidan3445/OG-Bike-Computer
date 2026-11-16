@@ -104,6 +104,10 @@ struct UserSettings: Codable, Equatable {
 // MARK: - Store
 
 class UserSettingsStore: ObservableObject {
+    /// The app and its intents share this one, so a Siri change lands in the
+    /// live settings instead of a copy that's thrown away.
+    static let shared = UserSettingsStore()
+
     @Published var settings: UserSettings
     @Published var presets: [SettingsPreset] = []
     @Published var activePresetID: UUID?
@@ -219,6 +223,15 @@ class UserSettingsStore: ObservableObject {
         DispatchQueue.main.async {
             self.settings = decoded
         }
+    }
+
+    /// Saves, syncs and updates the active preset right away instead of after
+    /// the debounce. Intents need this: the app can be suspended as soon as
+    /// they return.
+    func commitNow() {
+        save()
+        sendToWatch()
+        autoSaveToActivePreset()
     }
 
     func sendToWatch() {

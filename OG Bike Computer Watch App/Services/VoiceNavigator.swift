@@ -8,12 +8,18 @@
 import AVFoundation
 import CoreLocation
 import Combine
+import os
 import UserNotifications
+
+private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "VoiceNavigator")
 
 class VoiceNavigator: NSObject, ObservableObject {
     static let shared = VoiceNavigator()
 
-    @Published var isEnabled = true
+    /// Kept between rides and app launches.
+    @Published var isEnabled = UserDefaults.standard.object(forKey: "voiceEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(isEnabled, forKey: "voiceEnabled") }
+    }
 
     var preferences: NavigationAlertPreferences = .default
 
@@ -30,6 +36,10 @@ class VoiceNavigator: NSObject, ObservableObject {
     private let atTurnThreshold: Double = 20
     private let cooldown: TimeInterval = 4
     private let minTimeBeforeTurn: TimeInterval = 4
+    /// A rejoin this far past the midpoint still gets the halfway alert.
+    private let halfwayRejoinGrace: Double = 1609.34
+    /// An along-route jump bigger than this between updates starts a new stretch.
+    private let stretchJumpDistance: Double = 300
 
     // State
     private var isActivelyMoving = true
@@ -44,7 +54,11 @@ class VoiceNavigator: NSObject, ObservableObject {
     private var firedFinishAlerts: Set<Int> = []
 
     private var announcedHalfway = false
-    private var seenBeforeHalfway = false  // guards against firing halfway if rider started past that point
+    /// Along-route distance where the current on-route stretch began, nil while
+    /// off route or not yet near the route.
+    private var stretchStart: Double?
+    private var lastStretchAlong: Double?
+    private var hadStretchBeforeHalfway = false
     private var announcedArrival = false
     private var announcedOffRoute = false
 
@@ -63,6 +77,7 @@ class VoiceNavigator: NSObject, ObservableObject {
     // Alert queue
     private let alertQueue = VoiceAlertQueue()
     private var isProcessingAlert = false
+    private var currentAlertLabel: String?
 
     // Identity of the alert currently in-flight on VoiceAlertTransport.
     // Used to ignore late completions for an alert that's been superseded
@@ -72,6 +87,11 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     // Recreated each ride to avoid AVSpeechSynthesizer silent-death bug
     private var synthesizer: AVSpeechSynthesizer
+
+    // The watch utterance the queue is waiting on, plus a backstop in case
+    // the synthesizer never reports back for it.
+    private var currentLocalUtterance: AVSpeechUtterance?
+    private var localSpeechTimeout: DispatchWorkItem?
     weak var workoutManager: WorkoutManager?
 
     private override init() {
@@ -93,7 +113,9 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
-        seenBeforeHalfway = false
+        stretchStart = nil
+        lastStretchAlong = nil
+        hadStretchBeforeHalfway = false
         announcedArrival = false
         announcedOffRoute = false
         firedPOIAlerts.removeAll()
@@ -104,7 +126,9 @@ class VoiceNavigator: NSObject, ObservableObject {
 
         alertQueue.cancelAll()
         isProcessingAlert = false
+        currentAlertLabel = nil
         clearInFlight()
+        clearLocalSpeech()
 
         synthesizer.stopSpeaking(at: .immediate)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -122,7 +146,9 @@ class VoiceNavigator: NSObject, ObservableObject {
         trackingFinish = false
         firedFinishAlerts.removeAll()
         announcedHalfway = false
-        seenBeforeHalfway = false
+        stretchStart = nil
+        lastStretchAlong = nil
+        hadStretchBeforeHalfway = false
         announcedArrival = false
         announcedOffRoute = false
         firedPOIAlerts.removeAll()
@@ -186,6 +212,8 @@ class VoiceNavigator: NSObject, ObservableObject {
             return
         }
 
+        trackRouteStretch(nav: nav, half: route.totalDistance / 2)
+
         if nav.isOffRoute {
             if !announcedOffRoute {
                 announcedOffRoute = true
@@ -195,6 +223,7 @@ class VoiceNavigator: NSObject, ObservableObject {
                 } else {
                     text = "Off route."
                 }
+                DiagnosticsLog.event("Voice", "off route alert mode=\(navEvents.offRouteAlert) nearest=\(Int(nav.nearestRouteDistance))m missed=\(nav.missedTurn.map { "\($0.index)" } ?? "none") busy=\(isProcessingAlert) queued=\(alertQueue.count)")
                 enqueueAlert(VoiceAlert(
                     priority: .navEvent,
                     text: text,
@@ -231,6 +260,7 @@ class VoiceNavigator: NSObject, ObservableObject {
             } else {
                 backOnRouteText = "Back on route. \(continueDirection.capitalized)."
             }
+            DiagnosticsLog.event("Voice", "back on route alert mode=\(navEvents.backOnRouteAlert) nearest=\(Int(nav.nearestRouteDistance))m busy=\(isProcessingAlert) queued=\(alertQueue.count)")
             enqueueAlert(VoiceAlert(
                 priority: .navEvent,
                 text: backOnRouteText,
@@ -261,6 +291,10 @@ class VoiceNavigator: NSObject, ObservableObject {
             // it persisting until the at-turn alert fires.
             trackingFinish = false
             firedFinishAlerts.removeAll()
+
+            if !passedTurn {
+                keepClosestApproachOnly(distance: nav.distanceToNextTurn)
+            }
 
             if passedTurn {
                 if isActivelyMoving {
@@ -370,20 +404,15 @@ class VoiceNavigator: NSObject, ObservableObject {
             ) { return }
         }
 
-        if !announcedHalfway {
-            let half = route.totalDistance / 2
-            // Track that the rider was on the first half so we don't fire halfway
-            // if they started mid-route or resumed a hold past the halfway point.
-            if nav.distanceAlongRoute < half {
-                seenBeforeHalfway = true
+        let half = route.totalDistance / 2
+        if !announcedHalfway, hadStretchBeforeHalfway,
+           let start = stretchStart, start <= half + halfwayRejoinGrace,
+           nav.distanceAlongRoute >= half {
+            announcedHalfway = true
+            if isActivelyMoving {
+                announceHalfway(distanceRemaining: nav.distanceRemaining, mode: navEvents.halfwayAlert)
             }
-            if seenBeforeHalfway && nav.distanceAlongRoute >= half {
-                announcedHalfway = true
-                if isActivelyMoving {
-                    announceHalfway(distanceRemaining: nav.distanceRemaining, mode: navEvents.halfwayAlert)
-                }
-                return
-            }
+            return
         }
 
         if isActivelyMoving {
@@ -665,6 +694,39 @@ class VoiceNavigator: NSObject, ObservableObject {
         return false
     }
 
+    /// Halfway only counts riding that actually covered the midpoint. A stretch
+    /// starts on the first update that's truly near the route, so the snapped
+    /// samples of an off-route start don't count, and it ends when the rider
+    /// goes off route or the match jumps along the route.
+    private func trackRouteStretch(nav: NavigationTracker, half: Double) {
+        guard !nav.isOffRoute else {
+            stretchStart = nil
+            lastStretchAlong = nil
+            return
+        }
+        let along = nav.distanceAlongRoute
+        if let last = lastStretchAlong, abs(along - last) > stretchJumpDistance {
+            stretchStart = nil
+        }
+        lastStretchAlong = along
+
+        let nearRoute = nav.hasJoinedRoute && nav.nearestRouteDistance <= nav.offRouteThreshold
+        if stretchStart == nil, nearRoute {
+            stretchStart = along
+            if along < half { hadStretchBeforeHalfway = true }
+        }
+    }
+
+    /// Picking up a route already inside several approach thresholds would
+    /// fire one alert per threshold a few seconds apart. Keep only the closest.
+    private func keepClosestApproachOnly(distance: Double) {
+        let inside = alertDistances.enumerated().filter { $0.element > 0 && distance <= $0.element }
+        guard let closest = inside.min(by: { $0.element < $1.element }) else { return }
+        for (i, _) in inside where i != closest.offset {
+            firedTurnAlerts.insert(i)
+        }
+    }
+
     private var canSpeak: Bool {
         Date().timeIntervalSince(lastAnnouncementTime) >= cooldown
     }
@@ -708,8 +770,9 @@ class VoiceNavigator: NSObject, ObservableObject {
     /// Re-announce the upcoming turn with the current distance. Driven by the
     /// watch map's repeat-alert button so the rider can ask for the cue again
     /// after missing it (headphones disconnected, music too loud, etc.).
+    /// Plays even with voice off, since the rider asked for it.
     func repeatUpcomingTurnAlert() {
-        guard isEnabled, !isStopped else { return }
+        guard !isStopped else { return }
         guard let nav = workoutManager?.navigation, let turn = nav.nextTurn else { return }
         let dist = nav.distanceToNextTurn
         let followingTurn = nav.nearbyFollowingTurn(after: turn, threshold: groupTurnThreshold)
@@ -736,7 +799,8 @@ class VoiceNavigator: NSObject, ObservableObject {
             alertKey: "turn-repeat-\(turnIndex)",
             relevanceCheck: { [weak self] in
                 self?.workoutManager?.navigation.nextTurn?.index == turnIndex
-            }
+            },
+            ignoresVoiceToggle: true
         ))
     }
 
@@ -919,16 +983,23 @@ class VoiceNavigator: NSObject, ObservableObject {
         // Relevance gate — drop stale alerts (e.g. a turn-approach for a turn
         // we've already passed, or an off-route alert when we're back on route).
         if let check = alert.relevanceCheck, !check() {
-            // Skip silently and try the next alert in the same processing tick.
+            DiagnosticsLog.event("Voice", "dropped stale \(alert.logLabel)")
             processQueue()
             return
         }
 
         isProcessingAlert = true
-        audioSpeak(alert.text, mode: alert.mode, category: alert.category, priority: alert.priority)
+        currentAlertLabel = alert.logLabel
+        DiagnosticsLog.event("Voice", "start \(alert.logLabel) mode=\(alert.mode) queue=\(alertQueue.count) \"\(alert.text)\"")
+        audioSpeak(alert.text, mode: alert.mode, category: alert.category, priority: alert.priority,
+                   ignoresVoiceToggle: alert.ignoresVoiceToggle)
     }
 
     fileprivate func finishCurrentAlert() {
+        if let label = currentAlertLabel {
+            DiagnosticsLog.event("Voice", "finished \(label)")
+            currentAlertLabel = nil
+        }
         isProcessingAlert = false
         if alertQueue.isEmpty {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -941,8 +1012,10 @@ class VoiceNavigator: NSObject, ObservableObject {
 
     // MARK: - Audio Routing
 
-    private func audioSpeak(_ text: String, mode: AlertMode, category: String?, priority: AlertPriority) {
-        guard isEnabled, !isStopped else {
+    private func audioSpeak(_ text: String, mode: AlertMode, category: String?, priority: AlertPriority,
+                            ignoresVoiceToggle: Bool = false) {
+        guard isEnabled || ignoresVoiceToggle, !isStopped else {
+            DiagnosticsLog.event("Voice", "silent: voice off or stopped")
             finishCurrentAlert()
             return
         }
@@ -958,12 +1031,14 @@ class VoiceNavigator: NSObject, ObservableObject {
         }
 
         guard mode.includesVoice else {
+            DiagnosticsLog.event("Voice", "no voice for mode=\(mode)")
             finishCurrentAlert()
             return
         }
 
         switch resolveAudioRoute() {
         case .watchLocal:
+            DiagnosticsLog.event("Voice", "route=watch")
             speakLocally(text)
 
         case .phoneMirror:
@@ -977,11 +1052,15 @@ class VoiceNavigator: NSObject, ObservableObject {
                 ttl: 15
             )
             inFlightAlertID = payload.id
+            DiagnosticsLog.event("Voice", "route=phone payload=\(payload.id.uuidString.prefix(8)) kind=\(payload.kind)")
             VoiceAlertTransport.shared.deliver(payload) { [weak self] outcome in
                 guard let self, !self.isStopped else { return }
                 // Stale completion (e.g. ride reset between deliver and
                 // outcome) — drop silently to avoid double-advance.
-                guard self.inFlightAlertID == payload.id else { return }
+                guard self.inFlightAlertID == payload.id else {
+                    DiagnosticsLog.event("Voice", "late phone outcome ignored payload=\(payload.id.uuidString.prefix(8))")
+                    return
+                }
                 self.inFlightAlertID = nil
                 switch outcome {
                 case .phoneSpoke:
@@ -989,10 +1068,12 @@ class VoiceNavigator: NSObject, ObservableObject {
                     // immediately. AVSpeechSynthesizer on the phone owns
                     // ordering of any subsequent utterances we send while
                     // it's still mid-stream.
+                    DiagnosticsLog.event("Voice", "phone started payload=\(payload.id.uuidString.prefix(8))")
                     self.finishCurrentAlert()
                 case .localFallback(let fallbackText, _):
                     // Phone path failed. Speak on watch; speechSynthesizer
                     // didFinish will call finishCurrentAlert.
+                    DiagnosticsLog.event("Voice", "phone failed, watch fallback payload=\(payload.id.uuidString.prefix(8))")
                     self.speakLocally(fallbackText)
                 }
             }
@@ -1128,7 +1209,7 @@ class VoiceNavigator: NSObject, ObservableObject {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            print("VoiceNavigator activate error: \(error)")
+            logger.error("Audio session activation failed: \(error.localizedDescription, privacy: .public)")
         }
 
         let utterance = AVSpeechUtterance(string: text)
@@ -1136,7 +1217,50 @@ class VoiceNavigator: NSObject, ObservableObject {
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
         utterance.pitchMultiplier = 1.05
         utterance.volume = 1.0
+        currentLocalUtterance = utterance
+        let estimate = max(2, Double(text.count) / 14)
+        scheduleLocalSpeechTimeout(for: utterance, after: estimate + 3,
+                                   giveUpAt: Date().addingTimeInterval(estimate * 2 + 10))
         synthesizer.speak(utterance)
+    }
+
+    /// Releases the queue if the synthesizer never reports back for an
+    /// utterance, which otherwise blocks every alert behind it. While it's
+    /// still talking the check waits longer instead of cutting it off.
+    private func scheduleLocalSpeechTimeout(for utterance: AVSpeechUtterance,
+                                            after delay: TimeInterval,
+                                            giveUpAt deadline: Date) {
+        localSpeechTimeout?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.currentLocalUtterance === utterance else { return }
+            if self.synthesizer.isSpeaking, Date() < deadline {
+                self.scheduleLocalSpeechTimeout(for: utterance, after: 2, giveUpAt: deadline)
+                return
+            }
+            if !self.synthesizer.isSpeaking {
+                // Nothing came out. Swap in a fresh synthesizer so the next alert isn't lost too.
+                DiagnosticsLog.event("Voice", "watch speech never started, replacing synthesizer")
+                self.synthesizer = AVSpeechSynthesizer()
+                self.synthesizer.delegate = self
+            } else {
+                DiagnosticsLog.event("Voice", "watch speech ran past its limit, releasing the queue")
+            }
+            self.finishLocalSpeech(utterance)
+        }
+        localSpeechTimeout = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func finishLocalSpeech(_ utterance: AVSpeechUtterance) {
+        guard currentLocalUtterance === utterance else { return }
+        clearLocalSpeech()
+        finishCurrentAlert()
+    }
+
+    private func clearLocalSpeech() {
+        currentLocalUtterance = nil
+        localSpeechTimeout?.cancel()
+        localSpeechTimeout = nil
     }
 }
 
@@ -1185,7 +1309,10 @@ extension TurnDirection {
 
 extension VoiceNavigator: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        guard !synthesizer.isSpeaking else { return }
-        finishCurrentAlert()
+        finishLocalSpeech(utterance)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        finishLocalSpeech(utterance)
     }
 }

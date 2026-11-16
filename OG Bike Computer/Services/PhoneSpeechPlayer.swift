@@ -32,7 +32,9 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     // acks independently when AVSpeechSynthesizer queues multiple back-to-
     // back. Ack fires on didStart (not didFinish) so the watch can cancel
     // its fallback timer before this utterance has finished playing.
-    private var pendingStarts: [ObjectIdentifier: (id: UUID, onStart: (UUID) -> Void)] = [:]
+    // onDrop fires instead when the utterance is thrown away before it starts,
+    // so the watch speaks it rather than waiting.
+    private var pendingStarts: [ObjectIdentifier: (id: UUID, onStart: (UUID) -> Void, onDrop: ((UUID) -> Void)?)] = [:]
 
     // Per-utterance finish callbacks — fired on didFinish/didCancel so the
     // watch can pace multi-line readouts on real completion.
@@ -48,6 +50,17 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     // Ordered list of utterances we've handed to AVSpeechSynthesizer but
     // haven't seen didFinish/didCancel for.    
     private var utteranceQueue: [ObjectIdentifier] = []
+
+    // Utterances already handed back to the watch. If one starts anyway (a
+    // stop during voice load doesn't always take), it's stopped on the spot
+    // so the rider doesn't hear it twice.
+    private var droppedUtterances: Set<ObjectIdentifier> = []
+
+    // Renders a throwaway phrase at ride start so the first real alert
+    // doesn't pay for loading the voice. Kept alive until it finishes.
+    private var warmUpSynthesizer: AVSpeechSynthesizer?
+    /// Loading the voice can stall for most of a minute, so it stays off main.
+    private let warmUpQueue = DispatchQueue(label: "com.aidan3445.OG-Bike-Computer.speechWarmUp", qos: .utility)
 
     #if os(iOS)
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -97,14 +110,15 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     /// Speak `text` and fire `onStart(id)` when AVSpeechSynthesizer reports
     /// the utterance has actually begun. The onStart callback is the
     /// cancel-fallback signal
-    func speak(_ text: String, id: UUID, onStart: @escaping (UUID) -> Void, onFinish: ((UUID) -> Void)? = nil) {
-        onMain { self.speakInternal(text, id: id, onStart: onStart, onFinish: onFinish) }
+    func speak(_ text: String, id: UUID, onStart: @escaping (UUID) -> Void, onFinish: ((UUID) -> Void)? = nil,
+               onDrop: ((UUID) -> Void)? = nil) {
+        onMain { self.speakInternal(text, id: id, onStart: onStart, onFinish: onFinish, onDrop: onDrop) }
     }
 
     /// Legacy entry point — speaks without an ack callback. Kept for
     /// callers that don't need cancel-fallback semantics
     func speak(_ text: String) {
-        onMain { self.speakInternal(text, id: nil, onStart: nil, onFinish: nil) }
+        onMain { self.speakInternal(text, id: nil, onStart: nil, onFinish: nil, onDrop: nil) }
     }
 
     /// Recreate the synthesizer on a fresh mirrored session arriving (e.g.
@@ -113,10 +127,33 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
     func resetSession() {
         onMain {
             self.synthesizer.stopSpeaking(at: .immediate)
+            self.dropUnstarted()
             self.clearPending()
             self.synthesizer = AVSpeechSynthesizer()
             self.synthesizer.delegate = self
             logger.notice("[Speech] Session reset — fresh synthesizer")
+            self.warmUpVoice()
+        }
+    }
+
+    /// Loads the voice by rendering to a buffer instead of speaking, so it
+    /// doesn't touch the audio session or duck the rider's music.
+    private func warmUpVoice() {
+        warmUpQueue.async { [weak self] in
+            let warmUp = AVSpeechSynthesizer()
+            let utterance = AVSpeechUtterance(string: "Ready.")
+            utterance.voice = PreferredVoice.resolved
+            // Stored before the write so its completion finds it.
+            self?.onMain { self?.warmUpSynthesizer = warmUp }
+            warmUp.write(utterance) { [weak self] buffer in
+                // An empty buffer marks the end of the render.
+                guard (buffer as? AVAudioPCMBuffer)?.frameLength ?? 0 == 0 else { return }
+                self?.onMain {
+                    guard self?.warmUpSynthesizer === warmUp else { return }
+                    self?.warmUpSynthesizer = nil
+                    logger.notice("[Speech] Voice warmed up")
+                }
+            }
         }
     }
 
@@ -125,6 +162,7 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         onMain {
             self.synthesizer.stopSpeaking(at: .immediate)
             self.clearPending()
+            self.droppedUtterances.removeAll()
             self.deactivateSession(reason: "stopImmediately")
             // Leave isSessionConfigured = true — keeping the category alive
             // means the next utterance after a new workout doesn't pay the
@@ -148,7 +186,8 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         }
     }
 
-    private func speakInternal(_ text: String, id: UUID?, onStart: ((UUID) -> Void)?, onFinish: ((UUID) -> Void)?) {
+    private func speakInternal(_ text: String, id: UUID?, onStart: ((UUID) -> Void)?, onFinish: ((UUID) -> Void)?,
+                               onDrop: ((UUID) -> Void)?) {
         let logID = id?.uuidString.prefix(8) ?? "no-id"
         logger.notice("[Speech] speak(id=\(logID)) text=\"\(text)\"")
 
@@ -164,7 +203,7 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
 
         let key = ObjectIdentifier(utterance)
         if let id, let onStart {
-            pendingStarts[key] = (id, onStart)
+            pendingStarts[key] = (id, onStart, onDrop)
         }
         if let id, let onFinish {
             pendingFinishes[key] = (id, onFinish)
@@ -224,6 +263,15 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         endBackgroundTask()
     }
 
+    /// Tells the watch about every utterance that's being thrown away before
+    /// it started. Call before `clearPending()`.
+    private func dropUnstarted() {
+        for (key, entry) in pendingStarts {
+            droppedUtterances.insert(key)
+            entry.onDrop?(entry.id)
+        }
+    }
+
     private func clearPending() {
         pendingStarts.removeAll()
         pendingFinishes.removeAll()
@@ -237,15 +285,15 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         // queue. If safetyTimers no longer has this key, didStart already
         // cleaned up — bail.
         guard safetyTimers.removeValue(forKey: utteranceKey) != nil else { return }
-        let pending = pendingStarts.removeValue(forKey: utteranceKey)
-        let logID = pending?.id.uuidString.prefix(8) ?? id?.uuidString.prefix(8) ?? "no-id"
+        let logID = pendingStarts[utteranceKey]?.id.uuidString.prefix(8) ?? id?.uuidString.prefix(8) ?? "no-id"
         logger.error("[Speech] SAFETY TIMEOUT id=\(logID) — didStart never fired after \(Self.didStartSafetySeconds)s. Deactivating, watch fallback will speak.")
 
         // stopSpeaking(.immediate) flushes the whole synth queue — including
-        // any utterances queued behind the wedged one. Clear our tracking
-        // and drop their pending acks so late didFinish callbacks for the
-        // flushed utterances don't try to arm a timer for a gone utterance.
+        // any utterances queued behind the wedged one. Hand them all back to
+        // the watch, then clear our tracking so late didFinish callbacks for
+        // the flushed utterances don't try to arm a timer for a gone utterance.
         synthesizer.stopSpeaking(at: .immediate)
+        dropUnstarted()
         clearPending()
         deactivateSession(reason: "safety timeout")
 
@@ -290,6 +338,17 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
             // on the same queue, and a late safety fire would wrongly
             // deactivate the still-playing utterance.
             self.safetyTimers.removeValue(forKey: key)?.invalidate()
+            if self.droppedUtterances.remove(key) != nil {
+                logger.warning("[Speech] didStart for an utterance already handed to the watch — stopping it")
+                synthesizer.stopSpeaking(at: .immediate)
+                // Anything queued behind it on the live synthesizer just got
+                // flushed too, so hand those back as well.
+                if synthesizer === self.synthesizer {
+                    self.dropUnstarted()
+                    self.clearPending()
+                }
+                return
+            }
             if let entry = self.pendingStarts.removeValue(forKey: key) {
                 logger.notice("[Speech] didStart id=\(entry.id.uuidString.prefix(8)) — ack")
                 entry.onStart(entry.id)
@@ -310,6 +369,7 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
             // but pathological cases (interruption before didStart) hit here.
             self.safetyTimers.removeValue(forKey: key)?.invalidate()
             self.pendingStarts.removeValue(forKey: key)
+            self.droppedUtterances.remove(key)
             if let entry = self.pendingFinishes.removeValue(forKey: key) {
                 logger.notice("[Speech] didFinish id=\(entry.id.uuidString.prefix(8)) — finish signal")
                 entry.onFinish(entry.id)
@@ -335,7 +395,11 @@ class PhoneSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate, @unchecked Senda
         onMain {
             let key = ObjectIdentifier(utterance)
             self.safetyTimers.removeValue(forKey: key)?.invalidate()
-            self.pendingStarts.removeValue(forKey: key)
+            self.droppedUtterances.remove(key)
+            // Cancelled before it ever started, so the watch has to speak it.
+            if let entry = self.pendingStarts.removeValue(forKey: key) {
+                entry.onDrop?(entry.id)
+            }
             // A cancelled utterance still resolves its finish signal — the
             // phone is done with it either way, and the watch must not
             // stall its queue waiting on a line that will never complete.

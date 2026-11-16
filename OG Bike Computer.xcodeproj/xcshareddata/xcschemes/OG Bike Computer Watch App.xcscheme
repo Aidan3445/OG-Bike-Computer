@@ -69,7 +69,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DD5D2CCF2F525E5B00988CBB"
             BuildableName = "OG Bike Computer Watch App.app"
-            BlueprintName = "OG Bike Computer Watch App"
             ReferencedContainer = "container:OG Bike Computer.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -86,7 +85,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DD5D2CCF2F525E5B00988CBB"
             BuildableName = "OG Bike Computer Watch App.app"
-            BlueprintName = "OG Bike Computer Watch App"
             ReferencedContainer = "container:OG Bike Computer.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

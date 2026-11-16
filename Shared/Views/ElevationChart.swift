@@ -20,8 +20,10 @@ struct ElevationChart: View {
     let config: ElevationScreenConfig
     let showWaypoints: Bool
     @Binding var mode: ElevationDefaultTab
+    @ObservedObject private var unitState = UnitState.shared
 
     var body: some View {
+        let _ = unitState.preferences
         VStack(spacing: 6) {
             modeToggle
             chart()
@@ -63,6 +65,7 @@ struct ElevationChart: View {
             let domain = elevDomain(pts)
             let xMin = pts.first?.distanceFromStart ?? 0
             let xMax = pts.last?.distanceFromStart ?? 1
+            let xRange = (xMin / metersPerUnit)...(xMax / metersPerUnit)
             let baseline = domain.lowerBound
 
             Chart {
@@ -102,14 +105,14 @@ struct ElevationChart: View {
                 .foregroundStyle(.white)
                 .symbolSize(40)
             }
-            .chartXScale(domain: (xMin / metersPerUnit)...(xMax / metersPerUnit))
+            .chartXScale(domain: xRange)
             .chartYScale(domain: domain)
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 3)) { value in
+                AxisMarks(preset: .aligned, values: chartDistanceTicks(in: xRange, desiredCount: 3)) { value in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                    AxisValueLabel(anchor: .topLeading) {
-                        if let v = value.as(Double.self) {
-                            Text("\(Int(v))\(unitLabel)")
+                    if let v = value.as(Double.self) {
+                        AxisValueLabel(anchor: chartDistanceLabelAnchor(for: v, in: xRange)) {
+                            Text("\(chartDistanceLabel(v))\(unitLabel)")
                                 .font(.system(size: 8))
                         }
                     }
@@ -118,8 +121,8 @@ struct ElevationChart: View {
             .chartYAxis {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                    AxisValueLabel {
-                        if let v = value.as(Double.self) {
+                    if let v = value.as(Double.self) {
+                        AxisValueLabel(anchor: chartYLabelAnchor(for: v, in: domain)) {
                             Text("\(Int(v))\(currentUnits.elevation == .feet ? "ft" : "m")")
                                 .font(.system(size: 8))
                         }
@@ -217,16 +220,6 @@ struct ElevationChart: View {
                 endMeters: b.distanceFromStart,
                 color: gradeColor(pct)
             )
-        }
-    }
-
-    private func gradeColor(_ pct: Double) -> Color {
-        switch pct {
-        case ..<(-3):     return .blue
-        case ..<3:        return .green
-        case ..<6:        return .yellow
-        case ..<10:       return .orange
-        default:          return .red
         }
     }
 }
