@@ -23,7 +23,10 @@ struct RouteMapView: View {
     @State private var toggleButtonOpacity: Double = 1.0
     @State private var toggleFadeTask: Task<Void, Never>?
 
-    @State private var zoomIndex: Int = -1 // -1 means "use default from config"
+    /// Shared with the turn overlay so both maps show the same zoom, and so
+    /// the rainbow route (scaled by zoom) looks the same in each. -1 means
+    /// "use default from config".
+    @Binding var zoomIndex: Int
     private var mapConfig: MapScreenConfig { workout.ridePreferences.mapScreen }
 
     private var zoomLevels: [Double] { mapConfig.computedZoomLevels }
@@ -80,13 +83,15 @@ struct RouteMapView: View {
                             workout: workout,
                             viewDistance: currentViewDistance,
                             useCompassHeading: useCompassHeading,
-                            routeAheadColor: mapConfig.routeAheadColor)
+                            routeAheadColor: mapConfig.routeAheadColor,
+                            defaultZoom: mapConfig.effectiveDefaultZoom)
                     } else {
                         RouteMapBreadcrumbCanvas(
                             data: routeMapData,
                             viewDistance: currentViewDistance,
                             useCompassHeading: useCompassHeading,
-                            routeAheadColor: mapConfig.routeAheadColor)
+                            routeAheadColor: mapConfig.routeAheadColor,
+                            defaultZoom: mapConfig.effectiveDefaultZoom)
                     }
                 }
             }
@@ -399,6 +404,8 @@ private struct BreadcrumbMapView: View {
     let viewDistance: Double
     var useCompassHeading: Bool = true
     var routeAheadColor: RouteColor = .white
+    /// Sets the rainbow's cycle length. See `RouteRainbow.routeWavelength`.
+    var defaultZoom: Double = 400
 
     private var bearing: Double {
         guard let location = workout.currentLocation else { return 0 }
@@ -436,13 +443,12 @@ private struct BreadcrumbMapView: View {
         }
     }
 
-    /// MapKit spreads a polyline's gradient along the line from start to end.
-    private func rainbowStyle(_ near: ArraySlice<ProcessedPoint>) -> LinearGradient {
-        let gradient = RouteRainbow.gradient(
-            from: near.first?.distanceFromStart ?? 0,
-            to: near.last?.distanceFromStart ?? 0,
-            viewDistance: viewDistance)
-        return LinearGradient(gradient: gradient, startPoint: .leading, endPoint: .trailing)
+    @MapContentBuilder
+    private func rainbowPolylines(_ segments: [RouteRainbow.MapSegment], lineWidth: CGFloat) -> some MapContent {
+        ForEach(segments, id: \.id) { segment in
+            MapPolyline(coordinates: segment.coordinates)
+                .stroke(segment.color, style: .roundedLine(lineWidth))
+        }
     }
 
     @MapContentBuilder
@@ -450,42 +456,40 @@ private struct BreadcrumbMapView: View {
         if let processed = workout.navigation.processedRoute {
             let points = processed.points
             let segIdx = min(workout.navigation.currentSegmentIndex, points.count - 1)
+            let rainbow = routeAheadColor == .rainbow
 
-            // Completed portion (green) — all points, no subsampling
+            // Thin route underneath everything, so there's never a gap where the
+            // thick stretch ends. Solid colors draw the whole route once; the
+            // rainbow takes many pieces, so it only covers the route near the rider.
+            if rainbow {
+                rainbowPolylines(RouteLineMapCache.rainbowFar(for: processed, segmentIndex: segIdx,
+                                                              viewDistance: viewDistance, defaultZoom: defaultZoom),
+                                 lineWidth: RouteLineLayout.farLineWidth)
+            } else {
+                MapPolyline(coordinates: RouteLineMapCache.coordinates(for: processed))
+                    .stroke(routeAheadColor.color.opacity(RouteLineLayout.farOpacity),
+                            style: .roundedLine(RouteLineLayout.farLineWidth))
+            }
+
+            // Completed portion, all points, covering the thin line under it
             if segIdx > 0 {
                 let behindCoords = points[0...segIdx].map(\.coordinate)
                 MapPolyline(coordinates: behindCoords)
-                    .stroke(Color.riddenRoute, lineWidth: 6)
+                    .stroke(Color.riddenRoute, style: .roundedLine(RouteLineLayout.nearLineWidth))
             }
 
-            // Ahead portion: near segment (configured color) + far segment (grey)
+            // Thick stretch just ahead of the rider
             if segIdx < points.count - 1 {
-                let currentDist = points[segIdx].distanceFromStart
-                let nearThreshold = currentDist + 3219 // ~2 miles ahead
-
-                // Find split point where route exceeds 2 miles ahead
-                let farStartIdx = points[(segIdx + 1)...].firstIndex(where: {
-                    $0.distanceFromStart > nearThreshold
-                }) ?? points.count
-
-                // Near ahead (configured color)
-                if farStartIdx > segIdx {
-                    let near = points[segIdx..<farStartIdx]
-                    let nearCoords = near.map(\.coordinate)
-                    if routeAheadColor == .rainbow {
-                        MapPolyline(coordinates: nearCoords)
-                            .stroke(rainbowStyle(near), lineWidth: 6)
-                    } else {
-                        MapPolyline(coordinates: nearCoords)
-                            .stroke(routeAheadColor.color, lineWidth: 6)
-                    }
-                }
-
-                // Far ahead (grey, thinner)
-                if farStartIdx < points.count {
-                    let farCoords = points[(farStartIdx - 1)...].map(\.coordinate)
-                    MapPolyline(coordinates: farCoords)
-                        .stroke(.gray.opacity(0.5), lineWidth: 3)
+                if rainbow {
+                    rainbowPolylines(
+                        RouteLineMapCache.rainbowNear(for: processed, segmentIndex: segIdx,
+                                                      viewDistance: viewDistance, defaultZoom: defaultZoom),
+                        lineWidth: RouteLineLayout.nearLineWidth)
+                } else {
+                    let nearEnd = points[segIdx].distanceFromStart + RouteLineLayout.nearAhead(viewDistance)
+                    let endIdx = points[(segIdx + 1)...].firstIndex { $0.distanceFromStart > nearEnd } ?? points.count - 1
+                    MapPolyline(coordinates: points[segIdx...endIdx].map(\.coordinate))
+                        .stroke(routeAheadColor.color, style: .roundedLine(RouteLineLayout.nearLineWidth))
                 }
             }
 
@@ -498,21 +502,21 @@ private struct BreadcrumbMapView: View {
                         location.coordinate,
                         points[min(segIdx, points.count - 1)].coordinate
                     ])
-                    .stroke(.red, lineWidth: 3)
+                    .stroke(.red, style: .roundedLine(3))
                 }
                 ForEach(0..<candidates.count, id: \.self) { i in
                     MapPolyline(coordinates: [
                         location.coordinate,
                         candidates[i].coordinate
                     ])
-                    .stroke(.red.opacity(i == 0 ? 1.0 : 0.5), lineWidth: i == 0 ? 3 : 2)
+                    .stroke(.red.opacity(i == 0 ? 1.0 : 0.5), style: .roundedLine(i == 0 ? 3 : 2))
                 }
 
                 // Recorded trail when off-route (orange)
                 let trail = workout.recordedLocations
                 if trail.count >= 2 {
                     MapPolyline(coordinates: trail.map(\.coordinate))
-                        .stroke(.orange.opacity(0.7), lineWidth: 3)
+                        .stroke(.orange.opacity(0.7), style: .roundedLine(3))
                 }
             }
 
@@ -546,7 +550,7 @@ private struct BreadcrumbMapView: View {
             let trail = workout.recordedLocations
             if trail.count >= 2 {
                 MapPolyline(coordinates: trail.map(\.coordinate))
-                    .stroke(.green.opacity(0.6), lineWidth: 4)
+                    .stroke(.green.opacity(0.6), style: .roundedLine(4))
             }
         }
 
@@ -581,5 +585,102 @@ private extension CLLocationCoordinate2D {
         return CLLocationCoordinate2D(
             latitude: lat2 * 180 / .pi,
             longitude: lon2 * 180 / .pi)
+    }
+}
+
+// MARK: - Route line cache
+
+/// Route-line geometry for the MapKit breadcrumb, kept between renders. The
+/// map re-renders on every heading and location update, but these only change
+/// with the route, the zoom, or the rider's segment.
+private enum RouteLineMapCache {
+    private static var coordinatesKey: [Double] = []
+    private static var cachedCoordinates: [CLLocationCoordinate2D] = []
+    private static var farKey: [Double] = []
+    private static var cachedFar: [RouteRainbow.MapSegment] = []
+    private static var nearKey: [Double] = []
+    private static var cachedNear: [RouteRainbow.MapSegment] = []
+
+    /// Hue steps per rainbow cycle. Small enough steps read as a smooth fade;
+    /// the thin line is dimmer, so it gets away with fewer pieces.
+    private static let nearStepsPerCycle = 64
+    private static let farStepsPerCycle = 32
+
+    private static func key(_ route: ProcessedRoute, _ extra: Double...) -> [Double] {
+        [Double(route.points.count), route.points.last?.distanceFromStart ?? 0] + extra
+    }
+
+    static func coordinates(for route: ProcessedRoute) -> [CLLocationCoordinate2D] {
+        let k = key(route)
+        if k != coordinatesKey {
+            cachedCoordinates = route.points.map(\.coordinate)
+            coordinatesKey = k
+        }
+        return cachedCoordinates
+    }
+
+    static func rainbowNear(for route: ProcessedRoute, segmentIndex: Int, viewDistance: Double,
+                            defaultZoom: Double) -> [RouteRainbow.MapSegment] {
+        let k = key(route, viewDistance, defaultZoom, Double(segmentIndex))
+        if k != nearKey {
+            let points = route.points
+            let start = points[segmentIndex].distanceFromStart
+            let end = min(start + RouteLineLayout.nearAhead(viewDistance), points.last?.distanceFromStart ?? 0)
+            let step = RouteRainbow.routeWavelength(defaultZoom: defaultZoom) / Double(nearStepsPerCycle)
+            cachedNear = end > start
+                ? RouteRainbow.mapSegments(
+                    along: points, steps: Array(Int(start / step)...Int(end / step)), clampedTo: start...end,
+                    defaultZoom: defaultZoom, stepsPerCycle: nearStepsPerCycle, dimmed: false)
+                : []
+            nearKey = k
+        }
+        return cachedNear
+    }
+
+    /// Thin rainbow past the thick stretch, for every piece of route that
+    /// passes within a couple of screens of the rider. That includes switchbacks
+    /// and loops that come back near you much later in the route.
+    static func rainbowFar(for route: ProcessedRoute, segmentIndex: Int, viewDistance: Double,
+                           defaultZoom: Double) -> [RouteRainbow.MapSegment] {
+        let k = key(route, viewDistance, defaultZoom, Double(segmentIndex))
+        if k != farKey {
+            let points = route.points
+            let routeEnd = points.last?.distanceFromStart ?? 0
+            let nearEnd = min(points[segmentIndex].distanceFromStart + RouteLineLayout.nearAhead(viewDistance), routeEnd)
+            let step = RouteRainbow.routeWavelength(defaultZoom: defaultZoom) / Double(farStepsPerCycle)
+            let radius = viewDistance * 2
+
+            // Flat meters around the rider's segment, plenty accurate at this scale.
+            let center = points[segmentIndex].coordinate
+            let cosLat = cos(center.latitude * .pi / 180)
+            func local(_ c: CLLocationCoordinate2D) -> (x: Double, y: Double) {
+                ((c.longitude - center.longitude) * cosLat * 111_320, (c.latitude - center.latitude) * 111_320)
+            }
+
+            var steps = Set<Int>()
+            if nearEnd < routeEnd {
+                var prev = local(points[RouteRainbow.index(atOrBefore: nearEnd, in: points)].coordinate)
+                for j in RouteRainbow.index(atOrBefore: nearEnd, in: points)..<(points.count - 1) {
+                    let next = local(points[j + 1].coordinate)
+                    // Distance from the rider to this segment, so long straight
+                    // segments crossing the screen still count.
+                    let dx = next.x - prev.x, dy = next.y - prev.y
+                    let lengthSq = dx * dx + dy * dy
+                    let t = lengthSq > 0 ? min(max(-(prev.x * dx + prev.y * dy) / lengthSq, 0), 1) : 0
+                    let px = prev.x + dx * t, py = prev.y + dy * t
+                    if px * px + py * py <= radius * radius {
+                        let lo = Int(max(points[j].distanceFromStart, nearEnd) / step)
+                        let hi = Int(points[j + 1].distanceFromStart / step)
+                        if hi >= lo { steps.formUnion(lo...hi) }
+                    }
+                    prev = next
+                }
+            }
+            cachedFar = RouteRainbow.mapSegments(
+                along: points, steps: steps.sorted(), clampedTo: nearEnd...max(routeEnd, nearEnd),
+                defaultZoom: defaultZoom, stepsPerCycle: farStepsPerCycle, dimmed: true)
+            farKey = k
+        }
+        return cachedFar
     }
 }

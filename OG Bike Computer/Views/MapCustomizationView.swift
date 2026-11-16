@@ -212,51 +212,15 @@ struct MapCustomizationView: View {
 
     // MARK: - Zoom
 
-    private var isImperial: Bool { currentUnits.distance == .miles }
-
-    /// Format a distance in meters for the zoom picker labels
-    private func zoomLabel(_ meters: Double) -> String {
-        if isImperial {
-            let feet = meters * 3.28084
-            if feet >= 2640 { // 0.5 miles
-                let miles = meters / 1609.34
-                if miles == Double(Int(miles)) {
-                    return "\(Int(miles)) mi"
-                }
-                return String(format: "%.1f mi", miles)
-            }
-            return "\(Int(round(feet))) ft"
-        }
-        return "\(Int(meters))m"
-    }
-
-    /// Imperial-native closest-zoom options (meters): 300 / 500 / 650 / 1000 / 1300 ft.
-    private var closestZoomImperialOptions: [Double] {
-        [300.0 / 3.28084, 500.0 / 3.28084, 650.0 / 3.28084, 1000.0 / 3.28084, 1300.0 / 3.28084]
-    }
-    /// Imperial-native farthest-zoom options (meters): 0.5 / 0.75 / 1 / 1.5 / 2 mi.
-    private var farthestZoomImperialOptions: [Double] {
-        [0.5 * 1609.34, 0.75 * 1609.34, 1 * 1609.34, 1.5 * 1609.34, 2 * 1609.34]
-    }
-    private var closestZoomMetricOptions: [Double] { [100, 150, 200, 300, 400] }
-    private var farthestZoomMetricOptions: [Double] { [800, 1200, 1600, 2400, 3200] }
-
-    /// Snap a stored meter value to the closest option in the active option set.
-    private func snapToClosest(_ value: Double, in options: [Double]) -> Double {
-        options.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
-    }
-
     @ViewBuilder
     private var zoomSection: some View {
-        let closestOptions = isImperial ? closestZoomImperialOptions : closestZoomMetricOptions
-        let farthestOptions = isImperial ? farthestZoomImperialOptions : farthestZoomMetricOptions
-
+        let map = userSettings.settings.ridePreferences.mapScreen
         let closestBinding = Binding<Double>(
-            get: { snapToClosest(userSettings.settings.ridePreferences.mapScreen.zoomMin, in: closestOptions) },
+            get: { userSettings.settings.ridePreferences.mapScreen.effectiveZoomMin },
             set: { userSettings.settings.ridePreferences.mapScreen.zoomMin = $0 }
         )
         let farthestBinding = Binding<Double>(
-            get: { snapToClosest(userSettings.settings.ridePreferences.mapScreen.zoomMax, in: farthestOptions) },
+            get: { userSettings.settings.ridePreferences.mapScreen.effectiveZoomMax },
             set: { userSettings.settings.ridePreferences.mapScreen.zoomMax = $0 }
         )
 
@@ -264,8 +228,8 @@ struct MapCustomizationView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Closest Zoom")
                 Picker("Closest Zoom", selection: closestBinding) {
-                    ForEach(closestOptions, id: \.self) { meters in
-                        Text(zoomLabel(meters)).tag(meters)
+                    ForEach(ZoomSteps.closestOptions, id: \.self) { meters in
+                        Text(ZoomSteps.label(meters)).tag(meters)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -274,8 +238,8 @@ struct MapCustomizationView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Farthest Zoom")
                 Picker("Farthest Zoom", selection: farthestBinding) {
-                    ForEach(farthestOptions, id: \.self) { meters in
-                        Text(zoomLabel(meters)).tag(meters)
+                    ForEach(ZoomSteps.farthestOptions, id: \.self) { meters in
+                        Text(ZoomSteps.label(meters)).tag(meters)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -285,26 +249,25 @@ struct MapCustomizationView: View {
                 HStack {
                     Text("Default Zoom")
                     Spacer()
-                    Text(zoomLabel(userSettings.settings.ridePreferences.mapScreen.defaultZoom))
+                    Text(ZoomSteps.label(map.effectiveDefaultZoom))
                         .foregroundStyle(.secondary)
                 }
-                let zMin = userSettings.settings.ridePreferences.mapScreen.zoomMin
-                let zMax = userSettings.settings.ridePreferences.mapScreen.zoomMax
-                Slider(
-                    value: config.defaultZoom,
-                    in: zMin...max(zMin + 50, zMax),
-                    step: 50
+                // The slider moves through the stop list by position, so each
+                // stop is a round distance and the ends are exactly the closest
+                // and farthest zoom.
+                let stops = map.defaultZoomStops
+                let stopBinding = Binding<Double>(
+                    get: {
+                        let current = userSettings.settings.ridePreferences.mapScreen.effectiveDefaultZoom
+                        return Double(stops.firstIndex(of: current) ?? 0)
+                    },
+                    set: { index in
+                        let i = min(max(Int(index.rounded()), 0), stops.count - 1)
+                        userSettings.settings.ridePreferences.mapScreen.defaultZoom = stops[i]
+                    }
                 )
-                .onChange(of: zMin) { _, newMin in
-                    if userSettings.settings.ridePreferences.mapScreen.defaultZoom < newMin {
-                        userSettings.settings.ridePreferences.mapScreen.defaultZoom = newMin
-                    }
-                }
-                .onChange(of: zMax) { _, newMax in
-                    if userSettings.settings.ridePreferences.mapScreen.defaultZoom > newMax {
-                        userSettings.settings.ridePreferences.mapScreen.defaultZoom = newMax
-                    }
-                }
+                Slider(value: stopBinding, in: 0...Double(max(stops.count - 1, 1)), step: 1)
+                    .disabled(stops.count < 2)
             }
         } header: {
             Label("Zoom Range", systemImage: "magnifyingglass")
@@ -648,6 +611,7 @@ struct MapScreenPreview: View {
                         viewDistance: currentViewDistance,
                         useCompassHeading: true,
                         routeAheadColor: config.routeAheadColor,
+                        defaultZoom: config.effectiveDefaultZoom,
                         animated: false)
                         .animation(.easeOut(duration: 0.2), value: zoomIndex)
                 }
@@ -921,7 +885,7 @@ struct MapConfigImportSheet: View {
             config.primaryStat.label,
             "\(config.secondaryStats.filter { $0 != .none }.count) secondary",
             config.routeAheadColor.label + " route",
-            "\(Int(config.defaultZoom))m zoom"
+            "\(ZoomSteps.label(config.effectiveDefaultZoom)) zoom"
         ]
         Text(parts.joined(separator: " · "))
             .font(.caption)
@@ -935,7 +899,11 @@ struct LookaheadDistancePicker: View {
     @Binding var meters: Double
 
     private var options: [(label: String, meters: Double)] {
-        if currentUnits.distance == .miles {
+        Self.options(imperial: currentUnits.distance == .miles)
+    }
+
+    static func options(imperial: Bool) -> [(label: String, meters: Double)] {
+        if imperial {
             return [
                 ("1 mi", 1 * 1609.34),
                 ("2 mi", 2 * 1609.34),

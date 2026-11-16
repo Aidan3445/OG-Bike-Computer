@@ -73,8 +73,8 @@ struct NavigationAlertSettingsView: View {
             DistancePicker(
                 label: "Primary Distance",
                 meters: prefs.turnAlerts.primaryApproachDistance,
-                min: 30.48,    // 100ft / 30m
-                max: 402.336   // 0.25mi / 500m
+                min: UnitPickerRange.primaryApproach.lowerBound,
+                max: UnitPickerRange.primaryApproach.upperBound
             )
         } header: {
             Text("Primary Approach")
@@ -89,8 +89,8 @@ struct NavigationAlertSettingsView: View {
                 DistancePicker(
                     label: "Secondary Distance",
                     meters: prefs.turnAlerts.secondaryApproachDistance,
-                    min: 800,      // 0.5 mi / 800 m
-                    max: 3218.69   // 2 mi / 3 km
+                    min: UnitPickerRange.secondaryApproach.lowerBound,
+                    max: UnitPickerRange.secondaryApproach.upperBound
                 )
             }
         } header: {
@@ -183,8 +183,8 @@ struct NavigationAlertSettingsView: View {
             DistancePicker(
                 label: "Off-Route Threshold",
                 meters: prefs.navigationEvents.offRouteThreshold,
-                min: 30,   // ~100ft / 30m
-                max: 300   // ~1000ft / 300m
+                min: UnitPickerRange.offRouteThreshold.lowerBound,
+                max: UnitPickerRange.offRouteThreshold.upperBound
             )
 
             VStack(alignment: .leading, spacing: 4) {
@@ -353,6 +353,7 @@ struct NavigationAlertSettingsView: View {
 /// Bounds: 0.5–10 mi (0.5–16 km depending on units). Value is clamped on commit.
 private struct MaxOffRouteRangeField: View {
     @Binding var meters: Double
+    @ObservedObject private var unitState = UnitState.shared
     @State private var text: String = ""
     @FocusState private var focused: Bool
 
@@ -380,6 +381,9 @@ private struct MaxOffRouteRangeField: View {
                 .onChange(of: meters) { _, _ in
                     if !focused { syncFromMeters() }
                 }
+                // Units can change while this screen is open (settings from the
+                // watch, Siri), so re-convert rather than relabel the number.
+                .onChange(of: unitState.preferences.distance) { _, _ in syncFromMeters() }
                 .onChange(of: focused) { _, isFocused in
                     if !isFocused { commit() }
                 }
@@ -394,13 +398,20 @@ private struct MaxOffRouteRangeField: View {
         }
     }
 
-    private func syncFromMeters() {
+    private var syncedText: String {
         let v = displayValue
         // 1 decimal place is enough for this range
-        text = String(format: v == v.rounded() ? "%.0f" : "%.1f", v)
+        return String(format: v == v.rounded() ? "%.0f" : "%.1f", v)
+    }
+
+    private func syncFromMeters() {
+        text = syncedText
     }
 
     private func commit() {
+        // Leaving the field without editing shouldn't save the rounded display
+        // value over the exact stored one.
+        guard text != syncedText else { return }
         let normalized = text.replacingOccurrences(of: ",", with: ".")
         guard var parsed = Double(normalized) else {
             syncFromMeters()

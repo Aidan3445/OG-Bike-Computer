@@ -349,7 +349,8 @@ struct OG_Bike_ComputerApp: App {
                         OAuthManager.shared.setPresentationAnchor(window)
                     }
                 }
-                .onChange(of: userSettings.settings.unitPreferences) { _, newValue in
+                .onChange(of: userSettings.settings.unitPreferences) { oldValue, newValue in
+                    snapPickerSettings(&userSettings.settings, from: oldValue, to: newValue)
                     UnitState.shared.preferences = newValue
                     cachePreferencesForAppDelegate()
                 }
