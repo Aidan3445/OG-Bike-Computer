@@ -3,6 +3,7 @@
 //  OG Bike Computer Watch App
 //
 
+import CoreLocation
 import HealthKit
 
 /// Session state changes, including pause, resume and end from the phone

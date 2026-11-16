@@ -4,6 +4,7 @@
 //
 
 import CoreLocation
+import HealthKit
 
 /// Holding a ride saves it as it stands so it can be continued later as
 /// the same ride. Checkpoints leave a held ride behind after a crash.

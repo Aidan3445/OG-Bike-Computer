@@ -4,6 +4,7 @@
 //
 
 import CoreLocation
+import HealthKit
 
 enum AutoPauseState {
     case moving

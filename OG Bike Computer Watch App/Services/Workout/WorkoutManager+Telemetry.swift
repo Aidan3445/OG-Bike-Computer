@@ -3,6 +3,7 @@
 //  OG Bike Computer Watch App
 //
 
+import CoreLocation
 import Foundation
 import HealthKit
 

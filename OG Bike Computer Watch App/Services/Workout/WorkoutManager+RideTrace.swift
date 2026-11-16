@@ -5,6 +5,7 @@
 
 import CoreLocation
 import CoreMotion
+import HealthKit
 import WatchKit
 
 /// The ride's diagnostic CSVs. They're nil when diagnostics are off.
