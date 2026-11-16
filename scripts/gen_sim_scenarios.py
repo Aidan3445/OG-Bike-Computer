@@ -121,6 +121,48 @@ def ride(file_name, name, vertices):
     write_gpx(os.path.join(SIM_DIR, file_name), name, walk(vertices), timed=True)
 
 
+def winding_vertices():
+    """Five miles straight east, then about five of winding road for testing
+    zoom, turn cues, the turn overlay, and the thin far-ahead route line."""
+    v = [(0.0, 0.0), (8047.0, 0.0)]
+
+    def go(dx, dy):
+        x, y = v[-1]
+        v.append((x + dx, y + dy))
+
+    # Stair steps: clean 90 degree cues, alternating left and right.
+    for _ in range(2):
+        go(0, 300)
+        go(300, 0)
+
+    # Tight switchbacks, 80 m apart. Each hairpin is two right (or left) cues
+    # 80 m apart, and the next leg over sits beside you as thin far-ahead
+    # line even at the closest zoom. The first leg starts at the stair corner,
+    # 50 m below the bottom hairpins so they don't touch the stair road.
+    go(0, 350)
+    for leg in range(4):
+        go(80, 0)
+        go(0, -300 if leg % 2 == 0 else 300)
+
+    # Out to a loop that crosses back over the road in. Riding east you see
+    # the loop's southbound leg cross ahead as thin line, 2 km down the route.
+    go(1000, 0)
+    go(0, 500)
+    go(-500, 0)
+    go(0, -1000)
+
+    # S-curves: winding but gentle enough (about 16 degrees per point) that
+    # they shouldn't produce cues.
+    x0, y0 = v[-1]
+    amplitude, wavelength, length = 100.0, 600.0, 1200.0
+    steps = int(length / 20)
+    for i in range(1, steps + 1):
+        x = length * i / steps
+        v.append((x0 + x, y0 + amplitude * math.sin(2 * math.pi * x / wavelength)))
+    go(300, 0)
+    return v
+
+
 def main():
     # Straight: a sparse 6 km out leg, then a dense return leg 150 m north.
     out_leg = [(x, 0.0) for x in range(0, 6001, 1500)]
@@ -156,6 +198,11 @@ def main():
     ride("sim_ten_offroute_start.gpx", "Sim Ten off-route start", [
         (0.0, -150.0), (8150.0, -150.0), (8150.0, rejoin_y),
     ] + from_along(ten_vertices, total * 0.7))
+
+    # Winding: straight then windy, ridden exactly on the route.
+    winding = winding_vertices()
+    route("sim_winding_route.gpx", "Sim Winding", densify(winding, 25))
+    ride("sim_winding.gpx", "Sim Winding", winding)
 
 
 if __name__ == "__main__":

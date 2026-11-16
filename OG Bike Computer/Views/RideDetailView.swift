@@ -104,12 +104,12 @@ struct RideDetailView: View {
                 if coloredSegments.isEmpty {
                     if !simpleRoute.isEmpty {
                         MapPolyline(coordinates: simpleRoute)
-                            .stroke(.blue, lineWidth: 4)
+                            .stroke(.blue, style: .roundedLine(4))
                     }
                 } else {
                     ForEach(trackLinePieces) { piece in
                         MapPolyline(coordinates: piece.coords)
-                            .stroke(piece.color, lineWidth: 4)
+                            .stroke(piece.color, style: .roundedLine(4))
                     }
                 }
                 // Pause/hold jumps (long elapsed-time gaps) drawn as dashed grey.

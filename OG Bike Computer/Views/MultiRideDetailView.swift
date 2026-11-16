@@ -99,7 +99,7 @@ struct MultiRideDetailView: View {
                     ) {
                         ForEach(renderPieces) { piece in
                             MapPolyline(coordinates: piece.coords)
-                                .stroke(piece.color, lineWidth: 4)
+                                .stroke(piece.color, style: .roundedLine(4))
                         }
                         ForEach(connectors) { c in
                             if c.dashed {
@@ -108,7 +108,7 @@ struct MultiRideDetailView: View {
                                         c.color, style: StrokeStyle(lineWidth: 3, dash: [6, 4]))
                             } else {
                                 MapPolyline(coordinates: [c.from, c.to])
-                                    .stroke(c.color, lineWidth: 4)
+                                    .stroke(c.color, style: .roundedLine(4))
                             }
                         }
 

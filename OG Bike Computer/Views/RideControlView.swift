@@ -583,7 +583,7 @@ private struct FreeRideMapSheet: View {
             Map(position: $mapPosition) {
                 if telemetry.riderPath.count >= 2 {
                     MapPolyline(coordinates: telemetry.riderPath)
-                        .stroke(.purple.opacity(0.8), lineWidth: 4)
+                        .stroke(.purple.opacity(0.8), style: .roundedLine(4))
                 }
 
                 if let first = telemetry.riderPath.first {

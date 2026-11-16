@@ -106,13 +106,13 @@ struct RouteDetailView: View {
                             // highlight replaces that stretch
                             ForEach(routeLinePieces) { piece in
                                 MapPolyline(coordinates: piece.coords)
-                                    .stroke(piece.color, lineWidth: 4)
+                                    .stroke(piece.color, style: .roundedLine(4))
                             }
 
                             // In-progress recording breadcrumb, above the route
                             if recordingPath.count >= 2 {
                                 MapPolyline(coordinates: recordingPath)
-                                    .stroke(.purple.opacity(0.65), lineWidth: 4)
+                                    .stroke(.purple.opacity(0.65), style: .roundedLine(4))
                             }
 
                             // Start marker
@@ -767,7 +767,7 @@ struct RouteDetailView: View {
             let highlight = editor.highlightCoordinates(for: selEntry)
             if highlight.count >= 2 {
                 MapPolyline(coordinates: highlight)
-                    .stroke(.white.opacity(0.55), lineWidth: 9)
+                    .stroke(.white.opacity(0.55), style: .roundedLine(9))
                 let startBearing = RouteProcessor.bearing(from: highlight[0], to: highlight[1])
                 let endBearing = RouteProcessor.bearing(
                     from: highlight[highlight.count - 2],

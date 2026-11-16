@@ -61,6 +61,31 @@ extension Color {
     static let riddenRoute = Color(red: 0, green: 0.45, blue: 0.15)
 }
 
+// MARK: - Route line layout
+
+/// How far around the rider the route is drawn thick. Past this it's drawn
+/// thin and dimmer so the stretch immediately ahead stands out on winding
+/// roads. Both breadcrumb renderers share these so switching between them
+/// (like when the screen dims) doesn't move the boundary.
+enum RouteLineLayout {
+    static func nearBehind(_ viewDistance: Double) -> Double { viewDistance }
+    static func nearAhead(_ viewDistance: Double) -> Double { viewDistance * 2.5 }
+    static let nearLineWidth: CGFloat = 6
+    static let farLineWidth: CGFloat = 3
+    /// Solid colors dim the far line with opacity. The rainbow can't, since
+    /// it's drawn in pieces and overlapping round caps would stack into darker
+    /// dots, so it uses darker opaque colors instead.
+    static let farOpacity: Double = 0.5
+}
+
+extension StrokeStyle {
+    /// Rounded caps and joins for route lines. The default miter join spikes
+    /// on sharp corners, and butt caps leave notches where pieces meet.
+    static func roundedLine(_ width: CGFloat) -> StrokeStyle {
+        StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)
+    }
+}
+
 // MARK: - Rainbow route
 
 /// Colors for the rainbow route. Hue is measured in cycles along the line and
@@ -78,33 +103,77 @@ enum RouteRainbow {
         var cycle: Double
     }
 
-    /// Planned routes: one full rainbow every two screen heights, so 1/4 mi
-    /// of zoom cycles every 1/2 mi.
-    static func routeWavelength(viewDistance: Double) -> Double {
-        viewDistance * 2
+    /// Planned routes: one full rainbow every two default-zoom distances, so a
+    /// 1/4 mi default zoom cycles every 1/2 mi. It follows the default zoom
+    /// rather than the current one so zooming doesn't recolor the route.
+    static func routeWavelength(defaultZoom: Double) -> Double {
+        defaultZoom * 2
     }
 
-    static func routeCycle(at distance: Double, viewDistance: Double) -> Double {
-        distance / routeWavelength(viewDistance: viewDistance)
+    static func routeCycle(at distance: Double, defaultZoom: Double) -> Double {
+        distance / routeWavelength(defaultZoom: defaultZoom)
     }
 
-    static func color(cycle: Double) -> Color {
+    /// `dimmed` is the far route line's color, darker but still opaque.
+    static func color(cycle: Double, dimmed: Bool = false) -> Color {
         var hue = cycle.truncatingRemainder(dividingBy: 1)
         if hue < 0 { hue += 1 }
-        return Color(hue: hue, saturation: 0.85, brightness: 1)
+        return Color(hue: hue, saturation: 0.85, brightness: dimmed ? 0.5 : 1)
     }
 
-    /// Gradient stops covering `start...end` meters of a route, for MapKit polylines.
-    static func gradient(from start: Double, to end: Double, viewDistance: Double) -> Gradient {
-        let span = max(end - start, 1)
-        let count = min(max(Int(span / (routeWavelength(viewDistance: viewDistance) / 16)), 2), 200)
-        let stops = (0...count).map { i in
-            let t = Double(i) / Double(count)
-            return Gradient.Stop(
-                color: color(cycle: routeCycle(at: start + span * t, viewDistance: viewDistance)),
-                location: t)
+    struct MapSegment {
+        let id: Int
+        let coordinates: [CLLocationCoordinate2D]
+        let color: Color
+    }
+
+    /// Solid-color polylines for MapKit, one per small step of hue. MapKit
+    /// doesn't lay a gradient along a polyline's length, so the fade is built
+    /// from steps small enough to read as smooth. Step `k` always covers the
+    /// same stretch of route, so it keeps its id, shape and color as the rider
+    /// moves and MapKit only has to add or drop pieces at the ends. Each piece
+    /// is clipped to `range`.
+    static func mapSegments(along points: [ProcessedPoint], steps: [Int], clampedTo range: ClosedRange<Double>,
+                            defaultZoom: Double, stepsPerCycle: Int, dimmed: Bool) -> [MapSegment] {
+        guard points.count >= 2 else { return [] }
+        let step = routeWavelength(defaultZoom: defaultZoom) / Double(stepsPerCycle)
+        return steps.compactMap { k in
+            let a = max(Double(k) * step, range.lowerBound)
+            let b = min(Double(k + 1) * step, range.upperBound)
+            guard b > a else { return nil }
+            var i = index(atOrBefore: a, in: points)
+            var coordinates = [coordinate(at: a, in: points, hint: &i)]
+            var j = i + 1
+            while j < points.count && points[j].distanceFromStart < b {
+                coordinates.append(points[j].coordinate)
+                j += 1
+            }
+            var h = min(max(j - 1, 0), points.count - 2)
+            coordinates.append(coordinate(at: b, in: points, hint: &h))
+            let hue = (Double(k) + 0.5) / Double(stepsPerCycle)
+            return MapSegment(id: k, coordinates: coordinates, color: color(cycle: hue, dimmed: dimmed))
         }
-        return Gradient(stops: stops)
+    }
+
+    /// Index of the last point at or before `distance`, kept to a valid segment start.
+    static func index(atOrBefore distance: Double, in points: [ProcessedPoint]) -> Int {
+        var lo = 0, hi = points.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if points[mid].distanceFromStart <= distance { lo = mid } else { hi = mid - 1 }
+        }
+        return min(lo, points.count - 2)
+    }
+
+    private static func coordinate(at distance: Double, in points: [ProcessedPoint],
+                                   hint i: inout Int) -> CLLocationCoordinate2D {
+        while i < points.count - 2 && points[i + 1].distanceFromStart < distance { i += 1 }
+        let a = points[i], b = points[i + 1]
+        let span = b.distanceFromStart - a.distanceFromStart
+        let t = span > 0 ? min(max((distance - a.distanceFromStart) / span, 0), 1) : 0
+        return CLLocationCoordinate2D(
+            latitude: a.coordinate.latitude + (b.coordinate.latitude - a.coordinate.latitude) * t,
+            longitude: a.coordinate.longitude + (b.coordinate.longitude - a.coordinate.longitude) * t)
     }
 
     private static var trailCycles: [Double] = []
@@ -135,12 +204,14 @@ enum RouteRainbow {
     /// is drawn in short chunks, each with a linear gradient between its end
     /// colors. A chunk only covers a small slice of hue, so the result reads
     /// as one continuous fade.
-    static func stroke(_ vertices: [Vertex], in context: GraphicsContext, style: StrokeStyle) {
+    static func stroke(_ vertices: [Vertex], in context: GraphicsContext, style: StrokeStyle,
+                       dimmed: Bool = false) {
         guard vertices.count >= 2 else { return }
         let step = 1.0 / 24
 
         func draw(_ path: Path, from a: Vertex, to b: Vertex) {
-            let gradient = Gradient(colors: [color(cycle: a.cycle), color(cycle: b.cycle)])
+            let gradient = Gradient(colors: [color(cycle: a.cycle, dimmed: dimmed),
+                                             color(cycle: b.cycle, dimmed: dimmed)])
             context.stroke(path, with: .linearGradient(gradient, startPoint: a.point, endPoint: b.point),
                            style: style)
         }
@@ -393,13 +464,13 @@ struct RouteMapBreadcrumbCanvas: View {
     let viewDistance: Double
     var useCompassHeading: Bool = true
     var routeAheadColor: RouteColor = .white
+    /// Sets the rainbow's cycle length. See `RouteRainbow.routeWavelength`.
+    var defaultZoom: Double = 400
     /// When true, runs a TimelineView ticker to re-render at ~10Hz. The phone
     /// preview is static so it disables this.
     var animated: Bool = true
 
     @ObservedObject private var unitState = UnitState.shared
-
-    private let routeLineWidth: CGFloat = 6
 
     var body: some View {
         let _ = unitState.preferences
@@ -499,10 +570,7 @@ struct RouteMapBreadcrumbCanvas: View {
         let riderScreenY = size.height * 0.75
         let metersPerPx = min(size.width, size.height) / viewDistance
 
-        let behind = viewDistance * 1.0
-        let ahead = viewDistance * 2.5
-        let minDist = currentDist - behind
-        let maxDist = currentDist + ahead
+        let window = (currentDist - RouteLineLayout.nearBehind(viewDistance))...(currentDist + RouteLineLayout.nearAhead(viewDistance))
 
         let center = location.coordinate
         let cosLat = cos(center.latitude * .pi / 180)
@@ -518,114 +586,102 @@ struct RouteMapBreadcrumbCanvas: View {
                 y: riderScreenY - ry * metersPerPx)
         }
 
-        // Distant sections first (dimmer)
         let screenW = Double(size.width)
         let screenH = Double(size.height)
-        let margin: Double = 60
-        let visStride = max(1, points.count / 800)
-
-        var distantGrayPath = Path()
-        var distantGrayStarted = false
-        var distantGreenPath = Path()
-        var distantGreenStarted = false
-
-        for i in Swift.stride(from: 0, to: points.count, by: visStride) {
-            let point = points[i]
-
-            if point.distanceFromStart >= minDist - 200 && point.distanceFromStart <= maxDist + 200 {
-                if distantGrayStarted { distantGrayStarted = false }
-                if distantGreenStarted { distantGreenStarted = false }
-                continue
-            }
-
-            let pt = toScreen(point.coordinate)
-
-            guard pt.x >= -margin && pt.x <= screenW + margin &&
-                  pt.y >= -margin && pt.y <= screenH + margin else {
-                if distantGrayStarted { distantGrayStarted = false }
-                if distantGreenStarted { distantGreenStarted = false }
-                continue
-            }
-
-            if point.distanceFromStart <= currentDist {
-                if distantGrayStarted { distantGrayStarted = false }
-                if !distantGreenStarted {
-                    distantGreenPath.move(to: pt)
-                    distantGreenStarted = true
-                } else {
-                    distantGreenPath.addLine(to: pt)
-                }
-            } else {
-                if distantGreenStarted { distantGreenStarted = false }
-                if !distantGrayStarted {
-                    distantGrayPath.move(to: pt)
-                    distantGrayStarted = true
-                } else {
-                    distantGrayPath.addLine(to: pt)
-                }
-            }
-        }
-
-        context.stroke(distantGreenPath, with: .color(.riddenRoute.opacity(0.6)),
-                       style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-        context.stroke(distantGrayPath, with: .color(.gray.opacity(0.4)),
-                       style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-
-        // Primary behind/ahead rendering
-        var behindPath = Path()
-        var aheadPath = Path()
-        var startedBehind = false
-        var startedAhead = false
-        var lastSX: Double = .greatestFiniteMagnitude
-        var lastSY: Double = .greatestFiniteMagnitude
-
-        var bridgePoint: CGPoint?
-        var bridgeDist = currentDist
         let rainbow = routeAheadColor == .rainbow
-        var aheadVertices: [RouteRainbow.Vertex] = []
+        let lastIdx = points.count - 1
 
-        for point in points {
-            guard point.distanceFromStart >= minDist - 200,
-                  point.distanceFromStart <= maxDist + 200 else { continue }
+        // The thick window as an index range around the rider. The thin far
+        // sections start and end on these exact points so the two always meet.
+        var firstNear = segIdx
+        while firstNear > 0 && points[firstNear - 1].distanceFromStart >= window.lowerBound { firstNear -= 1 }
+        var lastNear = segIdx
+        while lastNear < lastIdx && points[lastNear + 1].distanceFromStart <= window.upperBound { lastNear += 1 }
 
-            let pt = toScreen(point.coordinate)
+        func vertex(_ i: Int) -> RouteRainbow.Vertex {
+            RouteRainbow.Vertex(
+                point: toScreen(points[i].coordinate),
+                cycle: RouteRainbow.routeCycle(at: points[i].distanceFromStart, defaultZoom: defaultZoom))
+        }
 
-            if abs(pt.x - lastSX) + abs(pt.y - lastSY) < 2 { continue }
-            lastSX = pt.x
-            lastSY = pt.y
+        func path(_ vertices: [RouteRainbow.Vertex]) -> Path {
+            var p = Path()
+            guard let first = vertices.first else { return p }
+            p.move(to: first.point)
+            for v in vertices.dropFirst() { p.addLine(to: v.point) }
+            return p
+        }
 
-            if point.distanceFromStart <= currentDist {
-                if !startedBehind {
-                    behindPath.move(to: pt)
-                    startedBehind = true
-                } else {
-                    behindPath.addLine(to: pt)
-                }
-                bridgePoint = pt
-                bridgeDist = point.distanceFromStart
-            } else {
-                if !startedAhead {
-                    if let bp = bridgePoint {
-                        aheadPath.move(to: bp)
-                        aheadPath.addLine(to: pt)
-                        if rainbow { aheadVertices.append(.init(point: bp, cycle: RouteRainbow.routeCycle(at: bridgeDist, viewDistance: viewDistance))) }
-                    } else {
-                        aheadPath.move(to: pt)
+        // Splits a far section into the runs that touch the screen, so long
+        // routes don't stroke thousands of offscreen segments.
+        let visibleRect = CGRect(origin: .zero, size: size).insetBy(dx: -60, dy: -60)
+        func visibleRuns(_ indices: [Int]) -> [[RouteRainbow.Vertex]] {
+            var runs: [[RouteRainbow.Vertex]] = []
+            var run: [RouteRainbow.Vertex] = []
+            var prev: RouteRainbow.Vertex?
+            for i in indices {
+                let v = vertex(i)
+                if let p = prev {
+                    let bounds = CGRect(x: min(p.point.x, v.point.x), y: min(p.point.y, v.point.y),
+                                        width: abs(p.point.x - v.point.x), height: abs(p.point.y - v.point.y))
+                        .insetBy(dx: -1, dy: -1)
+                    if bounds.intersects(visibleRect) {
+                        if run.isEmpty { run.append(p) }
+                        run.append(v)
+                    } else if !run.isEmpty {
+                        runs.append(run)
+                        run = []
                     }
-                    startedAhead = true
-                } else {
-                    aheadPath.addLine(to: pt)
                 }
-                if rainbow { aheadVertices.append(.init(point: pt, cycle: RouteRainbow.routeCycle(at: point.distanceFromStart, viewDistance: viewDistance))) }
+                prev = v
+            }
+            if !run.isEmpty { runs.append(run) }
+            return runs
+        }
+
+        // Thick window points, skipping ones under 2px apart. The window's end
+        // points always stay so the far lines join exactly.
+        func nearVertices(_ range: ClosedRange<Int>) -> [RouteRainbow.Vertex] {
+            var out: [RouteRainbow.Vertex] = []
+            for i in range {
+                let v = vertex(i)
+                if let last = out.last, i != range.upperBound,
+                   abs(v.point.x - last.point.x) + abs(v.point.y - last.point.y) < 2 { continue }
+                out.append(v)
+            }
+            return out
+        }
+
+        let visStride = max(1, points.count / 800)
+        let farStyle = StrokeStyle(lineWidth: RouteLineLayout.farLineWidth, lineCap: .round, lineJoin: .round)
+        let nearStyle = StrokeStyle(lineWidth: RouteLineLayout.nearLineWidth, lineCap: .round, lineJoin: .round)
+
+        // Far sections first, thin, so the thick window draws over their ends.
+        if firstNear > 0 {
+            let indices = Array(Swift.stride(from: 0, to: firstNear, by: visStride)) + [firstNear]
+            for run in visibleRuns(indices) {
+                context.stroke(path(run), with: .color(.riddenRoute.opacity(0.6)), style: farStyle)
+            }
+        }
+        if lastNear < lastIdx {
+            let indices = Array(Swift.stride(from: lastNear, to: lastIdx, by: visStride)) + [lastIdx]
+            for run in visibleRuns(indices) {
+                if rainbow {
+                    RouteRainbow.stroke(run, in: context, style: farStyle, dimmed: true)
+                } else {
+                    context.stroke(path(run), with: .color(routeAheadColor.color.opacity(RouteLineLayout.farOpacity)),
+                                   style: farStyle)
+                }
             }
         }
 
-        let style = StrokeStyle(lineWidth: routeLineWidth, lineCap: .round, lineJoin: .round)
-        context.stroke(behindPath, with: .color(.riddenRoute), style: style)
+        let split = min(max(segIdx, firstNear), lastNear)
+        context.stroke(path(nearVertices(firstNear...split)), with: .color(.riddenRoute), style: nearStyle)
+        let aheadVertices = nearVertices(split...lastNear)
         if rainbow {
-            RouteRainbow.stroke(aheadVertices, in: context, style: style)
+            RouteRainbow.stroke(aheadVertices, in: context, style: nearStyle)
         } else {
-            context.stroke(aheadPath, with: .color(routeAheadColor.color), style: style)
+            context.stroke(path(aheadVertices), with: .color(routeAheadColor.color), style: nearStyle)
         }
 
         // POI pins (breadcrumb view)

@@ -22,6 +22,7 @@ struct WorkoutView<ExtraTab: View>: View {
     @State private var holdCountdownStart: Date?
     @State private var holdTimer: Timer?
     @State private var showNavOverlay = false
+    @State private var mapZoomIndex = -1
     @State private var navOverlayTask: Task<Void, Never>?
     @State private var showHoldExplainer = false
     @State private var holdExplainerDontShow = false
@@ -57,7 +58,7 @@ struct WorkoutView<ExtraTab: View>: View {
                     let tag = index + 1
                     switch key.kind {
                     case .routeMap:
-                        RouteMapView(workout: workout)
+                        RouteMapView(workout: workout, zoomIndex: $mapZoomIndex)
                             .tag(tag)
                     case .elevation:
                         ElevationProfileView(workout: workout)
@@ -90,7 +91,7 @@ struct WorkoutView<ExtraTab: View>: View {
                 if showNavOverlay && tab > 1 && workout.ridePreferences.mapScreen.showTurnOverlay {
                     ZStack {
                         Color.black.opacity(0.85)
-                        RouteMapView(workout: workout, isOverlay: true)
+                        RouteMapView(workout: workout, isOverlay: true, zoomIndex: $mapZoomIndex)
                     }
                     .transition(.opacity)
                     .allowsHitTesting(true)
