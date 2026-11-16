@@ -155,6 +155,32 @@ enum RouteRainbow {
         }
     }
 
+    /// Free-ride trail as MapKit polylines, one per small step of hue, thinned
+    /// to about 500 points like the canvas.
+    static func trailMapSegments(_ trail: [CLLocation], stepsPerCycle: Int = 24) -> [MapSegment] {
+        guard trail.count >= 2 else { return [] }
+        let cycles = cycles(for: trail)
+        let every = max(1, trail.count / 500)
+        var indices = Array(Swift.stride(from: 0, to: trail.count, by: every))
+        if indices.last != trail.count - 1 { indices.append(trail.count - 1) }
+        let perCycle = Double(stepsPerCycle)
+        var segments: [MapSegment] = []
+        var coordinates = [trail[indices[0]].coordinate]
+        var step = Int((cycles[indices[0]] * perCycle).rounded(.down))
+        for i in indices.dropFirst() {
+            coordinates.append(trail[i].coordinate)
+            let next = Int((cycles[i] * perCycle).rounded(.down))
+            if next != step || i == trail.count - 1 {
+                segments.append(MapSegment(
+                    id: segments.count, coordinates: coordinates,
+                    color: color(cycle: (Double(step) + 0.5) / perCycle)))
+                coordinates = [trail[i].coordinate]
+                step = next
+            }
+        }
+        return segments
+    }
+
     /// Index of the last point at or before `distance`, kept to a valid segment start.
     static func index(atOrBefore distance: Double, in points: [ProcessedPoint]) -> Int {
         var lo = 0, hi = points.count - 1
@@ -247,6 +273,53 @@ enum RouteRainbow {
         if chunkOpen {
             draw(chunk, from: chunkStart, to: last)
         }
+    }
+}
+
+// MARK: - Free ride framing
+
+/// What a free ride's overview frames: the trail and the rider, never
+/// tighter than `minSpan` metres. A new ride has no trail until it sets off,
+/// so the map and the rider still show while waiting.
+struct FreeRideFrame {
+    let minLat: Double, maxLat: Double, minLon: Double, maxLon: Double
+
+    static let minSpan: Double = 200
+
+    var center: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
+    }
+
+    init?(trail: [CLLocation], current: CLLocation?) {
+        var coords = trail.map(\.coordinate)
+        if let current { coords.append(current.coordinate) }
+        guard let first = coords.first else { return nil }
+        var minLat = first.latitude, maxLat = first.latitude
+        var minLon = first.longitude, maxLon = first.longitude
+        for c in coords.dropFirst() {
+            minLat = min(minLat, c.latitude)
+            maxLat = max(maxLat, c.latitude)
+            minLon = min(minLon, c.longitude)
+            maxLon = max(maxLon, c.longitude)
+        }
+        let metresPerDegree = 111_320.0
+        let minLatSpan = Self.minSpan / metresPerDegree
+        let cosLat = max(cos((minLat + maxLat) / 2 * .pi / 180), 0.01)
+        let minLonSpan = minLatSpan / cosLat
+        if maxLat - minLat < minLatSpan {
+            let mid = (minLat + maxLat) / 2
+            minLat = mid - minLatSpan / 2
+            maxLat = mid + minLatSpan / 2
+        }
+        if maxLon - minLon < minLonSpan {
+            let mid = (minLon + maxLon) / 2
+            minLon = mid - minLonSpan / 2
+            maxLon = mid + minLonSpan / 2
+        }
+        self.minLat = minLat
+        self.maxLat = maxLat
+        self.minLon = minLon
+        self.maxLon = maxLon
     }
 }
 
@@ -376,28 +449,20 @@ struct RouteMapFullRouteCanvas: View {
                     }
                 }
             } else {
-                // Free ride: show entire recorded path
+                // Free ride: the whole recorded trail and the rider
                 let trail = data.recordedLocations
-                guard trail.count >= 2 else { return }
-
-                var minLat = Double.greatestFiniteMagnitude, maxLat = -Double.greatestFiniteMagnitude
-                var minLon = Double.greatestFiniteMagnitude, maxLon = -Double.greatestFiniteMagnitude
-                for loc in trail {
-                    let c = loc.coordinate
-                    if c.latitude < minLat { minLat = c.latitude }
-                    if c.latitude > maxLat { maxLat = c.latitude }
-                    if c.longitude < minLon { minLon = c.longitude }
-                    if c.longitude > maxLon { maxLon = c.longitude }
-                }
+                guard let frame = FreeRideFrame(trail: trail, current: data.currentLocation) else { return }
 
                 let transform = makeTransform(
-                    minLat: minLat, maxLat: maxLat,
-                    minLon: minLon, maxLon: maxLon,
+                    minLat: frame.minLat, maxLat: frame.maxLat,
+                    minLon: frame.minLon, maxLon: frame.maxLon,
                     size: size, insetTop: insetTop, insetBottom: insetBottom, insetSide: insetSide)
                 let stride = max(1, trail.count / 500)
 
                 let trailStyle = StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
-                if routeAheadColor == .rainbow {
+                // A new ride has no trail until it sets off, just the rider.
+                let hasTrail = trail.count >= 2
+                if hasTrail && routeAheadColor == .rainbow {
                     var indices = Array(Swift.stride(from: 0, to: trail.count, by: stride))
                     if indices.last != trail.count - 1 { indices.append(trail.count - 1) }
                     let cycles = RouteRainbow.cycles(for: trail)
@@ -406,7 +471,7 @@ struct RouteMapFullRouteCanvas: View {
                                             cycle: cycles[$0])
                     }
                     RouteRainbow.stroke(vertices, in: context, style: trailStyle)
-                } else {
+                } else if hasTrail {
                     var path = Path()
                     path.move(to: project(trail[0].coordinate, transform: transform))
                     for i in Swift.stride(from: 1, to: trail.count, by: stride) {
@@ -857,4 +922,22 @@ fileprivate func drawWaypointPin(context: GraphicsContext, at pt: CGPoint, scale
             width: radius * 0.9,
             height: radius * 0.9)),
         with: .color(.white))
+}
+
+#Preview("Free ride, waiting to set off") {
+    RouteMapFullRouteCanvas(
+        data: RouteMapData(currentLocation: CLLocation(latitude: 42.3398, longitude: -71.0892)))
+        .frame(width: 198, height: 242)
+        .background(.black)
+}
+
+#Preview("Free ride, just set off") {
+    let start = CLLocationCoordinate2D(latitude: 42.3398, longitude: -71.0892)
+    let trail = (0..<12).map {
+        CLLocation(latitude: start.latitude + Double($0) * 0.00004, longitude: start.longitude + Double($0) * 0.00003)
+    }
+    return RouteMapFullRouteCanvas(
+        data: RouteMapData(currentLocation: trail.last, recordedLocations: trail))
+        .frame(width: 198, height: 242)
+        .background(.black)
 }

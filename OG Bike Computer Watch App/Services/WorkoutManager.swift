@@ -345,6 +345,27 @@ class WorkoutManager: NSObject, ObservableObject {
     /// false step or two while riding never stops the ride.
     private let walkingRidingWindow: TimeInterval = 10
 
+    /// A new ride waits until the rider has clearly set off. Until then GPS
+    /// wander adds no track or distance, and outside Record All no moving
+    /// time. The run-up is added back on departure, so a ride started while
+    /// rolling still draws from the start.
+    private var isAwaitingDeparture = false
+    private var departureFixes: [CLLocation] = []
+    private var departureFixesTrimmed = false
+    private var departureStart: CLLocation?
+    private var departureWaitStartedAt: Date?
+    /// Fixes in a row at riding speed (`baroRidingSpeed`) that confirm departure.
+    private let departureFastFixes = 3
+    /// How far (m) the run-up has to carry the rider too. Stationary fixes
+    /// at start-up can report riding speed while barely moving.
+    private let departureDistance: Double = 20
+    /// Straight-line distance (m) that confirms departure on its own, for
+    /// fixes with no GPS speed.
+    private let departureFallbackDistance: Double = 100
+    /// GPS speed (m/s) a fix needs to count as part of the run-up.
+    private let runUpSpeed = 1.0
+    private let maxDepartureFixes = 180
+
     @Published var movingTime: TimeInterval = 0
 
     // Telemetry for phone Live Activity
@@ -452,6 +473,7 @@ class WorkoutManager: NSObject, ObservableObject {
             skipNextDistanceGap = false
             isHoldingPoorFix = false
             lastRidingSpeedAt = nil
+            resetDeparture(awaiting: false)
             lastSplitDistance = 0
             currentSplitNumber = 0
             resetSplitAccumulators()
@@ -541,6 +563,7 @@ class WorkoutManager: NSObject, ObservableObject {
                 self.lastRidingSpeedAt = location.timestamp
             }
 
+            if self.isAwaitingDeparture { self.awaitDeparture(location) }
             self.updateAutoPause()
 
             // Re-clamp after updateAutoPause in case state transitioned this tick
@@ -553,6 +576,7 @@ class WorkoutManager: NSObject, ObservableObject {
             // Recording + distance based on auto-pause state
             switch self.autoPauseState {
             case .moving:
+                if self.isAwaitingDeparture { break }
                 self.accumulateDistance(location)
                 self.checkSplit()
                 // Stops leave no track, so the map shows no scribble at a store.
@@ -691,6 +715,107 @@ class WorkoutManager: NSObject, ObservableObject {
         guard !hasSpeed else { return false }
         let radius = max(location.horizontalAccuracy, prev.horizontalAccuracy)
         return location.distance(from: prev) < radius
+    }
+
+    /// Holds a new ride's fixes until the rider sets off: the last few fixes
+    /// at riding speed, with the run-up carrying them `departureDistance`
+    /// from where they stood. The run-up then joins the ride, the wander
+    /// before it is dropped, and this fix records as usual.
+    private func awaitDeparture(_ location: CLLocation) {
+        departureFixes.append(location)
+        if departureFixes.count > maxDepartureFixes {
+            departureFixes.removeFirst()
+            departureFixesTrimmed = true
+        }
+        if departureStart == nil, location.horizontalAccuracy <= poorFixAccuracy {
+            departureStart = location
+        }
+
+        // The run of fixes at bike pace that ends at this one.
+        var runStart = departureFixes.count
+        while runStart > 0, isRunUpFix(departureFixes[runStart - 1]) { runStart -= 1 }
+        let run = departureFixes[runStart...]
+        let fast = run.suffix(departureFastFixes).filter { $0.speed >= baroRidingSpeed }
+        let origin: CLLocation? = runStart > 0 ? departureFixes[runStart - 1] : run.first
+        let bySpeed =
+            fast.count == departureFastFixes
+            && origin.map { location.distance(from: $0) >= departureDistance } == true
+        let byDistance =
+            !bySpeed && location.horizontalAccuracy <= poorFixAccuracy
+            && departureStart.map { location.distance(from: $0) >= departureFallbackDistance } == true
+        guard bySpeed || byDistance else { return }
+
+        var runUp: [CLLocation] = []
+        var movingSince = location.timestamp
+        var rolledFromStart = false
+        if bySpeed {
+            // Walking the step counter saw just before isn't part of the ride.
+            var drawFrom = runStart
+            if let lastWalkingStepsAt {
+                while drawFrom < departureFixes.count - 1,
+                    departureFixes[drawFrom].timestamp <= lastWalkingStepsAt
+                {
+                    drawFrom += 1
+                }
+            }
+            if drawFrom > 0, departureFixes[drawFrom - 1].horizontalAccuracy <= poorFixAccuracy {
+                runUp.append(departureFixes[drawFrom - 1])
+            }
+            runUp.append(contentsOf: departureFixes[drawFrom..<(departureFixes.count - 1)])
+            movingSince = departureFixes[drawFrom].timestamp
+            // Nothing before the run showed the rider standing, so they
+            // started the ride already rolling.
+            rolledFromStart =
+                drawFrom == runStart && !departureFixesTrimmed
+                && departureFixes[..<runStart].allSatisfy { $0.speedAccuracy < 0 }
+            if rolledFromStart, let departureWaitStartedAt { movingSince = departureWaitStartedAt }
+        } else if let departureStart {
+            runUp.append(departureStart)
+            let lastNearStart = departureFixes.last {
+                $0.distance(from: departureStart) < departureDistance
+            }
+            movingSince = lastNearStart?.timestamp ?? location.timestamp
+        }
+
+        for fix in runUp {
+            if let prev = lastCommittedLocation { totalDistance += fix.distance(from: prev) }
+            lastCommittedLocation = fix
+            recordedLocations.append(fix)
+            recordedHeartRates.append(heartRate > 0 ? heartRate : nil)
+            recordedPowers.append(estimatedPower > 0 ? estimatedPower : nil)
+            pendingRouteLocations.append(fix)
+        }
+        skipNextDistanceGap = false
+        // Record All counted the wait already.
+        let credit = isRecordingEverything ? 0 : max(0, Date().timeIntervalSince(movingSince))
+        movingTime += credit
+
+        // The wait would read as a stop to auto-pause and Detect Stops.
+        positionBuffer.removeAll { $0.loc.timestamp < movingSince }
+        slowSampleCount = 0
+        resumeGraceUntil = Date().addingTimeInterval(5)
+        isAwaitingDeparture = false
+
+        let waited = departureWaitStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        DiagnosticsLog.event(
+            "Start",
+            "departed reason=\(bySpeed ? "speed" : "distance") waited=\(String(format: "%.1f", waited))s held=\(departureFixes.count) runUp=\(runUp.count) rolling=\(rolledFromStart) movingCredit=\(String(format: "%.1f", credit))s"
+        )
+        departureFixes = []
+        departureStart = nil
+    }
+
+    /// Moving at bike pace by GPS speed.
+    private func isRunUpFix(_ fix: CLLocation) -> Bool {
+        fix.speedAccuracy >= 0 && fix.speed >= runUpSpeed
+    }
+
+    private func resetDeparture(awaiting: Bool) {
+        isAwaitingDeparture = awaiting
+        departureFixes = []
+        departureFixesTrimmed = false
+        departureStart = nil
+        departureWaitStartedAt = awaiting ? Date() : nil
     }
 
     private func checkSplit() {
@@ -900,6 +1025,8 @@ class WorkoutManager: NSObject, ObservableObject {
         skipNextDistanceGap = continuationBase != nil
         isHoldingPoorFix = false
         lastRidingSpeedAt = nil
+        // A continued ride picks up where the rider stood, so only a new one waits.
+        resetDeparture(awaiting: continuationBase == nil)
         let splitDist = navigationAlerts.splitAlerts.splitDistance
         if continuationBase != nil && splitDist > 0 {
             restoreHeldSplit(splitDist: splitDist)
@@ -1187,7 +1314,8 @@ class WorkoutManager: NSObject, ObservableObject {
 
         switch autoPauseState {
         case .moving:
-            guard Date() >= resumeGraceUntil else { return }
+            // Waiting to set off isn't a stop to announce.
+            guard Date() >= resumeGraceUntil, !isAwaitingDeparture else { return }
 
             // Velocity-based trigger (unchanged): consecutive slow CL samples.
             if clSpeedMPH < pauseThreshold {
@@ -1303,6 +1431,7 @@ class WorkoutManager: NSObject, ObservableObject {
         stopCheckpointTimer()
         stopAltimeter()
         stopPedometer()
+        resetDeparture(awaiting: false)
         routeInsertionTimer?.invalidate()
         routeInsertionTimer = nil
 
@@ -1538,8 +1667,10 @@ class WorkoutManager: NSObject, ObservableObject {
                 if let origin = self.initialRideStartDate {
                     self.elapsedTime = Date().timeIntervalSince(origin)
                 }
-                // Moving time only ticks while not paused or standing still
-                if !self.isAutoPaused && !self.isPaused && !self.isStandingStill {
+                // Moving time only ticks while not paused or standing still.
+                // Before departure only Record All counts.
+                let waiting = self.isAwaitingDeparture && !self.isRecordingEverything
+                if !self.isAutoPaused && !self.isPaused && !self.isStandingStill && !waiting {
                     self.movingTime += 1
                 }
                 self.tickAutoPauseFallback()
@@ -1567,7 +1698,7 @@ class WorkoutManager: NSObject, ObservableObject {
             return
         }
 
-        guard !isPaused, autoPauseState == .moving else { return }
+        guard !isPaused, autoPauseState == .moving, !isAwaitingDeparture else { return }
 
         // Shrink the position buffer using wall-clock time so stale "moving"
         // entries from before the stop age out even when no new GPS arrives.
@@ -1698,9 +1829,10 @@ class WorkoutManager: NSObject, ObservableObject {
 
         // Standing still books nothing, but a real change made meanwhile
         // (stairs, a curb) books once moving again.
-        if isStandingStill {
+        if isAwaitingDeparture || isStandingStill {
             let jumpReason = baroFilter.freeze(relativeAltitude, at: timestamp)
-            skipReason = jumpReason.map { "stationary-\($0)" } ?? "stationary"
+            let label = isAwaitingDeparture ? "waiting" : "stationary"
+            skipReason = jumpReason.map { "\(label)-\($0)" } ?? label
             return
         }
 
@@ -2952,6 +3084,7 @@ extension WorkoutManager {
         "sinceLastFix", "movingTime", "elapsedTime", "totalDistance",
         "mirroringReady", "earlyTelemetry", "sinceTelemetrySend", "telemetryResult",
         "skippedTelemetrySends", "standingStill", "walking", "steps", "stepCadence",
+        "awaitingStart",
     ]
     private static let baroHeader = [
         "time", "source", "relativeAltitude", "reference", "delta",
@@ -2967,7 +3100,7 @@ extension WorkoutManager {
         baroCSV = DiagnosticsCSV(rideID: rideID, kind: "baro", header: Self.baroHeader)
         DiagnosticsLog.event(
             "Rules",
-            "mode=\(ridePreferences.autoPause.mode.rawValue) pauseSpeed=\(String(format: "%.1f", ridePreferences.autoPause.speedThreshold * 2.23694))mph positionPause=\(String(format: "%.1f", positionPauseSpeed * 2.23694))mph standingStill=\(String(format: "%.1f", standingStillSpeed * 2.23694))mph poorFix>\(Int(poorFixAccuracy))m maxFixAge=\(Int(maxFixAge))s baroStop=freeze baroRiding=\(String(format: "%.1f", baroRidingSpeed * 2.23694))mph/\(Int(baroRidingWindow))s baroFloor=\(baroFilter.noiseFloor)m walking=\(String(format: "%.1f", walkingCadence))steps/s,\(Int(walkingStepsWindow))s+noRiding\(Int(walkingRidingWindow))s pedometer=\(CMPedometer.isStepCountingAvailable())"
+            "mode=\(ridePreferences.autoPause.mode.rawValue) pauseSpeed=\(String(format: "%.1f", ridePreferences.autoPause.speedThreshold * 2.23694))mph positionPause=\(String(format: "%.1f", positionPauseSpeed * 2.23694))mph standingStill=\(String(format: "%.1f", standingStillSpeed * 2.23694))mph poorFix>\(Int(poorFixAccuracy))m maxFixAge=\(Int(maxFixAge))s baroStop=freeze baroRiding=\(String(format: "%.1f", baroRidingSpeed * 2.23694))mph/\(Int(baroRidingWindow))s baroFloor=\(baroFilter.noiseFloor)m walking=\(String(format: "%.1f", walkingCadence))steps/s,\(Int(walkingStepsWindow))s+noRiding\(Int(walkingRidingWindow))s pedometer=\(CMPedometer.isStepCountingAvailable()) start=\(departureFastFixes)fixes@\(String(format: "%.1f", baroRidingSpeed * 2.23694))mph+\(Int(departureDistance))m|\(Int(departureFallbackDistance))m waiting=\(isAwaitingDeparture)"
         )
         rejectedFixesSinceLast = 0
         staleFixesSinceLast = 0
@@ -3027,7 +3160,7 @@ extension WorkoutManager {
             isMirroringReady, earlyTelemetrySessionID != nil,
             lastTelemetrySendAt.map { now.timeIntervalSince($0) }, lastTelemetryResult,
             skippedTelemetrySends, isStandingStill, isWalking,
-            pedometerRunning ? stepCount : nil, stepCadence,
+            pedometerRunning ? stepCount : nil, stepCadence, isAwaitingDeparture,
         ])
     }
 

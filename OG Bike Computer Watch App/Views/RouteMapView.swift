@@ -67,8 +67,11 @@ struct RouteMapView: View {
         ZStack {
             Group {
                 if showFullRoute || !workout.hasRoute {
-                    // Full route view: Map background + Canvas overlay (aligned, no rotation)
-                    if mapDetailEnabled {
+                    // Full route view, no rotation. With map detail on, a route
+                    // draws as a canvas over the map and a free ride draws in MapKit.
+                    if mapDetailEnabled && !workout.hasRoute {
+                        freeRideMap
+                    } else if mapDetailEnabled {
                         ZStack {
                             fullRouteMapBackground
                             RouteMapFullRouteCanvas(data: routeMapData, routeAheadColor: mapConfig.routeAheadColor)
@@ -122,23 +125,48 @@ struct RouteMapView: View {
             .mapStyle(.standard(pointsOfInterest: .excludingAll))
             .mapControlVisibility(.hidden)
             .allowsHitTesting(false)
-        } else {
-            let trail = workout.recordedLocations
-            if trail.count >= 2 {
-                let lats = trail.map(\.coordinate.latitude)
-                let lons = trail.map(\.coordinate.longitude)
-                let center = CLLocationCoordinate2D(
-                    latitude: (lats.min()! + lats.max()!) / 2,
-                    longitude: (lons.min()! + lons.max()!) / 2)
-                let span = MKCoordinateSpan(
-                    latitudeDelta: (lats.max()! - lats.min()!) * 1.3,
-                    longitudeDelta: (lons.max()! - lons.min()!) * 1.3)
-                Map(position: .constant(.region(MKCoordinateRegion(center: center, span: span))),
-                    interactionModes: []) {}
-                .mapStyle(.standard(pointsOfInterest: .excludingAll))
-                .mapControlVisibility(.hidden)
-                .allowsHitTesting(false)
+        }
+    }
+
+    /// Free ride with map detail on. The trail and rider are drawn by MapKit,
+    /// so they always sit right on the map. A canvas over the map only lines
+    /// up when MapKit fits the region the way the canvas does.
+    @ViewBuilder
+    private var freeRideMap: some View {
+        let trail = workout.recordedLocations
+        if let frame = FreeRideFrame(trail: trail, current: workout.currentLocation) {
+            let span = MKCoordinateSpan(
+                latitudeDelta: (frame.maxLat - frame.minLat) * 1.3,
+                longitudeDelta: (frame.maxLon - frame.minLon) * 1.3)
+            Map(position: .constant(.region(MKCoordinateRegion(center: frame.center, span: span))),
+                interactionModes: []) {
+                // No trail until the ride sets off, just the rider.
+                if trail.count >= 2 {
+                    if mapConfig.routeAheadColor == .rainbow {
+                        ForEach(RouteRainbow.trailMapSegments(trail), id: \.id) { segment in
+                            MapPolyline(coordinates: segment.coordinates)
+                                .stroke(segment.color, style: .roundedLine(3))
+                        }
+                    } else {
+                        let every = max(1, trail.count / 500)
+                        let coordinates = Swift.stride(from: 0, to: trail.count, by: every)
+                            .map { trail[$0].coordinate } + [trail[trail.count - 1].coordinate]
+                        MapPolyline(coordinates: coordinates)
+                            .stroke(mapConfig.routeAheadColor.color, style: .roundedLine(3))
+                    }
+                }
+                if let location = workout.currentLocation {
+                    Annotation("", coordinate: location.coordinate, anchor: .center) {
+                        ZStack {
+                            Circle().fill(.white).frame(width: 10, height: 10)
+                            Circle().fill(.blue).frame(width: 7, height: 7)
+                        }
+                    }
+                }
             }
+            .mapStyle(.standard(pointsOfInterest: .excludingAll))
+            .mapControlVisibility(.hidden)
+            .allowsHitTesting(false)
         }
     }
 
