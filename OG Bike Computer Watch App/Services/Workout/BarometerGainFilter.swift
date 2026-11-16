@@ -5,10 +5,12 @@
 
 import Foundation
 
-/// Filter for unrealistic or noisy barometer readings
+/// Turns relative altitude readings into booked gain and loss, ignoring
+/// sensor noise and impossible jumps.
 ///
-/// `noiseFloor` limits the drift caused by the barometer's inherent noise
-/// `maxVerticalSpeed` and `minJumpAllowance` limit the drift caused by sudden jumps in readings
+/// `noiseFloor` is the smallest change that books. `maxVerticalSpeed` and
+/// `minJumpAllowance` set how far the reading can move between samples
+/// before it counts as a jump.
 struct BarometerGainFilter {
     enum Outcome: Equatable {
         case gain(Double)
@@ -26,26 +28,24 @@ struct BarometerGainFilter {
     private(set) var reference: Double?
     private var last: (reading: Double, time: TimeInterval)?
 
-    var lastReading: Double? { last?.reading }
-
     /// Start over, for a new altimeter session.
     mutating func reset() {
         reference = nil
         last = nil
     }
 
-    /// Don't book anything and remember the reading as a reference for future
+    /// Books nothing and follows the reading.
     mutating func hold(_ reading: Double, at time: TimeInterval) {
         reference = reading
         last = (reading, time)
     }
 
-    /// Reset to the last reading
+    /// Moves the reference to the latest reading.
     mutating func rebase() {
         reference = last?.reading
     }
 
-    /// Book nothing but keep the reference, so a real change made while
+    /// Books nothing but keeps the reference, so a real change made while
     /// stopped (stairs, a curb) books once moving again. Jumps still fold out.
     @discardableResult
     mutating func freeze(_ reading: Double, at time: TimeInterval) -> String? {
@@ -53,7 +53,7 @@ struct BarometerGainFilter {
         return foldJump(reading, at: time)
     }
 
-    /// A reading while the ride is accumulating.
+    /// A reading while the ride is booking climbing.
     mutating func ingest(_ reading: Double, at time: TimeInterval) -> Outcome {
         defer { last = (reading, time) }
 
