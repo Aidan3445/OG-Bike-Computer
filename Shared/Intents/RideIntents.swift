@@ -349,7 +349,7 @@ struct ContinueHeldRideIntent: AppIntent {
         // Same two-pronged approach as StartRideIntent:
         // 1. WC message (delivers immediately if reachable, or queued via userInfo)
         // 2. startWatchApp — guarantees the watch app is foregrounded so the WC message lands
-        guard let held = await loadHeldRide() else {
+        guard let held = loadHeldRide() else {
             return .result(dialog: "No held ride found.")
         }
 
@@ -404,7 +404,7 @@ private func waitForWatchReachable(timeout: TimeInterval) async {
 #endif
 
 /// Scan the phone-side rides directory for a ride that is on hold.
-func loadHeldRide() -> RideSummary? {
+nonisolated func loadHeldRide() -> RideSummary? {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
     let dir  = docs.appendingPathComponent("rides", isDirectory: true)
     guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }

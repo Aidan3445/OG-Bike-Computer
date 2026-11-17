@@ -555,8 +555,9 @@ struct RouteDetailView: View {
         guard interval != currentMarkerInterval, !cachedProcessedPoints.isEmpty else { return }
         currentMarkerInterval = interval
         let points = cachedProcessedPoints
+        let unit = currentUnits.distance
         Task.detached(priority: .userInitiated) {
-            let markers = computeMileMarkers(points: points, interval: interval)
+            let markers = computeMileMarkers(points: points, interval: interval, unit: unit)
             await MainActor.run {
                 if currentMarkerInterval == interval { cachedMileMarkers = markers }
             }
@@ -1062,6 +1063,7 @@ struct RouteDetailView: View {
     private func loadRouteData() async {
         let route = route
         let minElevDiff = minElevDiff
+        let unit = currentUnits.distance
 
         let coords = await Task.detached(priority: .userInitiated) {
             route.points.map {
@@ -1090,7 +1092,7 @@ struct RouteDetailView: View {
                             distanceFromStart: cumDist,
                             bearingToNext: 0))
                 }
-                markers = computeMileMarkers(points: processed)
+                markers = computeMileMarkers(points: processed, interval: nil, unit: unit)
             }
 
             var extremes: (high: TrackPoint, low: TrackPoint)? = nil

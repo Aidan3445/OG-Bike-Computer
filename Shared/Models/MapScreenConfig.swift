@@ -95,8 +95,8 @@ enum RouteColor: String, Codable, CaseIterable, Hashable {
 /// the range evenly, so every stop gets a clean label. Feet and miles use the
 /// same conversions as the zoom labels so whole values format cleanly.
 enum ZoomSteps {
-    private static func feet(_ ft: Double) -> Double { ft / 3.28084 }
-    private static func miles(_ mi: Double) -> Double { mi * 1609.34 }
+    private nonisolated static func feet(_ ft: Double) -> Double { ft / 3.28084 }
+    private nonisolated static func miles(_ mi: Double) -> Double { mi * 1609.34 }
 
     private static var isImperial: Bool { currentUnits.distance == .miles }
 

@@ -57,7 +57,7 @@ extension WorkoutManager {
     /// A failed send marks mirroring down, then optimistically back up after
     /// 3 s. The next send shows whether it really is.
     func markMirroringFailed() {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [self] in
             guard self.isActive else { return }
             DiagnosticsLog.event(
                 "AutoPause", "telemetry send failed, mirroring marked down, retry in 3s")

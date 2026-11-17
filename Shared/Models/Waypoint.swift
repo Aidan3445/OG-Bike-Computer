@@ -9,12 +9,12 @@ import Foundation
 import CoreLocation
 
 /// What a waypoint represents — used to keep turn cues separate from POIs.
-enum WaypointKind: String, Codable {
+nonisolated enum WaypointKind: String, Codable {
     case turnCue   // a turn instruction the route takes (left, right, etc.)
     case poi       // a point of interest (landmark, water, food, etc.) — not a turn
 }
 
-struct Waypoint: Codable, Equatable {
+nonisolated struct Waypoint: Codable, Equatable {
     let id: UUID
     let lat: Double
     let lon: Double
@@ -48,7 +48,7 @@ struct Waypoint: Codable, Equatable {
     }
 }
 
-extension Array where Element == Waypoint {
+nonisolated extension Array where Element == Waypoint {
     var turnCues: [Waypoint] { filter { $0.kind == .turnCue } }
     var pois: [Waypoint] { filter { $0.kind == .poi } }
 }

@@ -11,12 +11,12 @@ import CoreLocation
 /// A simplified elevation sample preserving major peaks/valleys.
 /// Generated on the phone before sending a route to the watch so the watch
 /// can render an elevation chart cheaply without iterating thousands of points.
-struct ElevationSample: Codable, Equatable, Hashable {
+nonisolated struct ElevationSample: Codable, Equatable, Hashable {
     let distanceFromStart: Double // meters
     let elevation: Double         // meters
 }
 
-struct Route: Codable, Identifiable, Equatable, Hashable {
+nonisolated struct Route: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     var name: String
     let points: [TrackPoint]

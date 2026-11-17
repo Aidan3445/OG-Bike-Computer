@@ -505,8 +505,9 @@ struct RideDetailView: View {
         guard interval != currentMarkerInterval, !allLocations.isEmpty else { return }
         currentMarkerInterval = interval
         let locations = allLocations
+        let unit = currentUnits.distance
         Task.detached(priority: .userInitiated) {
-            let markers = computeRideMileMarkers(locations: locations, interval: interval)
+            let markers = computeRideMileMarkers(locations: locations, interval: interval, unit: unit)
             await MainActor.run {
                 if currentMarkerInterval == interval { mileMarkers = markers }
             }
@@ -636,6 +637,7 @@ struct RideDetailView: View {
         endCoord     = locations.last?.coordinate
         simpleRoute  = simple
 
+        let unit = currentUnits.distance
         let built = await Task.detached(priority: .userInitiated) { () -> RideMapData in
             var cumDist = [Double](repeating: 0, count: locations.count)
             for i in 1..<locations.count {
@@ -657,7 +659,7 @@ struct RideDetailView: View {
                 pauseJumps: split.gaps,
                 fineSegments: fine,
                 coarseSegments: coarse,
-                mileMarkers: computeRideMileMarkers(locations: locations),
+                mileMarkers: computeRideMileMarkers(locations: locations, unit: unit),
                 elevationExtremes: computeElevExtremes(locations: locations),
                 chartPoints: chart.points,
                 chartHasHR: chart.hasHR,
@@ -750,7 +752,7 @@ struct RideDetailView: View {
 
 /// Everything the background build produces for the ride map, published to
 /// the view in one main-actor hop.
-private struct RideMapData {
+private nonisolated struct RideMapData {
     let cumulativeDistances: [Double]
     let pauseJumps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)]
     let fineSegments: [ColoredSegment]
@@ -763,7 +765,7 @@ private struct RideMapData {
 }
 
 /// Keep at most `maxPoints` by striding, always preserving the endpoints.
-private func downsampleCoordinates(
+private nonisolated func downsampleCoordinates(
     _ coords: [CLLocationCoordinate2D],
     maxPoints: Int
 ) -> [CLLocationCoordinate2D] {
@@ -785,7 +787,7 @@ private func downsampleCoordinates(
 
 /// Downsample each segment's coordinates so the whole set stays within
 /// `totalPointBudget` points, proportionally to segment size.
-private func downsampleSegments(
+private nonisolated func downsampleSegments(
     _ segments: [ColoredSegment],
     totalPointBudget: Int
 ) -> [ColoredSegment] {
@@ -807,7 +809,7 @@ private func downsampleSegments(
 
 /// Axis-aligned lat/lon bounds, pre-computed once per segment so the
 /// per-frame Map body can drop off-screen segments in constant time.
-struct SegmentBBox {
+nonisolated struct SegmentBBox {
     let minLat: Double
     let maxLat: Double
     let minLon: Double
@@ -842,7 +844,7 @@ struct SegmentBBox {
     }
 }
 
-private struct ColoredSegment: Identifiable {
+private nonisolated struct ColoredSegment: Identifiable {
     let id = UUID()
     let coords: [CLLocationCoordinate2D]
     let color: Color
@@ -866,7 +868,7 @@ private struct ColoredSegment: Identifiable {
 /// pause-immediately-after-resume blip or GPS jitter — and are dropped
 /// from both the runs and the gap list. The underlying track data is
 /// untouched on disk; this is purely a render-time filter.
-private func splitAtPauseGaps(
+private nonisolated func splitAtPauseGaps(
     locations: [CLLocation],
     gapSeconds: TimeInterval = 30,
     minRunMeters: Double = 3.048,      // ~10 feet
@@ -923,7 +925,7 @@ private func splitAtPauseGaps(
 /// same color merge, so the polyline count is the number of color changes.
 /// `colorSteps` sets color resolution: 20 gives 5% increments.
 /// `runStarts` holds each run's index in the ride's points.
-private func buildColoredSegments(
+private nonisolated func buildColoredSegments(
     runs allRuns: [[CLLocation]],
     runStarts allStarts: [Int],
     chunkBudget: Int,
@@ -998,7 +1000,7 @@ private typealias SpeedChunk = (coords: [CLLocationCoordinate2D], avgSpeed: Doub
 /// Splits a run into `segmentCount` equal chunks with their average speed.
 /// Each chunk's last point is the next chunk's first, so polylines connect.
 /// Indices count from `baseIndex`, the run's place in the ride's points.
-private func speedChunks(
+private nonisolated func speedChunks(
     locations: [CLLocation],
     baseIndex: Int,
     segmentCount: Int
@@ -1029,14 +1031,14 @@ private func speedChunks(
 }
 
 /// Red → yellow → green gradient.
-private func rideSpeedColor(ratio: Double) -> Color {
+private nonisolated func rideSpeedColor(ratio: Double) -> Color {
     if ratio < 0.5 { return Color(red: 1.0, green: ratio * 2,           blue: 0) }
     else           { return Color(red: 1.0 - (ratio - 0.5) * 2, green: 1.0, blue: 0) }
 }
 
 // MARK: - Elevation extremes
 
-private func computeElevExtremes(locations: [CLLocation]) -> (high: ElevPoint, low: ElevPoint)? {
+private nonisolated func computeElevExtremes(locations: [CLLocation]) -> (high: ElevPoint, low: ElevPoint)? {
     let valid = locations.filter { $0.verticalAccuracy >= 0 }
     guard let high = valid.max(by: { $0.altitude < $1.altitude }),
           let low  = valid.min(by: { $0.altitude < $1.altitude }),
@@ -1064,7 +1066,7 @@ private struct StatItem: View {
     }
 }
 
-struct ElevPoint {
+nonisolated struct ElevPoint {
     let coordinate: CLLocationCoordinate2D
     let elevation: Double
 }

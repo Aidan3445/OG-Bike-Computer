@@ -9,9 +9,9 @@ import CoreLocation
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "GPXExporter")
+nonisolated private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "GPXExporter")
 
-struct GPXExporter {
+nonisolated struct GPXExporter {
 
     /// Per-point power/HR data for GPX extensions
     struct PointExtras {

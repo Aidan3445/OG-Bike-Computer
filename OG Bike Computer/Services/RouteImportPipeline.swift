@@ -17,7 +17,7 @@ import Foundation
 // MARK: - Duplicates
 
 /// An existing route that a newly imported one matches, strongest match first.
-enum RouteDuplicate {
+nonisolated enum RouteDuplicate {
     /// Same route from the same service, likely an updated version of it.
     case sameSource(Route)
     /// Identical track, whatever it's called.
@@ -52,12 +52,12 @@ enum RouteDuplicate {
     }
 }
 
-enum RouteDuplicateChoice: Hashable {
+nonisolated enum RouteDuplicateChoice: Hashable {
     case replace, keepBoth, useExisting
 }
 
 /// A parsed route that hasn't been saved yet, with any duplicate it matches.
-struct RouteImportCandidate: Identifiable {
+nonisolated struct RouteImportCandidate: Identifiable {
     let route: Route
     let duplicate: RouteDuplicate?
     var id: UUID { route.id }

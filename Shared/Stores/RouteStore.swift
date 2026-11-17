@@ -68,7 +68,7 @@ class RouteStore: ObservableObject {
 
     /// One route as GPX in the temp directory. Processes the route, so call
     /// it off the main thread.
-    static func exportGPXFile(for route: Route) -> URL? {
+    nonisolated static func exportGPXFile(for route: Route) -> URL? {
         guard let data = GPXExporter.exportRoute(route).data(using: .utf8) else { return nil }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(GPXExporter.fileName(name: route.name, date: route.createdAt))
@@ -81,7 +81,7 @@ class RouteStore: ObservableObject {
     }
 
     /// Several routes as one zip of GPX files. Call it off the main thread.
-    static func exportZipGPX(routes: [Route]) -> URL? {
+    nonisolated static func exportZipGPX(routes: [Route]) -> URL? {
         let files = routes.compactMap { route -> (name: String, data: Data)? in
             guard let data = GPXExporter.exportRoute(route).data(using: .utf8) else { return nil }
             return (GPXExporter.fileName(name: route.name, date: route.createdAt), data)

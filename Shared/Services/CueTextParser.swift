@@ -14,7 +14,7 @@
 
 import Foundation
 
-enum CueTextParser {
+nonisolated enum CueTextParser {
 
     /// Prepositions that precede a street name, ordered so longer/more specific
     /// patterns match first (avoiding "on" eating "onto").

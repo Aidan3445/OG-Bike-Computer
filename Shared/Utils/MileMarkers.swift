@@ -8,7 +8,7 @@
 import Foundation
 import CoreLocation
 
-struct MileMarker {
+nonisolated struct MileMarker {
     let mile: Int
     let coordinate: CLLocationCoordinate2D
     /// World-space heading of route travel at the *arrow* location, in degrees (0=N, 90=E).
@@ -20,12 +20,16 @@ struct MileMarker {
     let arrowCoordinate: CLLocationCoordinate2D?
 }
 
-/// Unit-aware interval in meters and divisor for label numbers.
-private var distanceInterval: (metersPerUnit: Double, defaultInterval: Double) {
-    switch currentUnits.distance {
+/// Meters per unit and the default marker interval in that unit.
+private nonisolated func markerSpacing(for unit: DistanceUnit) -> (metersPerUnit: Double, defaultInterval: Double) {
+    switch unit {
     case .miles: return (1609.34, 5)
     case .kilometers: return (1000, 5)
     }
+}
+
+private var distanceInterval: (metersPerUnit: Double, defaultInterval: Double) {
+    markerSpacing(for: currentUnits.distance)
 }
 
 /// Pick a marker interval (min 1 unit) sized to the current map zoom.
@@ -61,9 +65,16 @@ func autoMileMarkerInterval(totalMeters: Double) -> Double {
 
 /// Compute distance marker positions along a route.
 func computeMileMarkers(points: [ProcessedPoint], interval: Double? = nil) -> [MileMarker] {
+    computeMileMarkers(points: points, interval: interval, unit: currentUnits.distance)
+}
+
+/// For callers off the main actor, which read the unit before they leave it.
+nonisolated func computeMileMarkers(points: [ProcessedPoint], interval: Double?, unit: DistanceUnit)
+    -> [MileMarker]
+{
     guard points.count >= 2 else { return [] }
 
-    let (metersPerUnit, defaultInterval) = distanceInterval
+    let (metersPerUnit, defaultInterval) = markerSpacing(for: unit)
     let intervalUnits = interval ?? defaultInterval
     let intervalMeters = intervalUnits * metersPerUnit
     let halfInterval = intervalMeters / 2
@@ -136,10 +147,12 @@ func computeMileMarkers(points: [ProcessedPoint], interval: Double? = nil) -> [M
 }
 
 /// Compute distance markers along a recorded ride track.
-func computeRideMileMarkers(locations: [CLLocation], interval: Double? = nil) -> [MileMarker] {
+nonisolated func computeRideMileMarkers(
+    locations: [CLLocation], interval: Double? = nil, unit: DistanceUnit
+) -> [MileMarker] {
     guard locations.count >= 2 else { return [] }
 
-    let (metersPerUnit, defaultInterval) = distanceInterval
+    let (metersPerUnit, defaultInterval) = markerSpacing(for: unit)
     let intervalUnits = interval ?? defaultInterval
     let intervalMeters = intervalUnits * metersPerUnit
     let halfInterval = intervalMeters / 2

@@ -11,8 +11,8 @@
 import Foundation
 
 /// Decision on a waypoint-backed cue (Extra or Good, plus name-only-missing Goods).
-struct WaypointDecision: Codable, Equatable {
-    enum Status: String, Codable {
+nonisolated struct WaypointDecision: Codable, Equatable {
+    nonisolated enum Status: String, Codable {
         case approved   // user agrees with the cue (possibly with overrides applied)
         case skipped    // user removed this cue from the final list
     }
@@ -50,8 +50,8 @@ struct WaypointDecision: Codable, Equatable {
 }
 
 /// Decision on a detector-only (Missing) turn: should we promote it to a cue?
-struct DetectedDecision: Codable, Equatable {
-    enum Status: String, Codable {
+nonisolated struct DetectedDecision: Codable, Equatable {
+    nonisolated enum Status: String, Codable {
         case approved   // promote to cue (with optional name/direction)
         case dismissed  // user reviewed and explicitly chose not to add
     }
@@ -85,7 +85,7 @@ struct DetectedDecision: Codable, Equatable {
 }
 
 /// A user-created turn cue anchored to a specific track-point on the route.
-struct AddedCue: Codable, Equatable, Identifiable {
+nonisolated struct AddedCue: Codable, Equatable, Identifiable {
     let id: UUID
     /// Index into the route's track points where this cue snaps.
     var trackPointIndex: Int
@@ -110,8 +110,8 @@ struct AddedCue: Codable, Equatable, Identifiable {
 
 /// Decision on an imported POI waypoint — title/coordinate overrides + skip.
 /// Skipping a POI hides it from the resolved route output.
-struct POIDecision: Codable, Equatable {
-    enum Status: String, Codable {
+nonisolated struct POIDecision: Codable, Equatable {
+    nonisolated enum Status: String, Codable {
         case approved
         case skipped
     }
@@ -144,7 +144,7 @@ struct POIDecision: Codable, Equatable {
 }
 
 /// A user-created POI waypoint. Free-form coordinate (not snapped to the route).
-struct AddedPOI: Codable, Equatable, Identifiable {
+nonisolated struct AddedPOI: Codable, Equatable, Identifiable {
     let id: UUID
     var lat: Double
     var lon: Double
@@ -159,7 +159,7 @@ struct AddedPOI: Codable, Equatable, Identifiable {
 }
 
 /// The full overlay attached to a Route.
-struct CueEdits: Codable, Equatable {
+nonisolated struct CueEdits: Codable, Equatable {
     /// Decisions keyed by Waypoint.id.
     var waypointDecisions: [UUID: WaypointDecision]
     /// Decisions on detected turns, keyed by the detector's track-point index (stable

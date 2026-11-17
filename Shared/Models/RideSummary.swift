@@ -8,7 +8,7 @@
 import Foundation
 import UIKit
 
-struct RideSummary: Codable, Identifiable {
+nonisolated struct RideSummary: Codable, Identifiable {
     let id: UUID
     var name: String
     let activityType: ActivityType

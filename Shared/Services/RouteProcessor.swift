@@ -8,7 +8,7 @@
 import Foundation
 import CoreLocation
 
-struct RouteProcessor {
+nonisolated struct RouteProcessor {
     static let turnAngleThreshold: Double = 30
     static let minBearingDistance: Double = 5
     static let minTurnSpacing: Double = 50
@@ -424,7 +424,7 @@ struct RouteProcessor {
 }
 
 /// Milliseconds per stage, for the RouteLoad trace.
-private final class StageClock {
+private nonisolated final class StageClock {
     private var last = Date()
     private var parts: [String] = []
     private let start = Date()
@@ -440,6 +440,6 @@ private final class StageClock {
     }
 }
 
-private extension ProcessedPoint {
+nonisolated private extension ProcessedPoint {
     var location: CLLocation { CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude) }
 }
