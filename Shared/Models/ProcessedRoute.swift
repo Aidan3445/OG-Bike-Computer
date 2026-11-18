@@ -8,7 +8,7 @@
 import Foundation
 import CoreLocation
 
-enum TurnDirection: String, Codable {
+nonisolated enum TurnDirection: String, Codable {
     case sharpLeft
     case left
     case slightLeft
@@ -78,7 +78,7 @@ enum TurnDirection: String, Codable {
     }
 }
 
-enum TurnMode: String, CaseIterable {
+nonisolated enum TurnMode: String, CaseIterable {
     case provided    // Waypoint turns only
     case calculated  // Algorithm turns only
     case both        // Waypoints primary, calculated fills gaps
@@ -92,7 +92,7 @@ enum TurnMode: String, CaseIterable {
     }
 }
 
-struct TurnPoint {
+nonisolated struct TurnPoint {
     let index: Int
     let angle: Double
     let direction: TurnDirection
@@ -128,7 +128,7 @@ struct TurnPoint {
     }
 }
 
-struct ProcessedPoint {
+nonisolated struct ProcessedPoint {
     let coordinate: CLLocationCoordinate2D
     let elevation: Double?
     let distanceFromStart: Double
@@ -138,7 +138,7 @@ struct ProcessedPoint {
 /// A POI mapped onto a processed route. `distanceFromStart` is the route distance
 /// of the nearest route point; `offRouteDistance` is how far the POI sits from that
 /// point (so we can decide whether it's on/near the route).
-struct RoutePOI {
+nonisolated struct RoutePOI {
     let coordinate: CLLocationCoordinate2D
     let name: String
     let description: String?
@@ -148,7 +148,7 @@ struct RoutePOI {
     let nearestPointIndex: Int
 }
 
-struct ProcessedRoute {
+nonisolated struct ProcessedRoute {
     let name: String
     let points: [ProcessedPoint]
     /// Raw waypoint cues from the GPX/import (pre-overlay). The Cue Editor reads

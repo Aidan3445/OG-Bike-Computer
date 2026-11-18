@@ -8,14 +8,14 @@
 import Foundation
 import CoreLocation
 
-struct TrackPoint4 {
+nonisolated struct TrackPoint4 {
     let lat: Double
     let lon: Double
     let altitude: Double
     let timestamp: TimeInterval
 }
 
-struct TrackPoint5 {
+nonisolated struct TrackPoint5 {
     let lat: Double
     let lon: Double
     let altitude: Double
@@ -24,7 +24,7 @@ struct TrackPoint5 {
     let power: Double       // 0 = no data
 }
 
-struct TrackEncoder {
+nonisolated struct TrackEncoder {
     // Version markers
     private static let v4PointSize = 32  // 4 × 8 bytes
     private static let v5PointSize = 48  // 6 × 8 bytes

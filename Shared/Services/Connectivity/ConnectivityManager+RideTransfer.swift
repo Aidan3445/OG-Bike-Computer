@@ -24,7 +24,7 @@ extension ConnectivityManager {
     /// Shows the placeholder row for a ride the watch just ended. Clears itself
     /// after two minutes if no transfer shows up.
     func markAwaitingIncomingRide() {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [self] in
             self.isAwaitingIncomingRide = true
             self.awaitingIncomingRideTimeout?.cancel()
             let task = DispatchWorkItem { [weak self] in

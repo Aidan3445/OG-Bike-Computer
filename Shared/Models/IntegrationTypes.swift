@@ -9,7 +9,7 @@ import Foundation
 
 // MARK: - Service Identifiers
 
-enum IntegrationServiceID: String, Codable, CaseIterable, Identifiable {
+nonisolated enum IntegrationServiceID: String, Codable, CaseIterable, Identifiable {
     case rideWithGPS
     case strava
     case fitness
@@ -48,7 +48,7 @@ enum IntegrationServiceID: String, Codable, CaseIterable, Identifiable {
 
 // MARK: - Route Source
 
-struct RouteSource: Codable, Equatable {
+nonisolated struct RouteSource: Codable, Equatable {
     let service: IntegrationServiceID
     let remoteID: String
 }

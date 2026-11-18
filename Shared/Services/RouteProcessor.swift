@@ -8,7 +8,7 @@
 import Foundation
 import CoreLocation
 
-struct RouteProcessor {
+nonisolated struct RouteProcessor {
     static let turnAngleThreshold: Double = 30
     static let minBearingDistance: Double = 5
     static let minTurnSpacing: Double = 50
@@ -36,95 +36,10 @@ struct RouteProcessor {
 
         let clock = StageClock()
 
-        // Step 1: Compute distances, cumulative distance, and bearings
-        var cumulativeDistance: Double = 0
-        var processedPoints: [ProcessedPoint] = []
-
-        for i in 0..<coords.count {
-            if i > 0 {
-                let prev = CLLocation(latitude: coords[i-1].latitude, longitude: coords[i-1].longitude)
-                let curr = CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
-                cumulativeDistance += curr.distance(from: prev)
-            }
-
-            let bearing: Double
-            if i < coords.count - 1 {
-                // Look ahead past nearby points to get a stable bearing.
-                // GPS noise between close points causes wild bearing swings.
-                var target = i + 1
-                let origin = CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
-                while target < coords.count - 1 {
-                    let candidate = CLLocation(latitude: coords[target].latitude, longitude: coords[target].longitude)
-                    if origin.distance(from: candidate) >= minBearingDistance {
-                        break
-                    }
-                    target += 1
-                }
-                bearing = self.bearing(from: coords[i], to: coords[target])
-            } else {
-                bearing = processedPoints.last?.bearingToNext ?? 0
-            }
-
-            processedPoints.append(ProcessedPoint(
-                coordinate: coords[i],
-                elevation: route.points[i].elevation,
-                distanceFromStart: cumulativeDistance,
-                bearingToNext: bearing))
-        }
-
+        let processedPoints = trackPoints(coords, elevations: route.points.map(\.elevation))
         clock.mark("distances")
 
-        // Step 2: Detect calculated turns
-        var turnPoints: [TurnPoint] = []
-        var lastTurnDistance: Double = -minTurnSpacing
-
-        for i in 1..<(processedPoints.count - 1) {
-            let prevBearing = processedPoints[i-1].bearingToNext
-            let nextBearing = processedPoints[i].bearingToNext
-            let angle = angleDelta(from: prevBearing, to: nextBearing)
-
-            if abs(angle) >= turnAngleThreshold {
-                let dist = processedPoints[i].distanceFromStart
-                if dist - lastTurnDistance >= minTurnSpacing {
-                    let direction = classifyTurn(angle)
-                    turnPoints.append(TurnPoint(
-                        index: i,
-                        angle: angle,
-                        direction: direction,
-                        distanceFromStart: dist,
-                        coordinate: coords[i]))
-                    lastTurnDistance = dist
-                }
-            }
-        }
-
-        // Step 2b: Remove canceling turn pairs
-        // Two turns within cancelPairDistance whose angles roughly
-        // cancel out (sum near zero) are noise, not real turns.
-        let cancelPairDistance: Double = 100 // meters apart
-        let cancelAngleThreshold: Double = 40 // net angle must be below this
-
-        var filtered: [TurnPoint] = []
-        var skip = false
-        for j in 0..<turnPoints.count {
-            if skip {
-                skip = false
-                continue
-            }
-            if j + 1 < turnPoints.count {
-                let a = turnPoints[j]
-                let b = turnPoints[j + 1]
-                let gap = b.distanceFromStart - a.distanceFromStart
-                let netAngle = abs(a.angle + b.angle)
-                if gap <= cancelPairDistance && netAngle < cancelAngleThreshold {
-                    // Pair cancels out — skip both
-                    skip = true
-                    continue
-                }
-            }
-            filtered.append(turnPoints[j])
-        }
-        let calculatedTurns = filtered
+        let calculatedTurns = detectTurns(in: processedPoints)
         clock.mark("turns")
 
         // Step 3: Map waypoints to route points (only turn-cue waypoints, not POIs)
@@ -165,11 +80,104 @@ struct RouteProcessor {
             calculatedTurnPoints: calculatedTurns,
             pois: pois,
             simplifiedElevation: simplified,
-            totalDistance: cumulativeDistance,
+            totalDistance: processedPoints.last?.distanceFromStart ?? 0,
             hasWaypoints: !waypointTurns.isEmpty,
             cueEdits: route.cueEdits,
             minLat: lats.min()!, maxLat: lats.max()!,
             minLon: lons.min()!, maxLon: lons.max()!)
+    }
+
+    /// Cumulative distance and a look-ahead bearing for each coordinate.
+    static func trackPoints(_ coords: [CLLocationCoordinate2D], elevations: [Double?]? = nil) -> [ProcessedPoint] {
+        var cumulativeDistance: Double = 0
+        var processedPoints: [ProcessedPoint] = []
+
+        for i in 0..<coords.count {
+            if i > 0 {
+                let prev = CLLocation(latitude: coords[i-1].latitude, longitude: coords[i-1].longitude)
+                let curr = CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
+                cumulativeDistance += curr.distance(from: prev)
+            }
+
+            let bearing: Double
+            if i < coords.count - 1 {
+                // Look ahead past nearby points to get a stable bearing.
+                // GPS noise between close points causes wild bearing swings.
+                var target = i + 1
+                let origin = CLLocation(latitude: coords[i].latitude, longitude: coords[i].longitude)
+                while target < coords.count - 1 {
+                    let candidate = CLLocation(latitude: coords[target].latitude, longitude: coords[target].longitude)
+                    if origin.distance(from: candidate) >= minBearingDistance {
+                        break
+                    }
+                    target += 1
+                }
+                bearing = self.bearing(from: coords[i], to: coords[target])
+            } else {
+                bearing = processedPoints.last?.bearingToNext ?? 0
+            }
+
+            processedPoints.append(ProcessedPoint(
+                coordinate: coords[i],
+                elevation: elevations?[i],
+                distanceFromStart: cumulativeDistance,
+                bearingToNext: bearing))
+        }
+        return processedPoints
+    }
+
+    /// Turns found from bearing changes along the track.
+    static func detectTurns(in points: [ProcessedPoint]) -> [TurnPoint] {
+        guard points.count >= 3 else { return [] }
+        var turnPoints: [TurnPoint] = []
+        var lastTurnDistance: Double = -minTurnSpacing
+
+        for i in 1..<(points.count - 1) {
+            let prevBearing = points[i-1].bearingToNext
+            let nextBearing = points[i].bearingToNext
+            let angle = angleDelta(from: prevBearing, to: nextBearing)
+
+            if abs(angle) >= turnAngleThreshold {
+                let dist = points[i].distanceFromStart
+                if dist - lastTurnDistance >= minTurnSpacing {
+                    let direction = classifyTurn(angle)
+                    turnPoints.append(TurnPoint(
+                        index: i,
+                        angle: angle,
+                        direction: direction,
+                        distanceFromStart: dist,
+                        coordinate: points[i].coordinate))
+                    lastTurnDistance = dist
+                }
+            }
+        }
+
+        // Two turns within cancelPairDistance whose angles roughly
+        // cancel out (sum near zero) are noise, not real turns.
+        let cancelPairDistance: Double = 100 // meters apart
+        let cancelAngleThreshold: Double = 40 // net angle must be below this
+
+        var filtered: [TurnPoint] = []
+        var skip = false
+        for j in 0..<turnPoints.count {
+            if skip {
+                skip = false
+                continue
+            }
+            if j + 1 < turnPoints.count {
+                let a = turnPoints[j]
+                let b = turnPoints[j + 1]
+                let gap = b.distanceFromStart - a.distanceFromStart
+                let netAngle = abs(a.angle + b.angle)
+                if gap <= cancelPairDistance && netAngle < cancelAngleThreshold {
+                    // Pair cancels out — skip both
+                    skip = true
+                    continue
+                }
+            }
+            filtered.append(turnPoints[j])
+        }
+        return filtered
     }
 
     /// Map POI waypoints to the nearest route points and capture their off-route distance.
@@ -424,7 +432,7 @@ struct RouteProcessor {
 }
 
 /// Milliseconds per stage, for the RouteLoad trace.
-private final class StageClock {
+private nonisolated final class StageClock {
     private var last = Date()
     private var parts: [String] = []
     private let start = Date()
@@ -440,6 +448,6 @@ private final class StageClock {
     }
 }
 
-private extension ProcessedPoint {
+nonisolated private extension ProcessedPoint {
     var location: CLLocation { CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude) }
 }

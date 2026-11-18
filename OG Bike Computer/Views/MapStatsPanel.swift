@@ -24,7 +24,7 @@ struct MapStatsPanel<Pages: View>: View {
     /// Each page should end in `.statsPanelPage(index)`.
     @ViewBuilder let pages: () -> Pages
 
-    @State private var pageHeights: [Int: CGFloat] = [:]
+    @State private var heights = StatsPanelHeights()
     /// What the pager is actually sized to. Measurements arrive after the
     /// change that caused them, outside any animation, so this follows
     /// `pageHeight` inside its own animation. That way the background and
@@ -36,7 +36,7 @@ struct MapStatsPanel<Pages: View>: View {
 
     private var isExpandable: Bool { expandablePages.contains(page) }
     private var isExpanded: Bool { expandedPages.contains(page) }
-    private var pageHeight: CGFloat { min(pageHeights[page] ?? 120, Self.maxPageHeight) }
+    private var pageHeight: CGFloat { min(heights.byPage[page] ?? 120, Self.maxPageHeight) }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -57,9 +57,7 @@ struct MapStatsPanel<Pages: View>: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .frame(height: displayedHeight ?? pageHeight)
-                .environment(\.statsPanelReportHeight) { index, height in
-                    if pageHeights[index] != height { pageHeights[index] = height }
-                }
+                .environment(\.statsPanelHeights, heights)
 
                 if isExpandable {
                     moreLessButton
@@ -164,22 +162,31 @@ struct MapStatsPanel<Pages: View>: View {
     }
 }
 
+/// Each page's content height, written by the pages themselves. It goes
+/// through the environment because environment values reach into the pager's
+/// pages, where preferences don't come back out.
+@Observable final class StatsPanelHeights {
+    var byPage: [Int: CGFloat] = [:]
+
+    func report(_ height: CGFloat, page: Int) {
+        if byPage[page] != height { byPage[page] = height }
+    }
+}
+
 extension EnvironmentValues {
-    /// Lets each page tell the panel how tall its content is. Environment
-    /// values reach into the pager's pages, where preferences don't come back out.
-    @Entry var statsPanelReportHeight: (Int, CGFloat) -> Void = { _, _ in }
+    @Entry var statsPanelHeights: StatsPanelHeights? = nil
 }
 
 private struct StatsPanelPage: ViewModifier {
     let index: Int
-    @Environment(\.statsPanelReportHeight) private var reportHeight
+    @Environment(\.statsPanelHeights) private var heights
 
     func body(content: Content) -> some View {
         // The scroll view gives the content its natural height to measure,
         // and lets it scroll once the panel hits its cap.
         ScrollView {
             content
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reportHeight(index, $0) }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights?.report($0, page: index) }
         }
         .scrollBounceBehavior(.basedOnSize)
         .tag(index)

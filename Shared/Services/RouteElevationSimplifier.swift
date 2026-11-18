@@ -10,7 +10,7 @@
 import Foundation
 import CoreLocation
 
-enum RouteElevationSimplifier {
+nonisolated enum RouteElevationSimplifier {
     /// Maximum number of points kept in the simplified series. The watch's
     /// elevation chart targets this; raising it costs render time.
     static let targetMaxPoints: Int = 250

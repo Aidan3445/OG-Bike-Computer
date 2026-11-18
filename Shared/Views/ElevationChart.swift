@@ -9,7 +9,6 @@
 
 import SwiftUI
 import Charts
-internal import _LocationEssentials
 
 struct ElevationChart: View {
     let samples: [ElevationSample]

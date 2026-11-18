@@ -8,7 +8,7 @@
 import Foundation
 import CoreLocation
 
-struct MileMarker {
+nonisolated struct MileMarker {
     let mile: Int
     let coordinate: CLLocationCoordinate2D
     /// World-space heading of route travel at the *arrow* location, in degrees (0=N, 90=E).
@@ -20,12 +20,16 @@ struct MileMarker {
     let arrowCoordinate: CLLocationCoordinate2D?
 }
 
-/// Unit-aware interval in meters and divisor for label numbers.
-private var distanceInterval: (metersPerUnit: Double, defaultInterval: Double) {
-    switch currentUnits.distance {
+/// Meters per unit and the default marker interval in that unit.
+private nonisolated func markerSpacing(for unit: DistanceUnit) -> (metersPerUnit: Double, defaultInterval: Double) {
+    switch unit {
     case .miles: return (1609.34, 5)
     case .kilometers: return (1000, 5)
     }
+}
+
+private var distanceInterval: (metersPerUnit: Double, defaultInterval: Double) {
+    markerSpacing(for: currentUnits.distance)
 }
 
 /// Pick a marker interval (min 1 unit) sized to the current map zoom.
@@ -61,9 +65,16 @@ func autoMileMarkerInterval(totalMeters: Double) -> Double {
 
 /// Compute distance marker positions along a route.
 func computeMileMarkers(points: [ProcessedPoint], interval: Double? = nil) -> [MileMarker] {
+    computeMileMarkers(points: points, interval: interval, unit: currentUnits.distance)
+}
+
+/// For callers off the main actor, which read the unit before they leave it.
+nonisolated func computeMileMarkers(points: [ProcessedPoint], interval: Double?, unit: DistanceUnit)
+    -> [MileMarker]
+{
     guard points.count >= 2 else { return [] }
 
-    let (metersPerUnit, defaultInterval) = distanceInterval
+    let (metersPerUnit, defaultInterval) = markerSpacing(for: unit)
     let intervalUnits = interval ?? defaultInterval
     let intervalMeters = intervalUnits * metersPerUnit
     let halfInterval = intervalMeters / 2
@@ -136,10 +147,12 @@ func computeMileMarkers(points: [ProcessedPoint], interval: Double? = nil) -> [M
 }
 
 /// Compute distance markers along a recorded ride track.
-func computeRideMileMarkers(locations: [CLLocation], interval: Double? = nil) -> [MileMarker] {
+nonisolated func computeRideMileMarkers(
+    locations: [CLLocation], interval: Double? = nil, unit: DistanceUnit
+) -> [MileMarker] {
     guard locations.count >= 2 else { return [] }
 
-    let (metersPerUnit, defaultInterval) = distanceInterval
+    let (metersPerUnit, defaultInterval) = markerSpacing(for: unit)
     let intervalUnits = interval ?? defaultInterval
     let intervalMeters = intervalUnits * metersPerUnit
     let halfInterval = intervalMeters / 2
@@ -210,4 +223,85 @@ func computeRideMileMarkers(locations: [CLLocation], interval: Double? = nil) ->
     }
 
     return markers
+}
+
+nonisolated struct DirectionArrow {
+    let coordinate: CLLocationCoordinate2D
+    /// World-space heading of travel at the arrow, in degrees (0=N, 90=E).
+    let bearingDegrees: Double
+}
+
+/// A track to place arrows on: points with their along-track distances, the
+/// distances where one arrow stretch ends and the next begins (turns, pause
+/// gaps), and stretches that get no arrow at all.
+nonisolated struct ArrowTrack {
+    let coordinates: [CLLocationCoordinate2D]
+    let distances: [Double]
+    let breaks: [Double]
+    var skips: [ClosedRange<Double>] = []
+}
+
+/// Above this span the mile marker arrows are enough. Below it, arrows go
+/// between turns instead, since markers can't get closer than 1 mile or km.
+private let segmentArrowMaxSpanMeters: Double = 6_000
+
+/// Longest gap between segment arrows for the visible span, about a quarter
+/// of the screen. nil when zoomed out far enough to use marker arrows. Snaps
+/// to fixed steps so small zoom changes don't recompute the arrows.
+func segmentArrowSpacing(visibleMeters: Double) -> Double? {
+    guard visibleMeters > 0, visibleMeters <= segmentArrowMaxSpanMeters else { return nil }
+    let target = visibleMeters / 4
+    let candidates: [Double] = [50, 100, 200, 300, 500, 750, 1000, 1500]
+    return candidates.min(by: { abs($0 - target) < abs($1 - target) })
+}
+
+/// One arrow in the middle of every stretch between breaks, plus evenly
+/// spaced extras when a stretch is longer than `spacing`. Stretches shorter
+/// than a quarter of `spacing` would crowd the turns on screen, so they get
+/// none.
+nonisolated func computeSegmentArrows(on track: ArrowTrack, spacing: Double) -> [DirectionArrow] {
+    let coords = track.coordinates, dists = track.distances
+    guard coords.count >= 2, coords.count == dists.count, spacing > 0,
+          let start = dists.first, let end = dists.last, end > start
+    else { return [] }
+
+    func position(at d: Double) -> CLLocationCoordinate2D {
+        var lo = 0, hi = dists.count - 1
+        if d <= dists[lo] { return coords[lo] }
+        if d >= dists[hi] { return coords[hi] }
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2
+            if dists[mid] <= d { lo = mid } else { hi = mid }
+        }
+        let len = dists[hi] - dists[lo]
+        let t = len > 0 ? (d - dists[lo]) / len : 0
+        let a = coords[lo], b = coords[hi]
+        return CLLocationCoordinate2D(
+            latitude: a.latitude + (b.latitude - a.latitude) * t,
+            longitude: a.longitude + (b.longitude - a.longitude) * t)
+    }
+
+    let stops = [start] + track.breaks.filter { $0 > start && $0 < end }.sorted() + [end]
+    let minStretch = spacing / 4
+    var arrows: [DirectionArrow] = []
+
+    for (s, e) in zip(stops, stops.dropFirst()) {
+        let length = e - s
+        guard length >= minStretch,
+              !track.skips.contains(where: { $0.lowerBound <= s && e <= $0.upperBound })
+        else { continue }
+        let count = max(1, Int((length / spacing).rounded(.up)))
+        // Heading over a short window so GPS jitter at one point doesn't
+        // spin the arrow, kept inside the stretch so it never reads a turn.
+        let window = min(15, length / 4)
+        for k in 0..<count {
+            let d = s + length * (Double(k) + 0.5) / Double(count)
+            let before = position(at: max(s, d - window))
+            let after = position(at: min(e, d + window))
+            arrows.append(DirectionArrow(
+                coordinate: position(at: d),
+                bearingDegrees: RouteProcessor.bearing(from: before, to: after)))
+        }
+    }
+    return arrows
 }

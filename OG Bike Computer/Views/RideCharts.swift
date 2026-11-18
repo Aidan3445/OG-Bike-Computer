@@ -306,7 +306,7 @@ struct LongPressScrubOverlay: UIViewRepresentable {
 
 // MARK: - Data Model
 
-struct ChartDataPoint: Identifiable {
+nonisolated struct ChartDataPoint: Identifiable {
     let id = UUID()
     let distance: Double  // meters from start
     let elevation: Double  // meters
@@ -425,7 +425,7 @@ func gradeBand(distances: [Double], grades: [Double]) -> [GradeBandSegment] {
 }
 
 /// Elevation by distance, for reading grade off a profile at any spacing.
-struct GradeProfile {
+nonisolated struct GradeProfile {
     private let distances: [Double]
     private let elevations: [Double]
 
@@ -914,7 +914,7 @@ private struct RideScrubFooter: View {
 
 // MARK: - Route Elevation Chart
 
-struct RouteElevationPoint {
+nonisolated struct RouteElevationPoint {
     let distanceFromStart: Double
     let elevation: Double?
     /// Percent, 0 where the route has no elevation.
@@ -1161,7 +1161,7 @@ private struct RouteScrubFooter: View {
 
 // MARK: - Data Building
 
-func buildRideChartData(from trackURL: URL, segmentCount: Int = 1200) -> (
+nonisolated func buildRideChartData(from trackURL: URL, segmentCount: Int = 1200) -> (
     points: [ChartDataPoint], hasHR: Bool, hasPower: Bool
 ) {
     guard let data = try? Data(contentsOf: trackURL) else { return ([], false, false) }
@@ -1170,7 +1170,7 @@ func buildRideChartData(from trackURL: URL, segmentCount: Int = 1200) -> (
 
 /// About 1200 chunks by default: plenty for a zoomed-in chart, and the chart
 /// only draws ~300 of them at a time.
-func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 1200) -> (
+nonisolated func buildRideChartData(points fullPoints: [TrackPoint5], segmentCount: Int = 1200) -> (
     points: [ChartDataPoint], hasHR: Bool, hasPower: Bool
 ) {
     guard fullPoints.count >= 2 else { return ([], false, false) }
@@ -1366,7 +1366,7 @@ private func previewScrub(at distance: Double) -> ChartScrubState {
     .padding()
 }
 
-func buildRouteElevationData(from route: Route) -> [RouteElevationPoint] {
+nonisolated func buildRouteElevationData(from route: Route) -> [RouteElevationPoint] {
     let pts = route.points
     guard pts.count >= 2 else { return [] }
 

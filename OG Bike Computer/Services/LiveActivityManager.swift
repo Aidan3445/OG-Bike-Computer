@@ -144,7 +144,7 @@ class LiveActivityManager {
     }
 
     func update(from telemetry: [String: String]) {
-        guard let activity = currentActivity else { return }
+        guard currentActivity != nil else { return }
 
         // Once the LA is in a terminal state (held / completed) we've already
         // optimistically stamped a banner the rider is meant to see while the

@@ -155,9 +155,27 @@ enum RouteRainbow {
         }
     }
 
+    private struct TrailKey: Equatable {
+        let start: Date?
+        let count: Int
+        let stepsPerCycle: Int
+    }
+
+    private static var trailSegmentsKey: TrailKey?
+    private static var cachedTrailSegments: [MapSegment] = []
+
     /// Free-ride trail as MapKit polylines, one per small step of hue, thinned
-    /// to about 500 points like the canvas.
+    /// to about 500 points like the canvas. Only rebuilt when the trail grows.
     static func trailMapSegments(_ trail: [CLLocation], stepsPerCycle: Int = 24) -> [MapSegment] {
+        let key = TrailKey(start: trail.first?.timestamp, count: trail.count, stepsPerCycle: stepsPerCycle)
+        if key != trailSegmentsKey {
+            cachedTrailSegments = buildTrailMapSegments(trail, stepsPerCycle: stepsPerCycle)
+            trailSegmentsKey = key
+        }
+        return cachedTrailSegments
+    }
+
+    private static func buildTrailMapSegments(_ trail: [CLLocation], stepsPerCycle: Int) -> [MapSegment] {
         guard trail.count >= 2 else { return [] }
         let cycles = cycles(for: trail)
         let every = max(1, trail.count / 500)
@@ -291,17 +309,13 @@ struct FreeRideFrame {
     }
 
     init?(trail: [CLLocation], current: CLLocation?) {
-        var coords = trail.map(\.coordinate)
-        if let current { coords.append(current.coordinate) }
-        guard let first = coords.first else { return nil }
-        var minLat = first.latitude, maxLat = first.latitude
-        var minLon = first.longitude, maxLon = first.longitude
-        for c in coords.dropFirst() {
-            minLat = min(minLat, c.latitude)
-            maxLat = max(maxLat, c.latitude)
-            minLon = min(minLon, c.longitude)
-            maxLon = max(maxLon, c.longitude)
+        var trailBounds = Self.trailBounds(trail)
+        if let current {
+            trailBounds = trailBounds?.including(current.coordinate) ?? Bounds(current.coordinate)
         }
+        guard let bounds = trailBounds else { return nil }
+        var minLat = bounds.minLat, maxLat = bounds.maxLat
+        var minLon = bounds.minLon, maxLon = bounds.maxLon
         let metresPerDegree = 111_320.0
         let minLatSpan = Self.minSpan / metresPerDegree
         let cosLat = max(cos((minLat + maxLat) / 2 * .pi / 180), 0.01)
@@ -320,6 +334,45 @@ struct FreeRideFrame {
         self.maxLat = maxLat
         self.minLon = minLon
         self.maxLon = maxLon
+    }
+
+    private struct Bounds {
+        var minLat: Double, maxLat: Double, minLon: Double, maxLon: Double
+
+        init(_ c: CLLocationCoordinate2D) {
+            minLat = c.latitude
+            maxLat = c.latitude
+            minLon = c.longitude
+            maxLon = c.longitude
+        }
+
+        func including(_ c: CLLocationCoordinate2D) -> Bounds {
+            var b = self
+            b.minLat = min(b.minLat, c.latitude)
+            b.maxLat = max(b.maxLat, c.latitude)
+            b.minLon = min(b.minLon, c.longitude)
+            b.maxLon = max(b.maxLon, c.longitude)
+            return b
+        }
+    }
+
+    private static var boundsStart: Date?
+    private static var boundsCount = 0
+    private static var cachedBounds: Bounds?
+
+    /// The trail only grows during a ride, so new points widen the cached box
+    /// instead of rescanning the whole ride each redraw.
+    private static func trailBounds(_ trail: [CLLocation]) -> Bounds? {
+        if trail.first?.timestamp != boundsStart || trail.count < boundsCount {
+            boundsStart = trail.first?.timestamp
+            boundsCount = 0
+            cachedBounds = nil
+        }
+        for location in trail[boundsCount...] {
+            cachedBounds = cachedBounds?.including(location.coordinate) ?? Bounds(location.coordinate)
+        }
+        boundsCount = trail.count
+        return cachedBounds
     }
 }
 

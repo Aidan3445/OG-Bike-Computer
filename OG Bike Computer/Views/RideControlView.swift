@@ -641,7 +641,7 @@ private struct RoutePickerSheet: View {
     }
 
     /// Imported routes match on their service ID, GPX files on name and point count.
-    private static func matchKey(_ route: Route) -> String {
+    private nonisolated static func matchKey(_ route: Route) -> String {
         if let source = route.source {
             return "\(source.service.rawValue):\(source.remoteID)"
         }

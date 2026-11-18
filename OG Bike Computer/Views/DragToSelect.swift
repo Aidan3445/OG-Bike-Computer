@@ -19,37 +19,7 @@ struct DragToSelect: ViewModifier {
     let setSelected: (UUID, Bool) -> Void
 
     @State private var isDragging = false
-    /// Frames and drag bookkeeping change every scroll frame, so they live in
-    /// a reference that doesn't redraw the list when it changes.
-    @State private var tracker = Tracker()
-
-    private final class Tracker: NSObject {
-        var rowFrames: [UUID: CGRect] = [:]
-        var visibleArea: CGRect = .zero
-        weak var scrollView: UIScrollView?
-        var anchorID: UUID?
-        var target = true
-        var baseline: Set<UUID> = []
-        var lastLocation: CGPoint?
-        var displayLink: CADisplayLink?
-        var onFrame: ((CFTimeInterval) -> Void)?
-
-        func startDisplayLink() {
-            guard displayLink == nil else { return }
-            let link = CADisplayLink(target: self, selector: #selector(frame(_:)))
-            link.add(to: .main, forMode: .common)
-            displayLink = link
-        }
-
-        func stopDisplayLink() {
-            displayLink?.invalidate()
-            displayLink = nil
-        }
-
-        @objc private func frame(_ link: CADisplayLink) {
-            onFrame?(link.targetTimestamp - link.timestamp)
-        }
-    }
+    @State private var tracker = DragSelectTracker()
 
     private static let edgeZone: CGFloat = 70
     /// Points per second at the very edge.
@@ -57,12 +27,7 @@ struct DragToSelect: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .environment(\.dragSelectReportFrame) { [tracker] id, frame in
-                tracker.rowFrames[id] = frame
-            }
-            .environment(\.dragSelectReportScrollView) { [tracker] scrollView in
-                tracker.scrollView = scrollView
-            }
+            .environment(\.dragSelectTracker, tracker)
             .onGeometryChange(for: CGRect.self) { proxy in
                 let frame = proxy.frame(in: .global)
                 let insets = proxy.safeAreaInsets
@@ -178,11 +143,40 @@ struct DragToSelect: ViewModifier {
     }
 }
 
+/// Frames and drag bookkeeping change every scroll frame, so they live in a
+/// reference that doesn't redraw the list when it changes. Rows write their
+/// on-screen frame here (nil once they scroll away) and hand over the list's
+/// scroll view, which edge scrolling moves.
+final class DragSelectTracker: NSObject {
+    var rowFrames: [UUID: CGRect] = [:]
+    var visibleArea: CGRect = .zero
+    weak var scrollView: UIScrollView?
+    var anchorID: UUID?
+    var target = true
+    var baseline: Set<UUID> = []
+    var lastLocation: CGPoint?
+    var displayLink: CADisplayLink?
+    var onFrame: ((CFTimeInterval) -> Void)?
+
+    func startDisplayLink() {
+        guard displayLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(frame(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    func stopDisplayLink() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func frame(_ link: CADisplayLink) {
+        onFrame?(link.targetTimestamp - link.timestamp)
+    }
+}
+
 extension EnvironmentValues {
-    /// Rows report their on-screen frame, or nil once they scroll away.
-    @Entry var dragSelectReportFrame: (UUID, CGRect?) -> Void = { _, _ in }
-    /// Rows hand over the list's scroll view, which edge scrolling moves.
-    @Entry var dragSelectReportScrollView: (UIScrollView) -> Void = { _ in }
+    @Entry var dragSelectTracker: DragSelectTracker? = nil
 }
 
 /// Finds the list's UIKit scroll view by walking up from inside a row.
@@ -218,14 +212,13 @@ private struct ScrollViewFinder: UIViewRepresentable {
 
 private struct DragSelectRow: ViewModifier {
     let id: UUID
-    @Environment(\.dragSelectReportFrame) private var reportFrame
-    @Environment(\.dragSelectReportScrollView) private var reportScrollView
+    @Environment(\.dragSelectTracker) private var tracker
 
     func body(content: Content) -> some View {
         content
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { reportFrame(id, $0) }
-            .onDisappear { reportFrame(id, nil) }
-            .background(ScrollViewFinder(found: reportScrollView).allowsHitTesting(false))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tracker?.rowFrames[id] = $0 }
+            .onDisappear { tracker?.rowFrames[id] = nil }
+            .background(ScrollViewFinder { tracker?.scrollView = $0 }.allowsHitTesting(false))
     }
 }
 

@@ -22,6 +22,7 @@ class ExtensionDelegate: NSObject, WKApplicationDelegate {
         ConnectivityManager.shared.attachStores(routeStore: store, rideStore: rideStore)
 
         workout.rideStore = rideStore
+        ResourceMonitor.shared.start(workout: workout)
 
         // Wire up WC ride command handlers immediately so they're ready
         // even before ContentView loads. This handles the case where iOS

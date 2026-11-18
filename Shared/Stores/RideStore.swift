@@ -10,7 +10,7 @@ import CoreLocation
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "RideStore")
+nonisolated private let logger = Logger(subsystem: "com.aidan3445.OG-Bike-Computer", category: "RideStore")
 
 class RideStore: ObservableObject {
     @Published var rides: [RideSummary] = []
@@ -108,7 +108,7 @@ class RideStore: ObservableObject {
         directory.appendingPathComponent(ride.trackFilename)
     }
 
-    func exportGPX(for ride: RideSummary) -> URL? {
+    nonisolated func exportGPX(for ride: RideSummary) -> URL? {
         let trackURL = directory.appendingPathComponent(ride.trackFilename)
         guard let data = try? Data(contentsOf: trackURL) else { return nil }
 
@@ -192,7 +192,7 @@ class RideStore: ObservableObject {
     /// each ride's real timestamps so the gaps between rides are visible to
     /// downstream tools. Segments always go oldest first: Strava rejects a
     /// track whose times run backwards.
-    func exportCombinedGPX(rides: [RideSummary], combinedName: String? = nil) -> URL? {
+    nonisolated func exportCombinedGPX(rides: [RideSummary], combinedName: String? = nil) -> URL? {
         guard !rides.isEmpty else { return nil }
 
         var segments: [GPXExporter.Segment] = []

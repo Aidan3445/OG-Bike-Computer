@@ -7,7 +7,7 @@
 
 import CoreLocation
 
-struct TrackPoint: Codable, Equatable {
+nonisolated struct TrackPoint: Codable, Equatable {
     let lat: Double
     let lon: Double
     let elevation: Double?
