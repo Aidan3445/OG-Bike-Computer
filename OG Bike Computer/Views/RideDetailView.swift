@@ -46,7 +46,7 @@ struct RideDetailView: View {
     @State private var coarseSegments: [ColoredSegment] = []
     @State private var useCoarseSegments = false
     /// Pairs of (lastPointBefore, firstPointAfter) for every elapsed-time gap
-    /// larger than `pauseJumpGapSeconds` — rendered as dashed grey to visually
+    /// larger than 30 seconds — rendered as dashed grey to visually
     /// distinguish pause/hold jumps from actively-ridden segments.
     @State private var pauseJumps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)] = []
     @State private var startCoord: CLLocationCoordinate2D?
@@ -54,6 +54,11 @@ struct RideDetailView: View {
     @State private var elevationExtremes: (high: ElevPoint, low: ElevPoint)?
     @State private var mileMarkers: [MileMarker] = []
     @State private var currentMarkerInterval: Double = 0
+    /// Track points with detected turns and pause gaps, for zoomed-in arrows.
+    @State private var arrowTrack: ArrowTrack?
+    /// nil while zoomed out, when the mile marker arrows are used instead.
+    @State private var currentArrowSpacing: Double?
+    @State private var segmentArrows: [DirectionArrow] = []
     /// Live map heading, updated from `onMapCameraChange`. Held in `@State`
     /// (NOT `@StateObject`) deliberately — we want only the small annotation
     /// views (MileMarkerArrow, HighlightChevron) to observe the heading via
@@ -370,8 +375,8 @@ struct RideDetailView: View {
         // Label is a static capsule at the marker position; the direction
         // arrow is a separate annotation placed halfway along the route to
         // the next marker so only the arrow re-renders on camera rotation.
-        // Filtered to the visible region so a long ride doesn't render every
-        // marker at once.
+        // Zoomed in, arrows sit between turns instead (below). Filtered to
+        // the visible region so a long ride doesn't render every marker at once.
         ForEach(visibleMileMarkers, id: \.offset) { _, marker in
             if showMileMarkers {
                 Annotation("", coordinate: marker.coordinate) {
@@ -380,13 +385,22 @@ struct RideDetailView: View {
                         unitLabel: currentUnits.distance.label)
                 }
             }
-            if showDirectionArrows,
+            if showDirectionArrows, currentArrowSpacing == nil,
                let arrowCoord = marker.arrowCoordinate,
                inVisibleRegion(arrowCoord) {
                 Annotation("", coordinate: arrowCoord) {
                     MileMarkerArrow(
                         camera: cameraState,
                         worldBearing: marker.bearingDegrees)
+                }
+            }
+        }
+        if showDirectionArrows, currentArrowSpacing != nil {
+            ForEach(visibleSegmentArrows, id: \.offset) { _, arrow in
+                Annotation("", coordinate: arrow.coordinate) {
+                    MileMarkerArrow(
+                        camera: cameraState,
+                        worldBearing: arrow.bearingDegrees)
                 }
             }
         }
@@ -501,7 +515,9 @@ struct RideDetailView: View {
 
     /// Re-buckets mile markers for the visible span. Does nothing until the track has loaded.
     private func updateMarkerInterval(for region: MKCoordinateRegion) {
-        let interval = mapZoomMarkerInterval(visibleMeters: visibleSpanMeters(of: region))
+        let visibleMeters = visibleSpanMeters(of: region)
+        updateSegmentArrows(visibleMeters: visibleMeters)
+        let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
         guard interval != currentMarkerInterval, !allLocations.isEmpty else { return }
         currentMarkerInterval = interval
         let locations = allLocations
@@ -512,6 +528,29 @@ struct RideDetailView: View {
                 if currentMarkerInterval == interval { mileMarkers = markers }
             }
         }
+    }
+
+    /// Re-spaces the between-turn arrows for the visible span. Does nothing
+    /// until the track has loaded.
+    private func updateSegmentArrows(visibleMeters: Double) {
+        guard let track = arrowTrack else { return }
+        let spacing = segmentArrowSpacing(visibleMeters: visibleMeters)
+        guard spacing != currentArrowSpacing else { return }
+        currentArrowSpacing = spacing
+        guard let spacing else {
+            segmentArrows = []
+            return
+        }
+        Task.detached(priority: .userInitiated) {
+            let arrows = computeSegmentArrows(on: track, spacing: spacing)
+            await MainActor.run {
+                if currentArrowSpacing == spacing { segmentArrows = arrows }
+            }
+        }
+    }
+
+    private var visibleSegmentArrows: [EnumeratedSequence<[DirectionArrow]>.Element] {
+        Array(segmentArrows.enumerated()).filter { inVisibleRegion($0.element.coordinate) }
     }
 
     private func continueHeldRide() {
@@ -639,15 +678,28 @@ struct RideDetailView: View {
 
         let unit = currentUnits.distance
         let built = await Task.detached(priority: .userInitiated) { () -> RideMapData in
-            var cumDist = [Double](repeating: 0, count: locations.count)
-            for i in 1..<locations.count {
-                cumDist[i] = cumDist[i - 1] + locations[i].distance(from: locations[i - 1])
-            }
+            let coords = locations.map(\.coordinate)
+            let trackPoints = RouteProcessor.trackPoints(coords)
+            let cumDist = trackPoints.map(\.distanceFromStart)
 
             // Split into ridden runs at large elapsed-time gaps so the speed-
             // colored polyline doesn't draw a straight line across a pause/
             // hold jump. The gaps themselves render as dashed grey.
-            let split = splitAtPauseGaps(locations: locations, gapSeconds: 30)
+            let pauseGapSeconds: TimeInterval = 30
+            let split = splitAtPauseGaps(locations: locations, gapSeconds: pauseGapSeconds)
+
+            // Arrows break at detected turns and at both ends of each pause
+            // jump, and never sit on the jump itself.
+            let pauseSpans = (1..<locations.count).compactMap { i -> ClosedRange<Double>? in
+                let dt = locations[i].timestamp.timeIntervalSince(locations[i - 1].timestamp)
+                return dt > pauseGapSeconds ? cumDist[i - 1]...cumDist[i] : nil
+            }
+            let arrowTrack = ArrowTrack(
+                coordinates: coords,
+                distances: cumDist,
+                breaks: RouteProcessor.detectTurns(in: trackPoints).map(\.distanceFromStart)
+                    + pauseSpans.flatMap { [$0.lowerBound, $0.upperBound] },
+                skips: pauseSpans)
             let fine = buildColoredSegments(runs: split.runs, runStarts: split.runStarts, chunkBudget: 500)
             let coarseRaw = buildColoredSegments(
                 runs: split.runs, runStarts: split.runStarts, chunkBudget: 120, colorSteps: 6)
@@ -656,6 +708,7 @@ struct RideDetailView: View {
             let chart = buildRideChartData(points: fullPoints)
             return RideMapData(
                 cumulativeDistances: cumDist,
+                arrowTrack: arrowTrack,
                 pauseJumps: split.gaps,
                 fineSegments: fine,
                 coarseSegments: coarse,
@@ -667,6 +720,7 @@ struct RideDetailView: View {
         }.value
 
         cumulativeDistances = built.cumulativeDistances
+        arrowTrack          = built.arrowTrack
         pauseJumps          = built.pauseJumps
         coloredSegments     = built.fineSegments
         coarseSegments      = built.coarseSegments
@@ -754,6 +808,7 @@ struct RideDetailView: View {
 /// the view in one main-actor hop.
 private nonisolated struct RideMapData {
     let cumulativeDistances: [Double]
+    let arrowTrack: ArrowTrack
     let pauseJumps: [(CLLocationCoordinate2D, CLLocationCoordinate2D)]
     let fineSegments: [ColoredSegment]
     let coarseSegments: [ColoredSegment]

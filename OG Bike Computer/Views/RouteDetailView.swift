@@ -44,6 +44,11 @@ struct RouteDetailView: View {
     @State private var cachedProcessedPoints: [ProcessedPoint] = []
     @State private var cachedMileMarkers: [MileMarker] = []
     @State private var currentMarkerInterval: Double = 0
+    /// Route points with cue and detected turn distances, for zoomed-in arrows.
+    @State private var arrowTrack: ArrowTrack?
+    /// nil while zoomed out, when the mile marker arrows are used instead.
+    @State private var currentArrowSpacing: Double?
+    @State private var segmentArrows: [DirectionArrow] = []
     @State private var cachedElevationExtremes: (high: TrackPoint, low: TrackPoint)? = nil
     @State private var cachedElevationData: [RouteElevationPoint] = []
     @State private var didStartLoad = false
@@ -188,6 +193,7 @@ struct RouteDetailView: View {
                             // position; the direction arrow is a separate annotation
                             // halfway-along-route to the next marker (snapped to a track
                             // point) so only the arrow re-renders on camera rotation.
+                            // Zoomed in, arrows sit between turns instead (below).
                             // Filtered to the visible region (with padding) so a 600-mile
                             // route doesn't render all ~1200 markers at once.
                             ForEach(visibleMileMarkers, id: \.offset) { _, marker in
@@ -198,7 +204,7 @@ struct RouteDetailView: View {
                                             unitLabel: currentUnits.distance.label)
                                     }
                                 }
-                                if showDirectionArrows,
+                                if showDirectionArrows, currentArrowSpacing == nil,
                                     let arrowCoord = marker.arrowCoordinate,
                                     inVisibleRegion(arrowCoord)
                                 {
@@ -206,6 +212,15 @@ struct RouteDetailView: View {
                                         MileMarkerArrow(
                                             camera: cameraState,
                                             worldBearing: marker.bearingDegrees)
+                                    }
+                                }
+                            }
+                            if showDirectionArrows, currentArrowSpacing != nil {
+                                ForEach(visibleSegmentArrows, id: \.offset) { _, arrow in
+                                    Annotation("", coordinate: arrow.coordinate) {
+                                        MileMarkerArrow(
+                                            camera: cameraState,
+                                            worldBearing: arrow.bearingDegrees)
                                     }
                                 }
                             }
@@ -551,7 +566,9 @@ struct RouteDetailView: View {
         let latRad = region.center.latitude * .pi / 180
         let widthMeters = region.span.longitudeDelta * 111_320 * cos(latRad)
         let heightMeters = region.span.latitudeDelta * 111_320
-        let interval = mapZoomMarkerInterval(visibleMeters: max(widthMeters, heightMeters))
+        let visibleMeters = max(widthMeters, heightMeters)
+        updateSegmentArrows(visibleMeters: visibleMeters)
+        let interval = mapZoomMarkerInterval(visibleMeters: visibleMeters)
         guard interval != currentMarkerInterval, !cachedProcessedPoints.isEmpty else { return }
         currentMarkerInterval = interval
         let points = cachedProcessedPoints
@@ -562,6 +579,29 @@ struct RouteDetailView: View {
                 if currentMarkerInterval == interval { cachedMileMarkers = markers }
             }
         }
+    }
+
+    /// Re-spaces the between-turn arrows for the visible span. Does nothing
+    /// until the arrow track has loaded.
+    private func updateSegmentArrows(visibleMeters: Double) {
+        guard let track = arrowTrack else { return }
+        let spacing = segmentArrowSpacing(visibleMeters: visibleMeters)
+        guard spacing != currentArrowSpacing else { return }
+        currentArrowSpacing = spacing
+        guard let spacing else {
+            segmentArrows = []
+            return
+        }
+        Task.detached(priority: .userInitiated) {
+            let arrows = computeSegmentArrows(on: track, spacing: spacing)
+            await MainActor.run {
+                if currentArrowSpacing == spacing { segmentArrows = arrows }
+            }
+        }
+    }
+
+    private var visibleSegmentArrows: [EnumeratedSequence<[DirectionArrow]>.Element] {
+        Array(segmentArrows.enumerated()).filter { inVisibleRegion($0.element.coordinate) }
     }
 
     /// Returns true when `coord` is inside the current visible region inflated
@@ -1120,6 +1160,17 @@ struct RouteDetailView: View {
         if currentMarkerInterval == 0 { cachedMileMarkers = built.mileMarkers }
         cachedElevationExtremes = built.elevationExtremes
         cachedElevationData = built.elevationData
+
+        // Full processing finds the cues and detected turns. It's the slowest
+        // step, so it runs last and only feeds the zoomed-in arrows.
+        arrowTrack = await Task.detached(priority: .utility) { () -> ArrowTrack in
+            let processed = RouteProcessor.process(route)
+            return ArrowTrack(
+                coordinates: processed.points.map(\.coordinate),
+                distances: processed.points.map(\.distanceFromStart),
+                breaks: processed.turnPoints(for: .both).map(\.distanceFromStart))
+        }.value
+        if let region = visibleRegion { updateMarkerInterval(for: region) }
     }
 
     /// Binary-search the processed points' cumulative distances, then

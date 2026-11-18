@@ -8,13 +8,10 @@
 //    rotates, so it does not observe the live camera state and is cheap to
 //    render once and leave alone.
 //
-//  • `MileMarkerArrow` sits at a separate annotation halfway along the route
-//    to the next marker (snapped to a track point) and is the only view that
-//    counter-rotates against the camera. Because the label and the arrow no
-//    longer share an annotation, a per-frame camera update only invalidates
-//    the small arrow view instead of forcing the whole label/arrow HStack to
-//    re-layout — which on-device was the source of mile-marker lag during
-//    rotation.
+//  • `MileMarkerArrow` is a travel-direction arrow. Zoomed out it sits
+//    halfway between mile markers; zoomed in it sits between turns. It's its
+//    own annotation so a camera rotation only re-renders the small arrow,
+//    not the label next to it.
 //
 
 import SwiftUI
