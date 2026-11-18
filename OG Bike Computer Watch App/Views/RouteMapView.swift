@@ -64,13 +64,19 @@ struct RouteMapView: View {
     }
 
     var body: some View {
+        let _ = ResourceMonitor.shared.noteRouteMapBody()
         ZStack {
             Group {
                 if showFullRoute || !workout.hasRoute {
                     // Full route view, no rotation. With map detail on, a route
                     // draws as a canvas over the map and a free ride draws in MapKit.
                     if mapDetailEnabled && !workout.hasRoute {
-                        freeRideMap
+                        FreeRideMap(
+                            trail: workout.recordedLocations,
+                            current: workout.currentLocation,
+                            color: mapConfig.routeAheadColor
+                        )
+                        .equatable()
                     } else if mapDetailEnabled {
                         ZStack {
                             fullRouteMapBackground
@@ -122,48 +128,6 @@ struct RouteMapView: View {
                 longitudeDelta: (processed.maxLon - processed.minLon) * 1.3)
             Map(position: .constant(.region(MKCoordinateRegion(center: center, span: span))),
                 interactionModes: []) {}
-            .mapStyle(.standard(pointsOfInterest: .excludingAll))
-            .mapControlVisibility(.hidden)
-            .allowsHitTesting(false)
-        }
-    }
-
-    /// Free ride with map detail on. The trail and rider are drawn by MapKit,
-    /// so they always sit right on the map. A canvas over the map only lines
-    /// up when MapKit fits the region the way the canvas does.
-    @ViewBuilder
-    private var freeRideMap: some View {
-        let trail = workout.recordedLocations
-        if let frame = FreeRideFrame(trail: trail, current: workout.currentLocation) {
-            let span = MKCoordinateSpan(
-                latitudeDelta: (frame.maxLat - frame.minLat) * 1.3,
-                longitudeDelta: (frame.maxLon - frame.minLon) * 1.3)
-            Map(position: .constant(.region(MKCoordinateRegion(center: frame.center, span: span))),
-                interactionModes: []) {
-                // No trail until the ride sets off, just the rider.
-                if trail.count >= 2 {
-                    if mapConfig.routeAheadColor == .rainbow {
-                        ForEach(RouteRainbow.trailMapSegments(trail), id: \.id) { segment in
-                            MapPolyline(coordinates: segment.coordinates)
-                                .stroke(segment.color, style: .roundedLine(3))
-                        }
-                    } else {
-                        let every = max(1, trail.count / 500)
-                        let coordinates = Swift.stride(from: 0, to: trail.count, by: every)
-                            .map { trail[$0].coordinate } + [trail[trail.count - 1].coordinate]
-                        MapPolyline(coordinates: coordinates)
-                            .stroke(mapConfig.routeAheadColor.color, style: .roundedLine(3))
-                    }
-                }
-                if let location = workout.currentLocation {
-                    Annotation("", coordinate: location.coordinate, anchor: .center) {
-                        ZStack {
-                            Circle().fill(.white).frame(width: 10, height: 10)
-                            Circle().fill(.blue).frame(width: 7, height: 7)
-                        }
-                    }
-                }
-            }
             .mapStyle(.standard(pointsOfInterest: .excludingAll))
             .mapControlVisibility(.hidden)
             .allowsHitTesting(false)
@@ -420,6 +384,64 @@ struct RouteMapView: View {
             await MainActor.run {
                 withAnimation(.easeIn(duration: 0.35)) { toggleButtonOpacity = 1.0 }
             }
+        }
+    }
+}
+
+// MARK: - Free Ride Map
+
+/// Free ride with map detail on. The trail and rider are drawn by MapKit,
+/// so they always sit right on the map. A canvas over the map only lines
+/// up when MapKit fits the region the way the canvas does.
+///
+/// Only a new fix or trail point redraws it. The ride's other numbers change
+/// several times a second, and rebuilding the map for each one can run the
+/// watch out of memory on a long ride.
+private struct FreeRideMap: View, Equatable {
+    let trail: [CLLocation]
+    let current: CLLocation?
+    let color: RouteColor
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.trail.count == rhs.trail.count && lhs.trail.last === rhs.trail.last
+            && lhs.current === rhs.current && lhs.color == rhs.color
+    }
+
+    var body: some View {
+        let _ = ResourceMonitor.shared.noteFreeRideMapBody()
+        if let frame = FreeRideFrame(trail: trail, current: current) {
+            let span = MKCoordinateSpan(
+                latitudeDelta: (frame.maxLat - frame.minLat) * 1.3,
+                longitudeDelta: (frame.maxLon - frame.minLon) * 1.3)
+            Map(position: .constant(.region(MKCoordinateRegion(center: frame.center, span: span))),
+                interactionModes: []) {
+                // No trail until the ride sets off, just the rider.
+                if trail.count >= 2 {
+                    if color == .rainbow {
+                        ForEach(RouteRainbow.trailMapSegments(trail), id: \.id) { segment in
+                            MapPolyline(coordinates: segment.coordinates)
+                                .stroke(segment.color, style: .roundedLine(3))
+                        }
+                    } else {
+                        let every = max(1, trail.count / 500)
+                        let coordinates = Swift.stride(from: 0, to: trail.count, by: every)
+                            .map { trail[$0].coordinate } + [trail[trail.count - 1].coordinate]
+                        MapPolyline(coordinates: coordinates)
+                            .stroke(color.color, style: .roundedLine(3))
+                    }
+                }
+                if let current {
+                    Annotation("", coordinate: current.coordinate, anchor: .center) {
+                        ZStack {
+                            Circle().fill(.white).frame(width: 10, height: 10)
+                            Circle().fill(.blue).frame(width: 7, height: 7)
+                        }
+                    }
+                }
+            }
+            .mapStyle(.standard(pointsOfInterest: .excludingAll))
+            .mapControlVisibility(.hidden)
+            .allowsHitTesting(false)
         }
     }
 }
