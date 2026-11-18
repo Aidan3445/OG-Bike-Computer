@@ -26,6 +26,8 @@ final class StopDetector {
 
     private(set) var lastRidingSpeedAt: Date?
     private(set) var lastWalkingStepsAt: Date?
+    /// The last `RideOffCheck.window` seconds of fixes.
+    private(set) var recentFixes: [CLLocation] = []
     private(set) var stepCount = 0
     private(set) var stepCadence: Double?
     private(set) var isPedometerRunning = false
@@ -56,10 +58,15 @@ final class StopDetector {
         if location.speedAccuracy >= 0, location.speed >= Self.ridingSpeed {
             lastRidingSpeedAt = location.timestamp
         }
+        recentFixes.append(location)
+        recentFixes.removeAll {
+            location.timestamp.timeIntervalSince($0.timestamp) > RideOffCheck.window
+        }
     }
 
-    func resetRidingSpeed() {
+    func resetFixes() {
         lastRidingSpeedAt = nil
+        recentFixes = []
     }
 
     func startPedometer() {

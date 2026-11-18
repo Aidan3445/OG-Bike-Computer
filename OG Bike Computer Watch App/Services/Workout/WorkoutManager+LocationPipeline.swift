@@ -61,17 +61,16 @@ extension WorkoutManager {
 
             switch self.autoPauseState {
             case .moving:
-                guard !self.departureDetector.isWaiting else { break }
+                guard !self.departureDetector.isWaiting, !self.holdForStop(location) else { break }
                 self.accumulateDistance(location)
                 self.checkSplit()
                 // Stops leave no track, so the map shows no scribble at a store.
                 guard !self.isStandingStill else { break }
                 recorded = true
                 self.recordTrackPoint(location)
-            case .paused:
+            case .paused, .tentativeResume:
+                // updateAutoPause holds resume fixes itself.
                 break
-            case .tentativeResume:
-                self.tentative.append(location)
             }
 
             let mode = self.battery.recommendedMode(
@@ -126,6 +125,80 @@ extension WorkoutManager {
         totalDistance += distanceTracker.commit(location)
     }
 
+    /// Adds a held fix to the ride and the track, starting a new leg if one is pending.
+    private func joinRide(_ fix: CLLocation) {
+        if !distanceTracker.consumeGapSkip(at: fix) {
+            totalDistance += distanceTracker.commit(fix)
+        }
+        recordTrackPoint(fix)
+    }
+
+    /// Detect Stops: true while this fix belongs to a stop, including a
+    /// ride-off that isn't confirmed yet. A confirmed ride-off joins the ride
+    /// as a straight line from where the rider stopped, and its time counts.
+    private func holdForStop(_ location: CLLocation) -> Bool {
+        guard isDetectingStops else {
+            stopTracker.reset()
+            return false
+        }
+        distanceTracker.updatePoorFixHold(location, isSimulating: isSimulating)
+        let walking = stopDetector.isWalking
+
+        guard stopTracker.isStopped else {
+            guard looksStopped else { return false }
+            _ = stopTracker.stop(at: location, walking: walking)
+            let reason =
+                distanceTracker.isHoldingPoorFix
+                ? "poorFix"
+                : walking ? "walking" : isStillByGPS ? "still" : "speed"
+            DiagnosticsLog.event(
+                "Stop", "stopped reason=\(reason) distance=\(String(format: "%.0f", totalDistance))m")
+            return true
+        }
+
+        guard
+            !distanceTracker.isHoldingPoorFix,
+            !RideOffCheck.isStopped(location, floor: StopTracker.floor)
+        else {
+            let dropped = stopTracker.stop(at: location, walking: walking)
+            if dropped >= RideOffCheck.fixes {
+                DiagnosticsLog.event("Stop", "ride-off dropped held=\(dropped)")
+            }
+            return true
+        }
+        guard stopTracker.hold(location, walking: walking, recent: stopDetector.recentFixes)
+        else { return true }
+
+        let walked = stopTracker.walked
+        let pushes = stopTracker.pushes(before: stopTracker.held.first ?? location)
+        let held = stopTracker.finish()
+        // Without GPS speed the ride-off is confirmed by distance, and this fix isn't held.
+        let bySpeed = held.last === location
+        let credit = held.first.map { location.timestamp.timeIntervalSince($0.timestamp) } ?? 0
+        var pushed: TimeInterval = 0
+        let distanceBefore = totalDistance
+        for push in pushes {
+            // Rests and walks between pushes aren't ridden distance.
+            distanceTracker.skipNextGap()
+            push.forEach(joinRide)
+            if let first = push.first, let last = push.last {
+                pushed += last.timestamp.timeIntervalSince(first.timestamp)
+            }
+        }
+        let pushedDistance = totalDistance - distanceBefore
+        for fix in held where fix !== location {
+            joinRide(fix)
+        }
+        movingTime += max(0, credit) + pushed
+        // The stop would read as a new one straight away.
+        if let first = held.first { positionBuffer.removeFixes(before: first.timestamp) }
+        DiagnosticsLog.event(
+            "Stop",
+            "ride-off confirmed reason=\(bySpeed ? "speed" : "distance") held=\(held.count) walked=\(walked) pushes=\(pushes.count) pushed=\(String(format: "%.0f", pushedDistance))m/\(String(format: "%.0f", pushed))s credit=\(String(format: "%.1f", credit))s"
+        )
+        return false
+    }
+
     /// On departure the run-up joins the ride, the wander before it is
     /// dropped, and moving time is credited from when the rider set off.
     private func awaitDeparture(_ location: CLLocation) {
@@ -134,11 +207,10 @@ extension WorkoutManager {
                 location, lastWalkingStepsAt: stopDetector.lastWalkingStepsAt)
         else { return }
 
+        // A continued ride starts a new leg here, not at the held track's end.
         for fix in departure.runUp {
-            totalDistance += distanceTracker.commit(fix)
-            recordTrackPoint(fix)
+            joinRide(fix)
         }
-        distanceTracker.cancelGapSkip()
         // Record All counted the wait already.
         let credit =
             isRecordingEverything ? 0 : max(0, Date().timeIntervalSince(departure.movingSince))

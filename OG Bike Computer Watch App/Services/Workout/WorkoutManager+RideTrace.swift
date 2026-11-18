@@ -25,7 +25,7 @@ struct RideTraceFiles {
         "sinceLastFix", "movingTime", "elapsedTime", "totalDistance",
         "mirroringReady", "earlyTelemetry", "sinceTelemetrySend", "telemetryResult",
         "skippedTelemetrySends", "standingStill", "walking", "steps", "stepCadence",
-        "awaitingStart",
+        "awaitingStart", "rideOffHeld", "battery",
     ]
     static let baroHeader = [
         "time", "source", "relativeAltitude", "reference", "delta",
@@ -82,6 +82,8 @@ extension WorkoutManager {
             "\(String(format: "%.1f", StopDetector.walkingCadence))steps/s,\(Int(StopDetector.walkingStepsWindow))s+noRiding\(Int(StopDetector.walkingRidingWindow))s"
         let start =
             "\(DepartureDetector.fastFixes)fixes@\(Self.mph(StopDetector.ridingSpeed))mph+\(Int(DepartureDetector.distance))m|\(Int(DepartureDetector.fallbackDistance))m"
+        let rideOff =
+            "\(RideOffCheck.fixes)fixes,heading\(Int(RideOffCheck.headingSpread)),\(Int(RideOffCheck.distance))m,speedAcc<=\(RideOffCheck.speedAccuracyCap)|\(RideOffCheck.vagueSpeedFactor)x,window\(Int(RideOffCheck.window))s,push=\(Int(StopTracker.pushDistance))m,near\(Int(StopTracker.nearby))m"
         return [
             "mode=\(autoPause.mode.rawValue)",
             "pauseSpeed=\(Self.mph(autoPause.speedThreshold))mph",
@@ -94,6 +96,9 @@ extension WorkoutManager {
             "baroFloor=\(elevationTracker.barometer.noiseFloor)m",
             "walking=\(walking)",
             "pedometer=\(StopDetector.isStepCountingAvailable)",
+            "rideOff=\(rideOff)",
+            "stopFloor=\(Self.mph(StopTracker.floor))mph",
+            "backfill=\(Int(Self.maxBackfillSpeed))m/s|\(Int(Self.maxBackfillGap))m",
             "start=\(start)",
             "waiting=\(departureDetector.isWaiting)",
         ].joined(separator: " ")
@@ -133,6 +138,10 @@ extension WorkoutManager {
         case .background: appState = "background"
         @unknown default: appState = "unknown"
         }
+        // For comparing what each stop mode costs.
+        let device = WKInterfaceDevice.current()
+        if !device.isBatteryMonitoringEnabled { device.isBatteryMonitoringEnabled = true }
+        let battery = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
         csv.append([
             now, appState, session?.state.rawValue, isPaused, "\(autoPauseState)", isSilentProbe,
             lastLocationUpdateAt.map { now.timeIntervalSince($0) },
@@ -141,7 +150,8 @@ extension WorkoutManager {
             lastTelemetrySendAt.map { now.timeIntervalSince($0) }, lastTelemetryResult,
             skippedTelemetrySends, isStandingStill, stopDetector.isWalking,
             stopDetector.isPedometerRunning ? stopDetector.stepCount : nil,
-            stopDetector.stepCadence, departureDetector.isWaiting,
+            stopDetector.stepCadence, departureDetector.isWaiting, stopTracker.held.count,
+            battery,
         ])
     }
 

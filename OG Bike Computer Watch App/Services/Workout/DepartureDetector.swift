@@ -16,7 +16,8 @@ struct DepartureDetector {
     /// at start-up can report riding speed while barely moving.
     static let distance: Double = 20
     /// Straight-line distance (m) that confirms departure on its own, for
-    /// fixes with no GPS speed.
+    /// fixes with no GPS speed. It counts from where the rider last walked,
+    /// so walking out to the road doesn't set it off.
     static let fallbackDistance: Double = 100
     /// GPS speed (m/s) a fix needs to count as part of the run-up.
     static let runUpSpeed = 1.0
@@ -49,7 +50,7 @@ struct DepartureDetector {
 
     /// Departure is the last few fixes at riding speed, with the run-up
     /// carrying the rider `distance` from where they stood, or `fallbackDistance`
-    /// from the start with no speed at all. Nil while still waiting.
+    /// from where they started or last walked. Nil while still waiting.
     mutating func add(_ location: CLLocation, lastWalkingStepsAt: Date?) -> Departure? {
         fixes.append(location)
         if fixes.count > Self.maxFixes {
@@ -59,6 +60,16 @@ struct DepartureDetector {
         let poorFix = DistanceTracker.poorFixAccuracy
         if start == nil, location.horizontalAccuracy <= poorFix {
             start = location
+        }
+        let onFoot = lastWalkingStepsAt.map {
+            location.timestamp.timeIntervalSince($0) <= StopDetector.walkingStepsWindow
+        } ?? false
+        if onFoot, let lastWalkingStepsAt,
+            let lastStep = fixes.last(where: {
+                $0.timestamp <= lastWalkingStepsAt && $0.horizontalAccuracy <= poorFix
+            })
+        {
+            start = lastStep
         }
 
         // The run of fixes at bike pace that ends at this one.
@@ -71,7 +82,7 @@ struct DepartureDetector {
             fast.count == Self.fastFixes
             && origin.map { location.distance(from: $0) >= Self.distance } == true
         let byDistance =
-            !bySpeed && location.horizontalAccuracy <= poorFix
+            !bySpeed && !onFoot && location.horizontalAccuracy <= poorFix
             && start.map { location.distance(from: $0) >= Self.fallbackDistance } == true
         guard bySpeed || byDistance else { return nil }
 

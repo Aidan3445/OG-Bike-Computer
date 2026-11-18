@@ -26,10 +26,6 @@ struct DistanceTracker {
         skipsNextGap = true
     }
 
-    mutating func cancelGapSkip() {
-        skipsNextGap = false
-    }
-
     /// Starts the new leg at this fix if a gap skip is pending. True when it did.
     mutating func consumeGapSkip(at location: CLLocation) -> Bool {
         guard skipsNextGap else { return false }

@@ -114,6 +114,7 @@ class WorkoutManager: NSObject, ObservableObject {
     var distanceTracker = DistanceTracker()
     var positionBuffer = PositionBuffer()
     var tentative = TentativeResumeBuffer()
+    var stopTracker = StopTracker()
     var elevationTracker = ElevationTracker()
     var gradeEstimator = GradeEstimator()
     var splitTracker = SplitTracker()
@@ -249,11 +250,12 @@ class WorkoutManager: NSObject, ObservableObject {
         isActive = true
         isPaused = false
         // The rider may have moved since the hold, so the gap from the held
-        // track's end isn't ridden distance. Only a new ride waits to set off.
+        // track's end isn't ridden distance. A continued ride waits to set
+        // off like a new one.
         resetMotion(
             anchor: isContinuation ? recordedLocations.last : nil,
             skipGap: isContinuation,
-            awaitDeparture: !isContinuation)
+            awaitDeparture: true)
 
         let splitLength = navigationAlerts.splitAlerts.splitDistance
         if isContinuation && splitLength > 0 {
@@ -293,7 +295,8 @@ class WorkoutManager: NSObject, ObservableObject {
         positionBuffer.removeAll()
         lastLocationUpdateAt = nil
         distanceTracker.reset(anchor: anchor, skipNextGap: skipGap)
-        stopDetector.resetRidingSpeed()
+        stopDetector.resetFixes()
+        stopTracker.reset()
         departureDetector.reset(waiting: awaitDeparture)
     }
 
@@ -370,6 +373,7 @@ class WorkoutManager: NSObject, ObservableObject {
     /// Fresh auto-pause state after a manual pause. The paused stretch isn't ridden distance.
     func restartMotion() {
         distanceTracker.skipNextGap()
+        stopTracker.reset()
         slowSampleCount = 0
         positionBuffer.removeAll()
         cancelPauseProbe()
@@ -504,7 +508,8 @@ class WorkoutManager: NSObject, ObservableObject {
             self.slowSampleCount = 0
             self.positionBuffer.removeAll()
             self.distanceTracker.reset(anchor: nil, skipNextGap: false)
-            self.stopDetector.resetRidingSpeed()
+            self.stopDetector.resetFixes()
+            self.stopTracker.reset()
             self.tentative.clear()
             self.speed = 0
             self.totalDistance = 0
